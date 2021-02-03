@@ -215,6 +215,7 @@ UPLOAD_RETENTION = gsutil -m retention temp set "$(cloud_base)/*"
 endif
 
 ifdef SKIP_UPLOAD_ARTIFACTS
+DEV_CLARIFIER =
 CLOUD_SUB_FOLDER := $(HAIL_PIP_VERSION)
 endif
 
