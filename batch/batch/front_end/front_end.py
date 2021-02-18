@@ -253,7 +253,6 @@ LIMIT 50;
 @rest_authenticated_users_only
 async def get_jobs(request, userdata):
     batch_id = int(request.match_info['batch_id'])
-    user = userdata['username']
 
     db = request.app['db']
 
