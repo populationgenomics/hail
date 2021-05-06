@@ -61,6 +61,29 @@ object IRFunctionRegistry {
     m.update((typeParameters, valueParameterTypes, returnType, alwaysInline), f)
   }
 
+  def serviceBackendRegisterIR(
+    name: String,
+    typeParameters: Seq[Type],
+    argNames: Seq[String],
+    valueParameterTypes: Seq[Type],
+    returnType: Type,
+    body: IR
+  ): Unit = {
+    requireJavaIdentifier(name)
+
+    userAddedFunctions += ((name, (body.typ, typeParameters, valueParameterTypes)))
+    addIR(
+      name,
+      typeParameters,
+      valueParameterTypes,
+      returnType,
+      false,
+      { (_, args) =>
+        Subst(body,
+          BindingEnv(Env[IR](argNames.zip(args): _*)))
+      })
+  }
+
   def pyRegisterIR(
     name: String,
     typeParamStrs: java.util.ArrayList[String],
@@ -76,7 +99,10 @@ object IRFunctionRegistry {
     userAddedFunctions += ((name, (body.typ, typeParameters, valueParameterTypes)))
     addIR(name,
       typeParameters,
-      valueParameterTypes, IRParser.parseType(returnType), false, { (_, args) =>
+      valueParameterTypes,
+      IRParser.parseType(returnType),
+      false,
+      { (_, args) =>
         Subst(body,
           BindingEnv(Env[IR](argNames.asScala.zip(args): _*)))
       })
@@ -134,13 +160,23 @@ object IRFunctionRegistry {
     typeParameters: Seq[Type],
     valueParameterTypes: Seq[Type]
   ): Option[(IRFunctionSignature, IRFunctionImplementation)] = {
-    irRegistry.getOrElse(name, Map.empty).filter { case ((typeParametersFound: Seq[Type], valueParameterTypesFound: Seq[Type], _, _), _) =>
-      typeParametersFound.length == typeParameters.length && {
-        typeParametersFound.foreach(_.clear())
-        (typeParametersFound, typeParameters).zipped.forall(_.unify(_))
-      } && valueParameterTypesFound.length == valueParameterTypes.length && {
-        valueParameterTypesFound.foreach(_.clear())
-        (valueParameterTypesFound, valueParameterTypes).zipped.forall(_.unify(_))
+    var irrKeys = irRegistry.keys
+    log.warn(s"lookupIR: irRegistry = $irrKeys")
+    log.warn(s"lookupIR: looking for name = $name")
+    log.warn(s"lookupIR: looking for typeParameters = $typeParameters")
+    log.warn(s"lookupIR: looking for valueParameterTypes = $valueParameterTypes")
+
+    irRegistry.getOrElse(name, Map.empty).filter {
+      case ((typeParametersFound: Seq[Type], valueParameterTypesFound: Seq[Type], _, _), _) => {
+        log.warn(s"lookupIR: typeParametersFound = $typeParametersFound")
+        log.warn(s"lookupIR: valueParameterTypesFound = $valueParameterTypesFound")
+        typeParametersFound.length == typeParameters.length && {
+          typeParametersFound.foreach(_.clear())
+          (typeParametersFound, typeParameters).zipped.forall(_.unify(_))
+        } && valueParameterTypesFound.length == valueParameterTypes.length && {
+          valueParameterTypesFound.foreach(_.clear())
+          (valueParameterTypesFound, valueParameterTypes).zipped.forall(_.unify(_))
+        }
       }
     }.toSeq match {
       case Seq() => None

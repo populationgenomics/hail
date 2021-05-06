@@ -67,6 +67,22 @@ def blocking_execute(userdata, body):
         )
 
 
+def blocking_register_ir_function(userdata, body):
+    with connect_to_java() as java:
+        return java.register_ir_function(
+            userdata['username'],
+            userdata['session_id'],
+            body['billing_project'],
+            body['bucket'],
+            body['name'],
+            body['type_parameters'],
+            body['argument_names'],
+            body['argument_types'],
+            body['return_type'],
+            body['body'],
+        )
+
+
 def blocking_load_references_from_dataset(userdata, body):
     with connect_to_java() as java:
         return java.load_references_from_dataset(
@@ -151,6 +167,17 @@ async def handle_ws_response(request, userdata, endpoint, f):
 @rest_authenticated_users_only
 async def execute(request, userdata):
     return await handle_ws_response(request, userdata, 'execute', blocking_execute)
+
+
+@routes.get('/api/v1alpha/register_ir_function')
+@rest_authenticated_users_only
+async def register_ir_function(request, userdata):  # pylint: disable=unused-argument
+    return await handle_ws_response(
+        request,
+        userdata,
+        'register_ir_function',
+        blocking_register_ir_function,
+    )
 
 
 @routes.get('/api/v1alpha/load_references_from_dataset')

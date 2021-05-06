@@ -29,6 +29,8 @@ class ServiceBackendSocketConnection:
     UNSET_FLAG = 10
     SET_FLAG = 11
     ADD_USER = 12
+    REGISTER_IR_FUNCTION = 13
+
     GOODBYE = 254
 
     FNAME = '/sock/sock'
@@ -201,6 +203,24 @@ class ServiceBackendSocketConnection:
                 raise ValueError(f'could not decode {s}') from err
         jstacktrace = self.read_str()
         raise ValueError(jstacktrace)
+
+    def register_ir_function(self, username: str, session_id: str, billing_project: str, bucket: str,
+            name: str, typeParameters: str, argumentNames: str, argumentTypes: str, returnType: str, body: str):
+        self.write_int(ServiceBackendSocketConnection.REGISTER_IR_FUNCTION)
+        self.write_str(username)
+        self.write_str(session_id)
+        self.write_str(billing_project)
+        self.write_str(bucket)
+        self.write_str(name)
+        self.write_str(typeParameters)
+        self.write_str(argumentNames)
+        self.write_str(argumentTypes)
+        self.write_str(returnType)
+        self.write_str(body)
+        success = self.read_bool()
+        if not success:
+            jstacktrace = self.read_str()
+            raise ValueError(jstacktrace)
 
     def flags(self):
         self.write_int(ServiceBackendSocketConnection.FLAGS)

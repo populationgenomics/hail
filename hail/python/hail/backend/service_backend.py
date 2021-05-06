@@ -63,7 +63,8 @@ class ServiceSocket:
             assert response.type == aiohttp.WSMsgType.TEXT
             result = json.loads(response.data)
             if result['status'] != 200:
-                raise FatalError(f'Error from server: {result["value"]}')
+                error = '\n'.join(result['value'])
+                raise FatalError(f'Error from server: {error}')
             return result['value']
 
     def request(self, endpoint, **data):
@@ -194,7 +195,20 @@ class ServiceBackend(Backend):
         raise NotImplementedError("ServiceBackend does not support 'import_fam'")
 
     def register_ir_function(self, name, type_parameters, argument_names, argument_types, return_type, body):
-        raise NotImplementedError("ServiceBackend does not support 'register_ir_function'")
+        r = CSERenderer(stop_at_jir=True)
+        body: str = r(body._ir)
+
+        return self.socket.request(
+            'register_ir_function',
+            billing_project=self._billing_project,
+            bucket=self._bucket,
+            name=name,
+            type_parameters=','.join(ta._parsable_string() for ta in type_parameters),
+            argument_names=','.join(argument_names),
+            argument_types=','.join(pt._parsable_string() for pt in argument_types),
+            return_type=return_type._parsable_string(),
+            body=body,
+        )
 
     def persist_ir(self, ir):
         raise NotImplementedError("ServiceBackend does not support 'persist_ir'")

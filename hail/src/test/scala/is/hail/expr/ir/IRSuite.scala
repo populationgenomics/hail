@@ -25,6 +25,8 @@ import is.hail.{ExecStrategy, HailContext, HailSuite, utils}
 import org.apache.spark.sql.Row
 import org.json4s.jackson.{JsonMethods, Serialization}
 import org.testng.annotations.{DataProvider, Test}
+import is.hail
+import is.hail.backend.service.ServiceBackend
 
 import scala.language.{dynamics, implicitConversions}
 
@@ -3444,6 +3446,19 @@ class IRSuite extends HailSuite {
     val x2 = IRParser.parse_value_ir(s, env)
 
     assert(x2 == x)
+  }
+
+  @Test def testParseFunction(): Unit = {
+    val name = "__uid_3"
+    val typeParams = ""
+    val argNames = "__uid___uid_34,__uid___uid_35"
+    val argTypes = "Int32,Int32"
+    val retType = "Int32"
+    val body = "(ApplyBinaryPrimOp `+` (Ref __uid___uid_34) (Ref __uid___uid_35))"
+
+    ServiceBackend.registerFunction(ctx, name, typeParams, argNames, argTypes, retType, body)
+    val res = invoke(name, TInt32, I32(17), I32(25))
+    assertEvalsTo(res, 42)
   }
 
   @Test(dataProvider = "tableIRs")
