@@ -452,7 +452,7 @@ class Container:
                             self.short_error = 'image cannot be pulled'
                         elif 'not found: manifest unknown' in e.message:
                             self.short_error = 'image not found'
-                    raise DockerError(f'Error pulling Docker image {self.image_ref_str}') from e
+                    raise RuntimeError(f'Error pulling Docker image {self.image_ref_str}') from e
 
             if self.port is not None:
                 with self.step('allocating_port'):
