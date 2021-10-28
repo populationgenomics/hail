@@ -228,10 +228,10 @@ class AzureServicePrincipalResource:
 
 
 class DatabaseResource:
-    def __init__(self, db_instance, name=None):
+    def __init__(self, db_instance, name=None, password=None):
         self.db_instance = db_instance
         self.name = name
-        self.password = None
+        self.password = password
 
     async def create(self, name):
         assert self.name is None
@@ -274,6 +274,7 @@ GRANT ALL ON `{name}`.* TO '{name}'@'%';
             user=self.name,
             password=self.password,
             instance=server_config.instance,
+            connection_name=server_config.connection_name,
             db=self.name,
             ssl_ca='/sql-config/server-ca.pem',
             ssl_cert='/sql-config/client-cert.pem',
@@ -461,17 +462,19 @@ async def _create_user(app, user, skip_trial_bp, cleanup):
         updates['hail_credentials_secret_name'] = hail_credentials_secret_name
 
     namespace_name = user['namespace_name']
-    if namespace_name is None and user['is_developer'] == 1:
+    if user['is_developer'] == 1:
         namespace_name = ident
-        namespace = K8sNamespaceResource(k8s_client)
-        cleanup.append(namespace.delete)
-        await namespace.create(namespace_name)
+
+        # namespace = K8sNamespaceResource(k8s_client)
+        # cleanup.append(namespace.delete)
+        # await namespace.create(namespace_name)
         updates['namespace_name'] = namespace_name
 
-        db_resource = DatabaseResource(db_instance)
-        cleanup.append(db_resource.delete)
-        await db_resource.create(ident)
+        db_resource = DatabaseResource(db_instance, os.environ.get('HAIL_USER_PASSWORD'))
+        # cleanup.append(db_resource.delete)
+        # await db_resource.create(ident)
 
+        log.info(f'Creating secret database-server-config for user {namespace_name}')
         db_secret = K8sSecretResource(k8s_client)
         cleanup.append(db_secret.delete)
         await db_secret.create('database-server-config', namespace_name, db_resource.secret_data())
@@ -578,8 +581,10 @@ async def update_users(app):
     db = app['db']
 
     creating_users = [x async for x in db.execute_and_fetchall('SELECT * FROM users WHERE state = %s;', 'creating')]
+    log.info(f'creating_users: {creating_users}')
 
     for user in creating_users:
+        log.info(f'create user {user}')
         await create_user(app, user)
 
     deleting_users = [x async for x in db.execute_and_fetchall('SELECT * FROM users WHERE state = %s;', 'deleting')]
