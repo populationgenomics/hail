@@ -30,7 +30,7 @@ jobs:
           activate-environment: buildenv
           channels: cpg,conda-forge,bioconda,defaults
           channel-priority: true
-          python-version: 3.7
+          python-version: 3.10
 
       - name: Setup build env
         run: conda install pip conda-build anaconda-client
