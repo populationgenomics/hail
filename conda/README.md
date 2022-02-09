@@ -25,10 +25,6 @@ conda create --name hail -c cpg -c bioconda -c conda-forge hail
 conda activate hail
 ```
 
-You can also install Hail into an existing environment. However, note that Hail requires
-Python of versions 3.6 or 3.7, so conda might downgrade Python in that environment,
-which may affect other installed packages.
-
 Note that if you don't have `conda` installed, here are handy commands to do that:
 
 ```
@@ -47,5 +43,4 @@ conda create --name hail -c cpg -c conda-forge hail
 conda activate hail
 ```
 
-You can also install Hail into an existing environment; however note that Hail requires Python of versions 3.6 or 3.7, so conda might downgrade Python in that environment, which may affect other installed packages.
-
+You can also install Hail into an existing environment.
