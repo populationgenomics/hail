@@ -1,5 +1,6 @@
 name: Condarise
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -40,7 +41,7 @@ jobs:
       # Remove old packages to save space on anaconda
       - name: Remove old versions
         # Only run this step once.
-        if: ${{ matrix.os == 'ubuntu-latest' }}
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
         run: |
           # Keep 8 latest versions
           KEEP=8
@@ -49,13 +50,14 @@ jobs:
           | xargs -I '{}' -L1 echo anaconda -t ${{ secrets.ANACONDA_TOKEN }} remove -f cpg/hail/{}
 
       - name: Upload to anaconda package repository
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
         run: |
           anaconda -t ${{ secrets.ANACONDA_TOKEN }} \
           upload ${CONDA_PREFIX}/conda-bld/**/*.tar.bz2
       
       - name: Redeploy the analysis-server
         # Only run this step once.
-        if: ${{ matrix.os == 'ubuntu-latest' }}
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
         run: |
           curl --fail --silent --show-error -X POST \
             -H "Authorization: token ${{ secrets.ANALYSIS_SERVER_GITHUB_TOKEN }}" \
