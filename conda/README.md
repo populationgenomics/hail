@@ -12,7 +12,7 @@ in our fork.
 We don't control versioning of original Hail project, so our `cpg` conda release name 
 is the official version tag appended with the git commit has, e.g. `0.2.62.dev289c163`.
 
-[GitHub Actions CI](../.github/workflows/condarise.yaml) is set up to build the package
+[GitHub Actions CI](../.github/workflows/build_package.yaml) is set up to build the package
 using this recipe and push it to Anaconda on every push event to the `main` branch in
 the
 [CPG hail fork](https://github.com/populationgenomics/hail).

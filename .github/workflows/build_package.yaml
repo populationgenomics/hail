@@ -1,0 +1,39 @@
+name: Build pip package
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+jobs:
+  build-publish:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/checkout@main
+        
+      - name: Build package  
+        run: |
+          make -C hail python-version-info
+          VERSION=$(cat hail/python/hail/hail_version)
+          VERSION=${VERSION/-/.dev}
+          echo "version=$VERSION" >> $GITHUB_ENV
+          make -C hail wheel
+
+      - name: Upload package
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: twine upload build/deploy/dist/hail-${VERSION}-py3-none-any.whl
+
+      - name: Redeploy the analysis-server
+        # Only run this step once.
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        run: |
+          curl --fail --silent --show-error -X POST \
+            -H "Authorization: token ${{ secrets.ANALYSIS_SERVER_GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/populationgenomics/analysis-runner/actions/workflows/6364059/dispatches \
+            -d '{"ref": "main", "inputs": {"hail_version": "${{ env.version }}"}}'

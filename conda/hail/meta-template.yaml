@@ -15,7 +15,7 @@ requirements:
     - rsync
   host:
     - python
-    - pyspark >=3.1.1,<3.2.0
+    - pyspark
     - openjdk 8.*
     - lz4
     - pytest-runner
@@ -25,10 +25,10 @@ requirements:
   run:
     - python
     - openjdk 8.*
-    - pyspark >=3.1.1,<3.2.0
+    - pyspark
     - aiohttp
     - aiohttp-session
-    - bokeh >1.3,<2.0
+    - bokeh
     - decorator <5
     - deprecated
     - gcsfs
