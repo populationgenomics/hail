@@ -8,7 +8,7 @@ Render recipe:
 """
 import sys
 
-SPARK_VERISON = 'hail/env/SPARK_VERSION'
+SPARK_VERSION = 'hail/env/SPARK_VERSION'
 PIP_REQS = 'hail/python/requirements.txt'
 META_TEMPLATE = 'conda/hail/meta-template.yaml'
 META_RENDERED = 'conda/hail/meta.yaml'
@@ -19,7 +19,7 @@ if len(sys.argv) <= 1:
     )
 package_version = sys.argv[1]
 
-with open(SPARK_VERISON, 'r') as file:
+with open(SPARK_VERSION, 'r') as file:
     spark_version = file.read()
 
 dependencies = []
