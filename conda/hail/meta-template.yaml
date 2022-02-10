@@ -16,7 +16,7 @@ requirements:
     - make
     - rsync
   host:
-    - python
+    - python =3.10
     - openjdk =8
     - pyspark {pyspark-pin}
     - lz4
@@ -25,7 +25,7 @@ requirements:
     - google-cloud-sdk
     - google-cloud-storage
   run:
-    - python
+    - python =3.10
     - pyspark {pyspark-pin}
     - openjdk =8
 {other-requirements}
