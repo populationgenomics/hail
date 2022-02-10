@@ -15,21 +15,70 @@ jobs:
         shell: bash -l {0}
     steps:
       - uses: actions/checkout@main
-        
-      - name: Build package  
+      
+      # Setting package version as an env variable.
+      # Pip is strict to the version tags and requires them to only having 
+      # numerical sections (besides standard .post, .dev keywords): e.g.
+      # the `hail_version` format with a git tag like 0.2.83-87e2e0e6ad4f won't work.
+      # So our pip package will have a simplier format: 0.2.83. That's why we also 
+      # set the --skip-existing flag, in case if we re-run CI for the same version.
+      - name: Get version
         run: |
           make -C hail python-version-info
-          VERSION=$(cat hail/python/hail/hail_version)
-          VERSION=${VERSION/-/.dev}
+          VERSION=$(cat hail/python/hail/hail_pip_version)
           echo "version=$VERSION" >> $GITHUB_ENV
-          make -C hail wheel
 
-      - name: Upload package
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        run: twine upload build/deploy/dist/hail-${VERSION}-py3-none-any.whl
+      # Building pip package.
+      # Pypi doesn't have channels like conda, so building the package 
+      # under the name "cpg-hail" to avoid clashes with the official package.
+      - name: Build pip package
+        run: |
+          sed -i 's/name="hail",/name="cpg-hail",/' hail/python/setup.py
+          make -C hail wheel
+          # fixing setup.py back to build the conda package as "hail":
+          sed -i 's/name="cpg-hail",/name="hail",/' hail/python/setup.py
+
+      - name: Upload pip wheel
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        run: twine upload --skip-existing build/deploy/dist/*
+
+      # Reading pip requirements and adding them into the conda recipe,
+      # also setting the package version:
+      - name: Prep conda recipe
+        run: python conda/render_recipe.py ${{ env.version }}
+
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          activate-environment: buildenv
+          channels: cpg,conda-forge,bioconda,defaults
+          channel-priority: true
+          python-version: 3.9
+
+      - name: Setup build env
+        run: conda install pip conda-build anaconda-client
+
+      - name: Build conda package
+        run: conda-build conda/hail
+
+      # Remove old packages to save space on anaconda
+      - name: Remove old versions
+        # Only run this step once - that's why limiting to the ubuntu run:
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        run: |
+          # Keep 8 latest versions
+          KEEP=8
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} show cpg/cpg_hail 2>&1 \
+          | grep "^   +" | head -n-${KEEP} | sed 's#   \+ ##' \
+          | xargs -I '{}' -L1 echo anaconda -t ${{ secrets.ANACONDA_TOKEN }} remove -f cpg/cpg_hail/{}
+
+      - name: Upload to anaconda package repository
+        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        run: |
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} \
+          upload ${CONDA_PREFIX}/conda-bld/**/*.tar.bz2        
 
       - name: Redeploy the analysis-server
-        # Only run this step once.
+        # Only run this step once - that's why limiting to the ubuntu run:
         if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
         run: |
           curl --fail --silent --show-error -X POST \
