@@ -23,13 +23,6 @@ jobs:
           VERSION=${VERSION/-/.dev}
           echo "version=$VERSION" >> $GITHUB_ENV
 
-      # Reading pip requirements and adding them into the conda recipe,
-      # also setting the package version and pinning pyspark:
-      - name: Render conda recipe
-        run: |
-          make -C hail env/SPARK_VERSION
-          python conda/render_recipe.py ${{ env.version }}
-
       - uses: conda-incubator/setup-miniconda@v2
         with:
           activate-environment: buildenv
@@ -42,6 +35,13 @@ jobs:
 
       - name: Build conda package
         run: conda-build conda/hail
+
+      # Reading pip requirements and adding them into the conda recipe,
+      # also setting the package version and pinning pyspark:
+      - name: Render conda recipe
+        run: |
+          make -C hail env/SPARK_VERSION
+          python conda/render_recipe.py ${{ env.version }}
 
       # Remove old packages to save space on anaconda
       - name: Remove old versions
