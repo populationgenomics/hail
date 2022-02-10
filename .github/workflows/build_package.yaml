@@ -33,15 +33,15 @@ jobs:
       - name: Setup build env
         run: conda install pip conda-build anaconda-client
 
-      - name: Build conda package
-        run: conda-build conda/hail
-
       # Reading pip requirements and adding them into the conda recipe,
       # also setting the package version and pinning pyspark:
       - name: Render conda recipe
         run: |
           make -C hail env/SPARK_VERSION
           python conda/render_recipe.py ${{ env.version }}
+
+      - name: Build conda package
+        run: conda-build conda/hail
 
       # Remove old packages to save space on anaconda
       - name: Remove old versions
@@ -55,7 +55,7 @@ jobs:
           | xargs -I '{}' -L1 echo anaconda -t ${{ secrets.ANACONDA_TOKEN }} remove -f cpg/cpg_hail/{}
 
       - name: Upload to anaconda package repository
-        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' }}
         run: |
           anaconda -t ${{ secrets.ANACONDA_TOKEN }} \
           upload ${CONDA_PREFIX}/conda-bld/**/*.tar.bz2  
