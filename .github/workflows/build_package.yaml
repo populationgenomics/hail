@@ -41,7 +41,8 @@ jobs:
           python conda/render_recipe.py ${{ env.version }}
 
       - name: Build conda package
-        run: conda-build conda/hail
+        run: |
+          conda-build conda/hail --variants "{'python': ['3.9', '3.10']}"
 
       # Remove old packages to save space on anaconda
       - name: Remove old versions
