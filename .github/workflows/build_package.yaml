@@ -51,9 +51,9 @@ jobs:
         run: |
           # Keep 8 latest versions
           KEEP=8
-          anaconda -t ${{ secrets.ANACONDA_TOKEN }} show cpg/cpg_hail 2>&1 \
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} show cpg/hail 2>&1 \
           | grep "^   +" | head -n-${KEEP} | sed 's#   \+ ##' \
-          | xargs -I '{}' -L1 echo anaconda -t ${{ secrets.ANACONDA_TOKEN }} remove -f cpg/cpg_hail/{}
+          | xargs -I '{}' -L1 echo anaconda -t ${{ secrets.ANACONDA_TOKEN }} remove -f cpg/hail/{}
 
       - name: Upload to anaconda package repository
         if: ${{ github.event_name == 'push' }}
