@@ -19,7 +19,7 @@ if len(sys.argv) <= 1:
     )
 package_version = sys.argv[1]
 
-with open(SPARK_VERSION, 'r') as file:
+with open(SPARK_VERSION, 'r', encoding='utf-8') as file:
     spark_version = file.read()
 
 dependencies = []
