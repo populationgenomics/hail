@@ -23,7 +23,7 @@ with open(SPARK_VERSION, 'r') as file:
     spark_version = file.read()
 
 dependencies = []
-with open(PIP_REQS, 'r') as f:
+with open(PIP_REQS, 'r', encoding='utf-8') as f:
     for line in f:
         stripped = line.strip()
         if stripped.startswith('#') or len(stripped) == 0:
