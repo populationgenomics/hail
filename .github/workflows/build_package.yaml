@@ -59,7 +59,7 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         run: |
           anaconda -t ${{ secrets.ANACONDA_TOKEN }} \
-          upload ${CONDA_PREFIX}/conda-bld/**/*.tar.bz2  
+          upload ${CONDA_PREFIX}/conda-bld/**/*.tar.bz2
 
       - name: Redeploy the analysis-server
         # Only run this step once - that's why limiting to the ubuntu run:
