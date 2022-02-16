@@ -25,11 +25,11 @@ jobs:
         with:
           java-version: '8'
           distribution: 'temurin'
-      
+
       # Setting package version as an env variable.
       # Pip is strict to the version tags and requires them to only having 
       # numerical sections (besides standard .post, .dev keywords).
-      # the `hail_version` format with a git tag like 0.2.83-87e2e0e6ad4f and 
+      # the `hail_version` format with a git tag like 0.2.83-87e2e0e6ad4f, and 
       # it won't work due to the arbitrary non-numerical git SHA.
       # So our pip package will have a simplier format: 0.2.83. That's why we will 
       # also set the --skip-existing flag for twine, in case if we re-run CI for 
@@ -49,9 +49,14 @@ jobs:
           sed -i 's/name="hail",/name="cpg-hail",/' hail/python/setup.py
           make -C hail wheel
 
-      - name: Upload the pip wheel
+      - name: Publish the wheel to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
-        run: twine upload --skip-existing build/deploy/dist/*
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages_dir: build/deploy/dist/
+          skip_existing: true
 
       - name: Redeploy the analysis-server
         # Only run this step once - that's why limiting to the ubuntu run:
