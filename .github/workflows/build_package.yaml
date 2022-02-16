@@ -18,6 +18,12 @@ jobs:
       - uses: actions/checkout@main
 
       - uses: actions/setup-python@v2
+        with:
+          python-version: 3.10
+
+      - uses: actions/setup-java@v2
+        with:
+          java-version: 11
       
       # Setting package version as an env variable.
       # Pip is strict to the version tags and requires them to only having 
