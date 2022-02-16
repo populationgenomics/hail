@@ -102,6 +102,9 @@ spec:
            - mountPath: /sql-config
              name: sql-config
              readOnly: true
+           - mountPath: /secrets/oauth-token
+             name: hail-ci-0-1-github-oauth-token
+             readOnly: true
            - mountPath: /user-tokens
              name: ci-tokens
              readOnly: true
