@@ -26,29 +26,26 @@ jobs:
           java-version: '8'
           distribution: 'temurin'
 
-      # Setting package version as an env variable.
-      # Pip is strict to the version tags and requires them to only having 
-      # numerical sections (besides standard .post, .dev keywords).
-      # the `hail_version` format with a git tag like 0.2.83-87e2e0e6ad4f, and 
-      # it won't work due to the arbitrary non-numerical git SHA.
-      # So our pip package will have a simplier format: 0.2.83. That's why we will 
-      # also set the --skip-existing flag for twine, in case if we re-run CI for 
-      # the same version tag.
-      - name: Get version
-        run: |
-          make -C hail python-version-info
-          VERSION=$(cat hail/python/hail/hail_pip_version)
-          VERSION=${VERSION/-/.dev}
-          echo "version=$VERSION" >> $GITHUB_ENV
-
-      # Building pip package.
+      # Building the pwheel.
       # Pypi doesn't have channels like conda, so building the package 
       # under the name "cpg-hail" to avoid clashes with the official package.
-      - name: Build pip package
+      - name: Build wheel
         run: |
           sed -i 's/name="hail",/name="cpg-hail",/' hail/python/setup.py
-          make -C hail wheel
+          make -C hail python-version-info wheel
 
+      - name: Install
+        run: |
+          pip install hail/build/deploy/dist/hail-*-py3-none-any.whl
+
+      - name: Test hailctl
+        run: |
+          hailctl version
+          test "$(hailctl version)" = "$(cat hail/python/hail/hail_version)"
+
+      - name: Test hailtop import
+        run: python -c "import hailtop.batch"
+  
       - name: Publish the wheel to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
@@ -62,8 +59,9 @@ jobs:
         # Only run this step once - that's why limiting to the ubuntu run:
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
         run: |
+          pip_version=$(cat hail/python/hail/hail_pip_version)
           curl --fail --silent --show-error -X POST \
             -H "Authorization: token ${{ secrets.ANALYSIS_SERVER_GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/populationgenomics/analysis-runner/actions/workflows/6364059/dispatches \
-            -d '{"ref": "main", "inputs": {"hail_version": "${{ env.version }}"}}'
+            -d '{"ref": "main", "inputs": {"hail_version": "$pip_version"}}'
