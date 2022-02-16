@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-java@v2
         with:
           java-version: '11'
+          distribution: 'temurin'
       
       # Setting package version as an env variable.
       # Pip is strict to the version tags and requires them to only having 
