@@ -6,10 +6,10 @@ on:
       - main
       - fix-conda2
 jobs:
-  build-publish:
+  build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -51,16 +51,16 @@ jobs:
 
       - name: Publish the wheel to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
-          packages_dir: build/deploy/dist/
+          packages_dir: hail/build/deploy/dist/
           skip_existing: true
 
       - name: Redeploy the analysis-server
         # Only run this step once - that's why limiting to the ubuntu run:
-        if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' }}
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
         run: |
           curl --fail --silent --show-error -X POST \
             -H "Authorization: token ${{ secrets.ANALYSIS_SERVER_GITHUB_TOKEN }}" \
