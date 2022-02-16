@@ -36,15 +36,17 @@ jobs:
 
       - name: Install
         run: |
-          pip install hail/build/deploy/dist/hail-*-py3-none-any.whl
+          version=$(cat hail/python/hail/hail_pip_version)
+          pip install hail/build/deploy/dist/cpg_hail-$version-py3-none-any.whl
 
       - name: Test hailctl
-        run: |
-          hailctl version
-          test "$(hailctl version)" = "$(cat hail/python/hail/hail_version)"
+        run: hailctl version
 
       - name: Test hailtop import
         run: python -c "import hailtop.batch"
+
+      - name: Test version
+        run: test "$(hailctl version)" = "$(cat hail/python/hail/hail_version)"
   
       - name: Publish the wheel to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
