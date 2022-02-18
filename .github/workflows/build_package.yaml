@@ -6,10 +6,7 @@ on:
       - main
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash -l {0}
@@ -49,7 +46,7 @@ jobs:
   
       - name: Publish the wheel to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
+        if: github.event_name == 'push'
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -58,7 +55,7 @@ jobs:
 
       - name: Redeploy the analysis-server
         # Only run this step once - that's why limiting to the ubuntu run:
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           echo "version=$(cat hail/python/hail/hail_pip_version)" >> $GITHUB_ENV
           curl --fail --silent --show-error -X POST \
@@ -66,4 +63,3 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/populationgenomics/analysis-runner/actions/workflows/6364059/dispatches \
             -d '{"ref": "main", "inputs": {"hail_version": "${{ env.version }}"}}'
-
