@@ -1,5 +1,7 @@
 name: Build pip package
 on:
+  # Building on pull-requests and pushes to main, but restricting publishing 
+  # to push events with `if: github.event_name == 'push'` for specific steps
   pull_request:
   push:
     branches:
@@ -17,14 +19,15 @@ jobs:
         with:
           python-version: '3.10'
 
+      # Hail builds only on java=8
       - uses: actions/setup-java@v2
         with:
           java-version: '8'
           distribution: 'temurin'
 
-      # Building the pwheel.
-      # Pypi doesn't have channels like conda, so building the package 
-      # under the name "cpg-hail" to avoid clashes with the official package.
+      # Building the wheel.
+      # Note that because PyPI doesn't have channels like conda, we have to prefix 
+      # the package name with "cpg-*" to avoid clashing with the official package.
       - name: Build wheel
         run: |
           sed -i 's/name="hail",/name="cpg-hail",/' hail/python/setup.py
@@ -45,8 +48,8 @@ jobs:
         run: test "$(hailctl version)" = "$(cat hail/python/hail/hail_version)"
   
       - name: Publish the wheel to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
         if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -54,7 +57,6 @@ jobs:
           skip_existing: true
 
       - name: Redeploy the analysis-server
-        # Only run this step once - that's why limiting to the ubuntu run:
         if: github.event_name == 'push'
         run: |
           echo "version=$(cat hail/python/hail/hail_pip_version)" >> $GITHUB_ENV
