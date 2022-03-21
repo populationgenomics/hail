@@ -11,7 +11,6 @@ import shutil
 import signal
 import sys
 import tempfile
-from tkinter import W
 import traceback
 import uuid
 import warnings
