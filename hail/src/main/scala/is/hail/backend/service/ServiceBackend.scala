@@ -166,7 +166,7 @@ class ServiceBackend(
         "mount_tokens" -> JBool(true),
         "resources" -> JObject(
           "preemptible" -> JBool(true),
-          "memory" -> "highmem")
+          "memory" -> JString("highmem"))
       )
       i += 1
     }
