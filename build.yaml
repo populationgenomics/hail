@@ -4816,9 +4816,7 @@ steps:
       set -ex
       gcloud auth activate-service-account --key-file=/ci-deploy-0-1--hail-is-hail/ci-deploy-0-1--hail-is-hail.json
       gcloud auth -q configure-docker australia-southeast1-docker.pkg.dev
-      DOCKER_IMAGE=australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hail:$(cat /io/hail_pip_version)
-      docker tag {{ hailgenetics_hail_image.image }} $DOCKER_IMAGE
-      docker push $DOCKER_IMAGE
+      skopeo copy docker://{{ hailgenetics_hail_image.image }} docker://australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hail:$(cat /io/hail_pip_version)
     inputs:
       - from: /hail_pip_version
         to: /io/hail_pip_version
