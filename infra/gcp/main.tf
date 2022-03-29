@@ -48,6 +48,7 @@ variable "ci_config" {
     deploy_steps = list(string)
     bucket_location = string
     bucket_storage_class = string
+    bucket_name = string
     github_context = string
   })
   default = null
@@ -654,6 +655,7 @@ module "ci" {
   deploy_steps = var.ci_config.deploy_steps
   bucket_location = var.ci_config.bucket_location
   bucket_storage_class = var.ci_config.bucket_storage_class
+  bucket_name = var.ci_config.bucket_name
 
   ci_email = module.ci_gsa_secret.email
   container_registry_id = google_container_registry.registry.id
