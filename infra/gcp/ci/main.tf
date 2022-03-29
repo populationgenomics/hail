@@ -1,6 +1,6 @@
 module "bucket" {
   source        = "../gcs_bucket"
-  short_name    = "hail-ci"
+  short_name    = var.bucket_name
   location      = var.bucket_location
   storage_class = var.bucket_storage_class
 }

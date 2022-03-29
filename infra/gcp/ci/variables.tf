@@ -14,6 +14,10 @@ variable "bucket_storage_class" {
   type = string
 }
 
+variable "bucket_name" {
+  type = string
+}
+
 variable "watched_branches" {
   type = list(tuple([string, bool, bool]))
 }
