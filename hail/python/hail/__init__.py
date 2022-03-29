@@ -62,7 +62,7 @@ from . import vds  # noqa: E402
 from hail.expr import aggregators as agg  # noqa: E402
 from hail.utils import (Struct, Interval, hadoop_copy, hadoop_open, hadoop_ls,  # noqa: E402
                         hadoop_stat, hadoop_exists, hadoop_is_file,
-                        hadoop_is_dir, hadoop_scheme_supported, copy_log)
+                        hadoop_is_dir, hadoop_scheme_supported, copy_log, hadoop_rmtree, hadoop_remove)
 
 from .context import (init, init_local, init_batch, stop, spark_context, tmp_dir,  # noqa: E402
                       default_reference, get_reference, set_global_seed, _set_flags, _get_flags,
@@ -99,6 +99,8 @@ __all__ = [
     'hadoop_exists',
     'hadoop_ls',
     'hadoop_scheme_supported',
+    'hadoop_remove',
+    'hadoop_rmtree',
     'copy_log',
     'Struct',
     'Interval',

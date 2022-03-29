@@ -51,3 +51,13 @@ deploy: build
 .PHONY: clean
 clean:
 	rm -f base hail-ubuntu-image-ref base service-base service-java-run-base
+
+vep-grch37:
+	-docker pull konradjk/vep85_loftee:1.0.3
+	docker build -t gcr.io/hail-vdc/vep-test/grch37/vep85_loftee:1.0.3 -t vep-test-grch37 -f vep/Dockerfile.GRCh37 --cache-from konradjk/vep85_loftee:1.0.3,vep-test-grch37 .
+	docker push gcr.io/hail-vdc/vep-test/grch37/vep85_loftee:1.0.3
+
+vep-grch38:
+	-docker pull konradjk/vep95_loftee:0.2
+	docker build -t gcr.io/hail-vdc/vep-test/grch38/vep95_loftee:0.2 -t vep-test-grch38 -f vep/Dockerfile.GRCh38 --cache-from konradjk/vep95_loftee:0.2,vep-test-grch38 .
+	docker push gcr.io/hail-vdc/vep-test/grch38/vep95_loftee:0.2
