@@ -441,12 +441,6 @@ module "ci_gsa_secret" {
   name = "ci"
 }
 
-module "query_gsa_secret" {
-  source = "./gsa_k8s_secret"
-  name = "query"
-  iam_roles = ["storage.admin"]
-}
-
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_viewer" {
   provider = google-beta
   repository = google_artifact_registry_repository.repository.name
