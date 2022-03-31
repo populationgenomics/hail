@@ -95,7 +95,7 @@ Instructions:
    use_artifact_registry = false
    ```
 
-- You can optionally add a `ci_config` section into the `.tfvars` file, 
+- You can optionally add a `ci_config` section to `$HOME/.hail/global.tfvars`, 
   to enable CI triggered by git events:
     
    ```
