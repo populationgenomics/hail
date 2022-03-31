@@ -107,7 +107,6 @@ Instructions:
      deploy_steps = ["deploy_batch", "test_batch_0", "deploy_ci"]
      bucket_location = "<gcp-zone>"
      bucket_storage_class = "MULTI_REGIONAL"
-     bucket_name = "hail-ci"
      github_context = "ci-gcp"
    }
    ``` 
