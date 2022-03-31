@@ -48,7 +48,6 @@ variable "ci_config" {
     deploy_steps = list(string)
     bucket_location = string
     bucket_storage_class = string
-    bucket_name = string
     github_context = string
   })
   default = null
