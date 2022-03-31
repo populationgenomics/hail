@@ -75,7 +75,7 @@ Instructions:
    # batch regions and be compatible with the bucket location.
    batch_logs_bucket_storage_class = "MULTI_REGIONAL"
    
-   # Similarly, bucket locations and storage classess are specified 
+   # Similarly, bucket locations and storage classes are specified 
    # for other services:
    hail_query_bucket_location = "<bucket-location>"
    hail_query_bucket_storage_class = "MULTI_REGIONAL"
@@ -95,6 +95,33 @@ Instructions:
    use_artifact_registry = false
    ```
 
+- You can optionally add a `ci_config` section into the `.tfvars` file, 
+  to enable CI triggered by git events:
+    
+   ```
+   ci_config = {
+     github_oauth_token = "<TOKEN>"
+     github_user1_oauth_token = "<TOKEN>"
+     # This `false` here will prevent the CI from merging PRs into the repo:
+     watched_branches = [["broadinstitute/hail:main", true, false]]  
+     deploy_steps = ["deploy_batch", "test_batch_0", "deploy_ci"]
+     bucket_location = "<gcp-zone>"
+     bucket_storage_class = "MULTI_REGIONAL"
+     bucket_name = "hail-ci"
+     github_context = "ci-gcp"
+   }
+   ``` 
+  
+  Because of the secret values for `github_oauth_token` and `github_user1_oauth_token`,
+  you may want to avoid adding the `.tfvars` file under the version control. To share 
+  the config, you can instead keep it as a cloud secret:
+
+  ```sh
+  gcloud secrets create gcp-tfvars --data-file $HOME/.hail/global.tfvars
+  # To access:
+  gcloud secrets versions access --secret gcp-tfvars 1 > $HOME/.hail/global.tfvars
+  ```
+  
 - Run `terraform init`.
 
 - Run `terraform apply -var-file="$HOME/.hail/global.tfvars"`.  At the
