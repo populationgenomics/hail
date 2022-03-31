@@ -111,7 +111,7 @@ Instructions:
    }
    ``` 
   
-  Because of the secret values for `github_oauth_token` and `github_user1_oauth_token`,
+  Because of the sensitive values for `github_oauth_token` and `github_user1_oauth_token`,
   you should never put `$HOME/.hail/global.tfvars` unencrypted under the version control. To share 
   the config, you can instead keep it as a cloud secret:
 
