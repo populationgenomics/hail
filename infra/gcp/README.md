@@ -125,7 +125,7 @@ Instructions:
   You should see:
 
   ```sh
-  NAME                                                                   PURPOSE          PRIMARY_STATE
+  NAME                                                                         PURPOSE          PRIMARY_STATE
   projects/<gcp-project-id>/locations/global/keyRings/sops/cryptoKeys/sops-key ENCRYPT_DECRYPT  ENABLED
   ```
 
