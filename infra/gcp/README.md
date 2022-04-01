@@ -106,6 +106,7 @@ Instructions:
           ]
       ]
   }
+  ```
 
 - Install [sops](https://github.com/mozilla/sops).
 
