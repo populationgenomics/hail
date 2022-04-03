@@ -17,14 +17,13 @@ parser.add_argument('--output', type=str, required=True)
 
 args = parser.parse_args()
 
-# results = run(args.input, args.config, args.block_size, args.data_dir,
-#               args.consequence, args.tolerate_parse_error, args.part_id)
-#
-# with open(args.output, 'w') as out:
-#     out.write(f'variant\tvep\tvep_proc_id\n')
-#     for v, a, proc_id in results:
-#         out.write(f'{v}\t{a}\t{proc_id}\n')
+results = run(args.input, args.config, args.block_size, args.data_dir,
+              args.consequence, args.tolerate_parse_error, args.part_id)
+
+with open(args.output, 'w') as out:
+    out.write(f'variant\tvep\tvep_proc_id\n')
+    for v, a, proc_id in results:
+        out.write(f'{v}\t{a}\t{proc_id}\n')
 
 run_vcf_grch37(args.input)
 #run_vcf_grch38(args.input)
-

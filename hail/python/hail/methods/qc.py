@@ -1,3 +1,5 @@
+import asyncio
+
 import hail as hl
 from collections import Counter
 import os
@@ -553,9 +555,7 @@ def _service_vep(ht, config, block_size, csq, tolerate_parse_error, image, data_
         else:
             raise ValueError(f"No data_bucket set and no known data_bucket for service domain {service_domain}")
 
-    # FIXME: hard coded this as a gs path until the service backend works
-    # tmp_dir = hl.tmp_dir()
-    tmp_dir = f'gs://hail-jigold'
+    tmp_dir = hl.tmp_dir()
 
     if token is None:
         token = secret_alnum_string(16)
@@ -570,11 +570,20 @@ def _service_vep(ht, config, block_size, csq, tolerate_parse_error, image, data_
     input_file = f'{base_path}/inputs/input.vcf'
     hl.export_vcf(ht, input_file, parallel='header_per_shard')
 
-    # FIXME: hard coded these parameters until we can use the service backend
-    batch_backend = _batch.ServiceBackend('hail', 'hail-jigold')
-    # batch_backend = _batch.ServiceBackend(backend._billing_project, backend._bucket)
-    b = _batch.Batch(backend=batch_backend, name=f'vep-{token}', project='hail-vdc',
-                     requester_pays_project=requester_pays_project)
+    batch_backend = asyncio.get_event_loop().run_until_complete(
+        hl.init_batch(
+            default_reference='GRCh38',
+            billing_project='seqr',
+            remote_tmpdir='gs://cpg-seqr-test-tmp/hail',
+            token=os.environ['HAIL_TOKEN'],
+        )
+    )
+    b = _batch.Batch(
+        backend=batch_backend, 
+        name=f'vep-{token}', 
+        project='hail-vdc',
+        requester_pays_project=requester_pays_project,
+    )
 
     with hl.hadoop_open(config, 'r') as f:
         local_config = json.loads(f.read())
