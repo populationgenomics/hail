@@ -211,6 +211,74 @@ async def _handle_api_error(f, *args, **kwargs):
         raise e.http_response()
 
 
+async def _query_batch_jobs_for_billing(request, batch_id):
+    db = request.app['db']
+
+    # batch has already been validated
+    where_conditions = ['(jobs.batch_id = %s)']
+    where_args = [batch_id]
+
+    last_job_id = request.query.get('last_job_id')
+    limit = min(300, request.query.get('limit', 300))
+
+    if last_job_id is not None:
+        last_job_id = int(last_job_id)
+        where_conditions.append('(jobs.job_id > %s)')
+        where_args.append(last_job_id)
+
+    sql = f'''
+    SELECT jobs.*, batches.format_version,
+      job_attributes.value AS name
+    FROM jobs
+    INNER JOIN batches ON jobs.batch_id = batches.id
+    WHERE {' AND '.join(where_conditions)}
+    GROUP BY jobs.batch_id, jobs.job_id,
+    ORDER BY jobs.batch_id, jobs.job_id ASC
+    LIMIT {limit};
+    '''
+
+    jobs = [job_record_to_dict(record, record['name']) async for record in db.select_and_fetchall(sql, where_args)]
+    n_job_ids = len(jobs)
+    job_ids = [job['id'] for job in jobs]
+    job_formatters = ', '.join(['%s'] * n_job_ids)
+
+    job_attributes_sql = f'''
+    SELECT job_id, `key`, `value`
+    FROM job_attributes
+    WHERE batch_id = %s AND job_id in ({job_formatters});
+    '''
+
+    job_resources_sql = f'''
+    SELECT job_id, resource, usage
+    FROM aggregated_job_resources
+    WHERE batch_id = %s AND job_id in ({job_formatters})
+    '''
+
+    attributes_by_job = defaultdict(dict)
+    async for record in db.select_and_fetchall(job_attributes_sql, (batch_id, *job_ids)):
+        attributes_by_job[record['job_id']][record['key']] = record['value']
+
+    resources_by_job = defaultdict(dict)
+    async for record in db.select_and_fetchall(job_resources_sql, (batch_id, *job_ids)):
+        resources_by_job[record['job_id']][record['resource']] = record['usage']
+
+    for j in jobs:
+        job_id = j['id']
+        if job_id in resources_by_job:
+            j['resources'] = resources_by_job.get(job_id)
+        if job_id in attributes_by_job:
+            j['attributes'] = attributes_by_job.get(job_id)
+
+        if j.get('cost'):
+            del j['cost']
+
+    last_job_id = None
+    if len(jobs) == 50:
+        last_job_id = jobs[-1]['job_id']
+
+    return jobs, last_job_id
+
+
 async def _query_batch_jobs(request, batch_id):
     state_query_values = {
         'pending': ['Pending'],
@@ -328,6 +396,17 @@ WHERE id = %s AND NOT deleted;
     resp = {'jobs': jobs}
     if last_job_id is not None:
         resp['last_job_id'] = last_job_id
+    return web.json_response(resp)
+
+
+@routes.get('/api/v1alpha/batches{batch_id}/jobs/resources')
+@rest_billing_project_users_only
+async def get_jobs_for_billing(request, userdata, batch_id):
+    jobs, last_job_id = await _query_batch_jobs_for_billing(request, batch_id)
+    resp = {'jobs': jobs}
+    if last_job_id:
+        resp['last_job_id'] = last_job_id
+
     return web.json_response(resp)
 
 
@@ -663,7 +742,13 @@ async def _query_batches(request, user, q):
         where_args.extend(args)
 
     sql = f'''
-SELECT batches.*, batches_cancelled.id IS NOT NULL AS cancelled, COALESCE(SUM(`usage` * rate), 0) AS cost, batches_n_jobs_in_complete_states.n_completed, batches_n_jobs_in_complete_states.n_succeeded, batches_n_jobs_in_complete_states.n_failed, batches_n_jobs_in_complete_states.n_cancelled
+SELECT batches.*,
+    batches_cancelled.id IS NOT NULL AS cancelled,
+    COALESCE(SUM(`usage` * rate), 0) AS cost,
+    batches_n_jobs_in_complete_states.n_completed,
+    batches_n_jobs_in_complete_states.n_succeeded,
+    batches_n_jobs_in_complete_states.n_failed,
+    batches_n_jobs_in_complete_states.n_cancelled
 FROM batches
 LEFT JOIN batches_n_jobs_in_complete_states
   ON batches.id = batches_n_jobs_in_complete_states.id
@@ -1718,7 +1803,7 @@ async def ui_get_job(request, userdata, batch_id):
         resources['actual_memory'] = humanize.naturalsize(resources['memory_bytes'], binary=True)
         del resources['memory_bytes']
     if 'storage_gib' in resources:
-        resources['actual_storage'] = humanize.naturalsize(resources['storage_gib'] * 1024**3, binary=True)
+        resources['actual_storage'] = humanize.naturalsize(resources['storage_gib'] * 1024 ** 3, binary=True)
         del resources['storage_gib']
     if 'cores_mcpu' in resources:
         resources['actual_cpu'] = resources['cores_mcpu'] / 1000
