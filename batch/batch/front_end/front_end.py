@@ -253,11 +253,11 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     WHERE batch_id = %s AND job_id in ({job_formatters})
     '''
 
-    attributes_by_job = defaultdict(dict)
+    attributes_by_job = collections.defaultdict(dict)
     async for record in db.select_and_fetchall(job_attributes_sql, (batch_id, *job_ids)):
         attributes_by_job[record['job_id']][record['key']] = record['value']
 
-    resources_by_job = defaultdict(dict)
+    resources_by_job = collections.defaultdict(dict)
     async for record in db.select_and_fetchall(job_resources_sql, (batch_id, *job_ids)):
         resources_by_job[record['job_id']][record['resource']] = record['usage']
 
