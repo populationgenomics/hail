@@ -10,7 +10,7 @@ import signal
 import traceback
 from functools import wraps
 from numbers import Number
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 import aiohttp
 import aiohttp_session
@@ -74,7 +74,6 @@ from ..exceptions import (
 from ..file_store import FileStore
 from ..globals import BATCH_FORMAT_VERSION, HTTP_CLIENT_MAX_SIZE
 from ..inst_coll_config import InstanceCollectionConfigs
-from ..resource_usage import ResourceUsageMonitor
 from ..spec_writer import SpecWriter
 from ..utils import accrued_cost_from_cost_and_msec_mcpu, coalesce, query_billing_projects
 from .validate import ValidationError, validate_and_clean_jobs, validate_batch
@@ -439,16 +438,7 @@ WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
         raise web.HTTPNotFound()
     return record
 
-
-async def _get_resource_from_record(
-    app,
-    batch_id: int,
-    job_id: int,
-    record: dict,
-    endpoint: str,
-    handle_running_response: Callable[[aiohttp.ClientResponse], Awaitable[Any]],
-    cloud_storage_reader: Callable[[BatchFormatVersion, int, int, str, str], Awaitable[Any]],
-) -> Optional[Dict[str, Any]]:
+async def _get_job_log_from_record(app, batch_id, job_id, record):
     client_session: httpx.ClientSession = app['client_session']
     batch_format_version = BatchFormatVersion(record['format_version'])
 
@@ -470,11 +460,13 @@ async def _get_resource_from_record(
 
     if state == 'Running':
         try:
-            resp = await request_retry_transient_errors(client_session, 'GET', f'http://{ip_address}:5000{endpoint}')
-            return await handle_running_response(resp)
+            resp = await request_retry_transient_errors(
+                client_session, 'GET', f'http://{ip_address}:5000/api/v1alpha/batches/{batch_id}/jobs/{job_id}/log'
+            )
+            return await resp.json()
         except aiohttp.ClientResponseError:
-            log.exception(f'while getting resource for {(batch_id, job_id)}')
-            return {task: None for task in tasks}
+            log.exception(f'while getting log for {(batch_id, job_id)}')
+            return {task: 'ERROR: encountered a problem while fetching the log' for task in tasks}
 
     if state in ('Pending', 'Ready', 'Creating'):
         return None
@@ -487,76 +479,49 @@ async def _get_resource_from_record(
     attempt_id = record['attempt_id'] or record['last_cancelled_attempt_id']
     assert attempt_id is not None
 
-    async def _read_resource_from_cloud_storage(task):
+    file_store: FileStore = app['file_store']
+    batch_format_version = BatchFormatVersion(record['format_version'])
+
+    async def _read_log_from_cloud_storage(task):
         try:
-            data = await cloud_storage_reader(batch_format_version, batch_id, job_id, attempt_id, task)
+            data = await file_store.read_log_file(batch_format_version, batch_id, job_id, attempt_id, task)
         except FileNotFoundError:
             id = (batch_id, job_id)
-            log.exception(f'missing file for {id} and task {task}')
-            data = None
+            log.exception(f'missing log file for {id} and task {task}')
+            data = 'ERROR: could not find log file'
         return task, data
 
-    return dict(await asyncio.gather(*[_read_resource_from_cloud_storage(task) for task in tasks]))
+    return dict(await asyncio.gather(*[_read_log_from_cloud_storage(task) for task in tasks]))
 
 
-async def _get_job_log(app, batch_id, job_id) -> Optional[Dict[str, str]]:
-    file_store: FileStore = app['file_store']
-    record = await _get_job_record(app, batch_id, job_id)
+async def _get_job_log(app, batch_id, job_id):
+    db: Database = app['db']
 
-    async def handle_running_response(resp: aiohttp.ClientResponse) -> Dict[str, str]:
-        return await resp.json()
-
-    maybe_data = await _get_resource_from_record(
-        app,
-        batch_id,
-        job_id,
-        record,
-        f'/api/v1alpha/batches/{batch_id}/jobs/{job_id}/log',
-        handle_running_response,
-        file_store.read_log_file,
+    record = await db.select_and_fetchone(
+        '''
+SELECT jobs.state, jobs.spec, ip_address, format_version, jobs.attempt_id, t.attempt_id AS last_cancelled_attempt_id
+FROM jobs
+INNER JOIN batches
+  ON jobs.batch_id = batches.id
+LEFT JOIN attempts
+  ON jobs.batch_id = attempts.batch_id AND jobs.job_id = attempts.job_id AND jobs.attempt_id = attempts.attempt_id
+LEFT JOIN instances
+  ON attempts.instance_name = instances.name
+LEFT JOIN (
+  SELECT batch_id, job_id, attempt_id
+  FROM attempts
+  WHERE reason = "cancelled" AND batch_id = %s AND job_id = %s
+  ORDER BY end_time DESC
+  LIMIT 1
+) AS t
+  ON jobs.batch_id = t.batch_id AND jobs.job_id = t.job_id
+WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
+''',
+        (batch_id, job_id, batch_id, job_id),
     )
-
-    if maybe_data is None:
-        return None
-
-    data = {}
-    for task, log in maybe_data.items():
-        if log is None:
-            log = 'ERROR: could not find file'
-        data[task] = log
-    return data
-
-
-async def _get_job_resource_usage(app, batch_id, job_id) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
-    file_store: FileStore = app['file_store']
-    record = await _get_job_record(app, batch_id, job_id)
-
-    async def handle_running_response(resp: aiohttp.ClientResponse) -> Dict[str, Optional[pd.DataFrame]]:
-        resource_usage = {}
-
-        reader = aiohttp.MultipartReader.from_response(resp)
-        while True:
-            part = await reader.next()  # pylint: disable=not-callable
-            if part is None:
-                break
-
-            assert isinstance(part, aiohttp.BodyPartReader)
-            task = part.filename
-            assert task in ('input', 'main', 'output'), task
-            data = await part.read()
-            resource_usage[task] = ResourceUsageMonitor.decode_to_df(data)
-
-        return resource_usage
-
-    return await _get_resource_from_record(
-        app,
-        batch_id,
-        job_id,
-        record,
-        f'/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage',
-        handle_running_response,
-        file_store.read_resource_usage_file,
-    )
+    if not record:
+        raise web.HTTPNotFound()
+    return await _get_job_log_from_record(app, batch_id, job_id, record)
 
 
 async def _get_attributes(app, record):
@@ -1681,63 +1646,6 @@ async def get_job(request, userdata, batch_id):  # pylint: disable=unused-argume
     return web.json_response(status)
 
 
-def plot_job_durations(container_statuses: dict, batch_id: int, job_id: int):
-    data = []
-    for step in ['input', 'main', 'output']:
-        if container_statuses[step]:
-            for timing_name, timing_data in container_statuses[step]['timing'].items():
-                if timing_data is not None:
-                    plot_dict = {
-                        'Title': f'{(batch_id, job_id)}',
-                        'Step': step,
-                        'Task': timing_name,
-                    }
-
-                    if timing_data.get('start_time') is not None:
-                        plot_dict['Start'] = datetime.datetime.fromtimestamp(timing_data['start_time'] / 1000)
-
-                        finish_time = timing_data.get('finish_time')
-                        if finish_time is None:
-                            finish_time = time_msecs()
-                        plot_dict['Finish'] = datetime.datetime.fromtimestamp(finish_time / 1000)
-
-                    data.append(plot_dict)
-
-    if not data:
-        return None
-
-    df = pd.DataFrame(data)
-
-    fig = px.timeline(
-        df,
-        x_start='Start',
-        x_end='Finish',
-        y='Step',
-        color='Task',
-        hover_data=['Step'],
-        color_discrete_sequence=px.colors.sequential.dense,
-        category_orders={
-            'Step': ['input', 'main', 'output'],
-            'Task': [
-                'pulling',
-                'setting up overlay',
-                'setting up network',
-                'running',
-                'uploading_log',
-                'uploading_resource_usage',
-            ],
-        },
-    )
-
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-
-def plot_resource_usage(
-    resource_usage: Optional[Dict[str, Optional[pd.DataFrame]]]  # pylint: disable=unused-argument
-) -> Optional[str]:
-    return None
-
-
 @routes.get('/batches/{batch_id}/jobs/{job_id}')
 @web_billing_project_users_only()
 @catch_ui_error_in_dev
@@ -1745,11 +1653,8 @@ async def ui_get_job(request, userdata, batch_id):
     app = request.app
     job_id = int(request.match_info['job_id'])
 
-    job, attempts, job_log, resource_usage = await asyncio.gather(
-        _get_job(app, batch_id, job_id),
-        _get_attempts(app, batch_id, job_id),
-        _get_job_log(app, batch_id, job_id),
-        _get_job_resource_usage(app, batch_id, job_id),
+    job, attempts, job_log = await asyncio.gather(
+        _get_job(app, batch_id, job_id), _get_attempts(app, batch_id, job_id), _get_job_log(app, batch_id, job_id)
     )
 
     job['duration'] = humanize_timedelta_msecs(job['duration'])
@@ -1762,7 +1667,6 @@ async def ui_get_job(request, userdata, batch_id):
             'timing': {
                 'pulling': dictfix.NoneOr({'duration': dictfix.NoneOr(Number)}),
                 'running': dictfix.NoneOr({'duration': dictfix.NoneOr(Number)}),
-                'uploading_resource_usage': dictfix.NoneOr({'duration': dictfix.NoneOr(Number)}),
             },
             'short_error': dictfix.NoneOr(str),
             'error': dictfix.NoneOr(str),
@@ -1809,6 +1713,48 @@ async def ui_get_job(request, userdata, batch_id):
         resources['actual_cpu'] = resources['cores_mcpu'] / 1000
         del resources['cores_mcpu']
 
+    data = []
+    for step in ['input', 'main', 'output']:
+        if container_statuses[step]:
+            for timing_name, timing_data in container_statuses[step]['timing'].items():
+                if timing_data is not None:
+                    plot_dict = {
+                        'Title': f'{(batch_id, job_id)}',
+                        'Step': step,
+                        'Task': timing_name,
+                    }
+
+                    if timing_data.get('start_time') is not None:
+                        plot_dict['Start'] = datetime.datetime.fromtimestamp(timing_data['start_time'] / 1000)
+
+                        finish_time = timing_data.get('finish_time')
+                        if finish_time is None:
+                            finish_time = time_msecs()
+                        plot_dict['Finish'] = datetime.datetime.fromtimestamp(finish_time / 1000)
+
+                    data.append(plot_dict)
+
+    if data:
+        df = pd.DataFrame(data)
+
+        fig = px.timeline(
+            df,
+            x_start='Start',
+            x_end='Finish',
+            y='Step',
+            color='Task',
+            hover_data=['Step'],
+            color_discrete_sequence=px.colors.qualitative.Prism,
+            category_orders={
+                'Step': ['input', 'main', 'output'],
+                'Task': ['pulling', 'setting up overlay', 'setting up network', 'running', 'uploading_log'],
+            },
+        )
+
+        plot_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+    else:
+        plot_json = None
+
     page_context = {
         'batch_id': batch_id,
         'job_id': job_id,
@@ -1820,8 +1766,7 @@ async def ui_get_job(request, userdata, batch_id):
         'job_status_str': json.dumps(job, indent=2),
         'step_errors': step_errors,
         'error': job_status.get('error'),
-        'plot_job_durations': plot_job_durations(container_statuses, batch_id, job_id),
-        'plot_resource_usage': plot_resource_usage(resource_usage),
+        'plot_json': plot_json,
     }
 
     return await render_template('batch', request, userdata, 'job.html', page_context)
