@@ -398,7 +398,7 @@ WHERE id = %s AND NOT deleted;
     return web.json_response(resp)
 
 
-@routes.get('/api/v1alpha/batches{batch_id}/jobs/resources')
+@routes.get('/api/v1alpha/batches/{batch_id}/jobs/resources')
 @rest_billing_project_users_only
 async def get_jobs_for_billing(request, userdata, batch_id):
     jobs, last_job_id = await _query_batch_jobs_for_billing(request, batch_id)
@@ -437,6 +437,7 @@ WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
     if not record:
         raise web.HTTPNotFound()
     return record
+
 
 async def _get_job_log_from_record(app, batch_id, job_id, record):
     client_session: httpx.ClientSession = app['client_session']
