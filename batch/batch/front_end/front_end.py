@@ -242,7 +242,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     LIMIT %s;
     '''
 
-    jobs = [dict(record) async for record in db.select_and_fetchall(sql, *where_args, limit)]
+    jobs = [dict(record) async for record in db.select_and_fetchall(sql, (*where_args, limit))]
     n_job_ids = len(jobs)
     job_ids = [job['job_id'] for job in jobs]
     job_formatters = ', '.join(['%s'] * n_job_ids)
