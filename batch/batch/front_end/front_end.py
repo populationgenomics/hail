@@ -218,7 +218,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     where_args = [batch_id]
 
     last_job_id = request.query.get('last_job_id')
-    limit = min(300, request.query.get('limit', 300))
+    limit = min(300, int(request.query.get('limit', 300)))
 
     if last_job_id is not None:
         last_job_id = int(last_job_id)
@@ -226,19 +226,25 @@ async def _query_batch_jobs_for_billing(request, batch_id):
         where_args.append(last_job_id)
 
     sql = f'''
-    SELECT jobs.*, batches.format_version,
-      job_attributes.value AS name
+    SELECT
+        jobs.batch_id as batch_id,
+        jobs.job_id as job_id,
+        jobs.state as state,
+        jobs.status as status,
+        jobs.cancelled as cancelled,
+        job_attributes.value AS name,
+        batches.user AS user
     FROM jobs
     INNER JOIN batches ON jobs.batch_id = batches.id
     WHERE {' AND '.join(where_conditions)}
     GROUP BY jobs.batch_id, jobs.job_id,
     ORDER BY jobs.batch_id, jobs.job_id ASC
-    LIMIT {limit};
+    LIMIT %s;
     '''
 
-    jobs = [job_record_to_dict(record, '') async for record in db.select_and_fetchall(sql, where_args)]
+    jobs = [dict(record) async for record in db.select_and_fetchall(sql, *where_args, limit)]
     n_job_ids = len(jobs)
-    job_ids = [job['id'] for job in jobs]
+    job_ids = [job['job_id'] for job in jobs]
     job_formatters = ', '.join(['%s'] * n_job_ids)
 
     job_attributes_sql = f'''
@@ -262,7 +268,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
         resources_by_job[record['job_id']][record['resource']] = record['usage']
 
     for j in jobs:
-        job_id = j['id']
+        job_id = j['job_id']
         if job_id in resources_by_job:
             j['resources'] = resources_by_job.get(job_id)
         if job_id in attributes_by_job:
@@ -272,7 +278,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
             del j['cost']
 
     last_job_id = None
-    if len(jobs) == 50:
+    if len(jobs) == limit:
         last_job_id = jobs[-1]['job_id']
 
     return jobs, last_job_id
