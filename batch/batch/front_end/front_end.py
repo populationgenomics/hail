@@ -244,18 +244,25 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     jobs = [dict(record) async for record in db.select_and_fetchall(sql, (*where_args, limit))]
     n_job_ids = len(jobs)
     job_ids = [job['job_id'] for job in jobs]
-    job_formatters = ', '.join(['%s'] * n_job_ids)
+
+    if n_job_ids == 0:
+        return []
+    if n_job_ids == 1:
+        job_condition = 'job_id = %s'
+    else:
+        placeholders = ', '.join(['%s'] * n_job_ids)
+        job_condition = f'job_id IN ({placeholders})'
 
     job_attributes_sql = f'''
     SELECT job_id, `key`, `value`
     FROM job_attributes
-    WHERE batch_id = %s AND job_id in ({job_formatters});
+    WHERE batch_id = %s AND {job_condition};
     '''
 
     job_resources_sql = f'''
     SELECT job_id, resource, usage
     FROM aggregated_job_resources
-    WHERE batch_id = %s AND job_id in ({job_formatters})
+    WHERE batch_id = %s AND {job_condition}
     '''
 
     attributes_by_job = collections.defaultdict(dict)
