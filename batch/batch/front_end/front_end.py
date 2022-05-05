@@ -232,12 +232,11 @@ async def _query_batch_jobs_for_billing(request, batch_id):
         jobs.state as state,
         jobs.status as status,
         jobs.cancelled as cancelled,
-        job_attributes.value AS name,
         batches.user AS user
     FROM jobs
     INNER JOIN batches ON jobs.batch_id = batches.id
     WHERE {' AND '.join(where_conditions)}
-    GROUP BY jobs.batch_id, jobs.job_id,
+    GROUP BY jobs.batch_id, jobs.job_id
     ORDER BY jobs.batch_id, jobs.job_id ASC
     LIMIT %s;
     '''
