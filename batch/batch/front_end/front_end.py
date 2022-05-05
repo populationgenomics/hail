@@ -260,7 +260,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     '''
 
     job_resources_sql = f'''
-    SELECT job_id, resource, usage
+    SELECT job_id, resource, `usage`
     FROM aggregated_job_resources
     WHERE batch_id = %s AND {job_condition}
     '''
