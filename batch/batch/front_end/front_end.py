@@ -275,10 +275,8 @@ async def _query_batch_jobs_for_billing(request, batch_id):
 
     for j in jobs:
         job_id = j['job_id']
-        if job_id in resources_by_job:
-            j['resources'] = resources_by_job.get(job_id)
-        if job_id in attributes_by_job:
-            j['attributes'] = attributes_by_job.get(job_id)
+        j['resources'] = resources_by_job.get(job_id, [])
+        j['attributes'] = attributes_by_job.get(job_id, {})
 
         if j.get('cost'):
             del j['cost']
