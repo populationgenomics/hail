@@ -419,36 +419,6 @@ async def get_jobs_for_billing(request, userdata, batch_id):
     return web.json_response(resp)
 
 
-async def _get_job_record(app, batch_id, job_id):
-    db: Database = app['db']
-
-    record = await db.select_and_fetchone(
-        '''
-SELECT jobs.state, jobs.spec, ip_address, format_version, jobs.attempt_id, t.attempt_id AS last_cancelled_attempt_id
-FROM jobs
-INNER JOIN batches
-  ON jobs.batch_id = batches.id
-LEFT JOIN attempts
-  ON jobs.batch_id = attempts.batch_id AND jobs.job_id = attempts.job_id AND jobs.attempt_id = attempts.attempt_id
-LEFT JOIN instances
-  ON attempts.instance_name = instances.name
-LEFT JOIN (
-  SELECT batch_id, job_id, attempt_id
-  FROM attempts
-  WHERE reason = "cancelled" AND batch_id = %s AND job_id = %s
-  ORDER BY end_time DESC
-  LIMIT 1
-) AS t
-  ON jobs.batch_id = t.batch_id AND jobs.job_id = t.job_id
-WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
-''',
-        (batch_id, job_id, batch_id, job_id),
-    )
-    if not record:
-        raise web.HTTPNotFound()
-    return record
-
-
 async def _get_job_log_from_record(app, batch_id, job_id, record):
     client_session: httpx.ClientSession = app['client_session']
     batch_format_version = BatchFormatVersion(record['format_version'])
@@ -718,13 +688,7 @@ async def _query_batches(request, user, q):
         where_args.extend(args)
 
     sql = f'''
-SELECT batches.*,
-    batches_cancelled.id IS NOT NULL AS cancelled,
-    COALESCE(SUM(`usage` * rate), 0) AS cost,
-    batches_n_jobs_in_complete_states.n_completed,
-    batches_n_jobs_in_complete_states.n_succeeded,
-    batches_n_jobs_in_complete_states.n_failed,
-    batches_n_jobs_in_complete_states.n_cancelled
+SELECT batches.*, batches_cancelled.id IS NOT NULL AS cancelled, COALESCE(SUM(`usage` * rate), 0) AS cost, batches_n_jobs_in_complete_states.n_completed, batches_n_jobs_in_complete_states.n_succeeded, batches_n_jobs_in_complete_states.n_failed, batches_n_jobs_in_complete_states.n_cancelled
 FROM batches
 LEFT JOIN batches_n_jobs_in_complete_states
   ON batches.id = batches_n_jobs_in_complete_states.id
