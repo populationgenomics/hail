@@ -230,8 +230,6 @@ async def _query_batch_jobs_for_billing(request, batch_id):
         jobs.batch_id as batch_id,
         jobs.job_id as job_id,
         jobs.state as state,
-        jobs.status as status,
-        jobs.cancelled as cancelled,
         batches.user AS user
     FROM jobs
     INNER JOIN batches ON jobs.batch_id = batches.id
