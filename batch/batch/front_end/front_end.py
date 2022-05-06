@@ -224,7 +224,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
         try:
             limit = int(query_limit)
         except ValueError as e:
-            return web.HTTPBadRequest(f'Bad value for "limit": {e}')
+            raise web.HTTPBadRequest(reason=f'Bad value for "limit": {e}')
     if last_job_id is not None:
         last_job_id = int(last_job_id)
         where_conditions.append('(jobs.job_id > %s)')
@@ -414,6 +414,36 @@ WHERE id = %s AND NOT deleted;
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/resources')
 @rest_billing_project_users_only
 async def get_jobs_for_billing(request, userdata, batch_id):
+    """
+    Get jobs for batch to check the amount of resources used.
+    Takes a "last_job_id" and "limit" parameter.
+
+    Returns
+    -------
+    Example response:
+    {
+        "jobs": [{
+            "batch_id": 1,
+            "job_id": 1,
+            "state": "Error",
+            "user": "<user>",
+            "resources": {
+                "compute/n1-preemptible/1": 0,
+                "disk/local-ssd/1": 0,
+                "disk/pd-ssd/1": 0,
+                "ip-fee/1024/1": 0,
+                "memory/n1-preemptible/1": 0,
+                "service-fee/1": 0
+            },
+            "attributes": {
+                "name": "<name of job>"
+            }
+        }]
+    }
+    """
+
+    # just noting the @rest_billing_project_users_only decorator
+    #   does the permission checks for us
     jobs, last_job_id = await _query_batch_jobs_for_billing(request, batch_id)
     resp = {'jobs': jobs}
     if last_job_id:
