@@ -218,8 +218,13 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     where_args = [batch_id]
 
     last_job_id = request.query.get('last_job_id')
-    limit = min(300, int(request.query.get('limit', 300)))
-
+    query_limit: str = request.query.get('limit')
+    limit = 300
+    if query_limit:
+        try:
+            limit = int(query_limit)
+        except ValueError as e:
+            return web.HTTPBadRequest(f'Bad value for "limit": {e}')
     if last_job_id is not None:
         last_job_id = int(last_job_id)
         where_conditions.append('(jobs.job_id > %s)')
