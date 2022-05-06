@@ -416,7 +416,7 @@ WHERE id = %s AND NOT deleted;
 async def get_jobs_for_billing(request, userdata, batch_id):
     """
     Get jobs for batch to check the amount of resources used.
-    Takes a "last_job_id" and "limit" parameter.
+    Takes a "last_job_id" and "limit" parameter that can be used to implement paging.
 
     Returns
     -------
