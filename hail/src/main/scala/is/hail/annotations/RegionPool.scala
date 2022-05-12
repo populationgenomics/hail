@@ -153,10 +153,10 @@ final class RegionPool private(strictMemoryCheck: Boolean, threadName: String, t
     log.info(s"RegionPool: $context: ${readableBytes(totalAllocatedBytes)} allocated (${readableBytes(inBlocks)} blocks / " +
       s"${readableBytes(totalAllocatedBytes - inBlocks)} chunks), regions.size = ${regions.size}, " +
       s"$numJavaObjects current java objects, thread $threadID: $threadName")
-//    log.info("-----------STACK_TRACES---------")
-//    val stacks: String = regions.result().toIndexedSeq.flatMap(r => r.stackTrace.map((r.getTotalChunkMemory(), _))).foldLeft("")((a: String, b) => a + "\n" + b.toString())
-//    log.info(stacks)
-//    log.info("---------------END--------------")
+      log.info("-----------STACK_TRACES---------")
+      val stacks: String = regions.result().toIndexedSeq.flatMap(r => r.stackTrace.map((r.getTotalChunkMemory(), _))).foldLeft("")((a: String, b) => a + "\n" + b.toString())
+      log.info(stacks)
+      log.info("---------------END--------------")
   }
 
   def scopedRegion[T](f: Region => T): T = using(Region(pool = this))(f)
