@@ -2014,6 +2014,7 @@ class JVMContainer:
         command = [
             'java',
             f'-Xmx{heap_memory_mib}M',
+            '-XX:+HeapDumpOnOutOfMemoryError',
             '-cp',
             f'/jvm-entryway:/jvm-entryway/junixsocket-selftest-2.3.3-jar-with-dependencies.jar:{JVM.SPARK_HOME}/jars/*',
             'is.hail.JVMEntryway',
