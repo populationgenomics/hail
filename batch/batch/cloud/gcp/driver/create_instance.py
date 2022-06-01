@@ -80,11 +80,11 @@ def create_vm_config(
         }
 
         if preemptible:
-            result |= {
+            result.update({
                 'provisioningModel': 'SPOT',
                 'instanceTerminationAction': 'DELETE',
                 'preemptible': True,
-            }
+            })
 
         return result
 
