@@ -11,14 +11,19 @@ bash add-logging-agent-repo.sh
 curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 apt-get update
 
+# Avoid any prompts from apt install.
+export DEBIAN_FRONTEND=noninteractive
+
 apt-get install -y \
     apt-transport-https \
     ca-certificates \
     curl \
     google-fluentd \
     google-fluentd-catch-all-config-structured \
+    gnupg \
     jq \
-    software-properties-common
+    software-properties-common \
+    wget
 
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
 
@@ -27,7 +32,19 @@ add-apt-repository \
    $(lsb_release -cs) \
    stable"
 
-apt-get install -y docker-ce
+# Install NVIDIA GPU drivers and NVIDIA Container Toolkit. This needs to happen before
+# the Docker daemon configuration is updated, to avoid conflicts.
+# https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#ubuntu-installation-network
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker
+DISTRIBUTION=$(. /etc/os-release;echo $ID$VERSION_ID)
+apt-key del 7fa2af80  # Remove deprecated NVIDIA key.
+wget https://developer.download.nvidia.com/compute/cuda/repos/${DISTRIBUTION/\./}/x86_64/cuda-keyring_1.0-1_all.deb
+dpkg -i cuda-keyring_1.0-1_all.deb && rm cuda-keyring_1.0-1_all.deb
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/$DISTRIBUTION/libnvidia-container.list | \
+            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+            tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt update && apt install -y cuda docker-ce nvidia-docker2
 
 rm -rf /var/lib/apt/lists/*
 

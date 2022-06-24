@@ -8,7 +8,7 @@ PROJECT=$(get_global_config_field gcp_project)
 ZONE=$(get_global_config_field gcp_zone)
 DOCKER_ROOT_IMAGE=$(get_global_config_field docker_root_image)
 
-WORKER_IMAGE_VERSION=12
+WORKER_IMAGE_VERSION=13
 BUILDER=build-batch-worker-image
 
 create_build_image_instance() {
@@ -35,7 +35,7 @@ create_build_image_instance() {
         --scopes=https://www.googleapis.com/auth/cloud-platform \
         --image=${UBUNTU_IMAGE} \
         --image-project=ubuntu-os-cloud \
-        --boot-disk-size=10GB \
+        --boot-disk-size=20GB \
         --boot-disk-type=pd-ssd
 }
 
