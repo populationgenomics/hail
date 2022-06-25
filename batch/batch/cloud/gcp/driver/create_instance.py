@@ -73,6 +73,10 @@ def create_vm_config(
 
     assert instance_config.is_valid_configuration(resource_rates.keys())
 
+    # Passing "--gpus all" only works when there's actually a GPU installed on the
+    # machine.
+    gpu_enabled = machine_type.endswith('g')  # E.g. a2-highgpu-1g
+
     def scheduling() -> dict:
         result = {
             'automaticRestart': False,
@@ -327,6 +331,7 @@ docker run \
 --cap-add SYS_ADMIN \
 --security-opt apparmor:unconfined \
 --network host \
+{"--gpus all \\" if gpu_enabled else ""}
 $BATCH_WORKER_IMAGE \
 python3 -u -m batch.worker.worker >worker.log 2>&1
 
