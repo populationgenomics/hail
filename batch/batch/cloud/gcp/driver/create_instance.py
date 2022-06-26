@@ -12,7 +12,7 @@ from ....file_store import FileStore
 from ....instance_config import InstanceConfig
 from ...resource_utils import unreserved_worker_data_disk_size_gib
 from ...utils import ACCEPTABLE_QUERY_JAR_URL_PREFIX
-from ..resource_utils import gcp_machine_type_to_worker_type_and_cores
+from ..resource_utils import gcp_machine_type_to_parts
 
 log = logging.getLogger('create_instance')
 
@@ -39,7 +39,10 @@ def create_vm_config(
     project: str,
     instance_config: InstanceConfig,
 ) -> dict:
-    _, cores = gcp_machine_type_to_worker_type_and_cores(machine_type)
+    machine_type_parts = gcp_machine_type_to_parts(machine_type)
+    if machine_type_parts is None:
+        raise ValueError(f'bad machine_type: {machine_type}')
+    cores = machine_type_parts.cores
 
     if local_ssd_data_disk:
         worker_data_disk = {
@@ -75,7 +78,7 @@ def create_vm_config(
 
     # Passing "--gpus all" only works when there's actually a GPU installed on the
     # machine.
-    gpu_enabled = machine_type.endswith('g')  # E.g. a2-highgpu-1g
+    gpu_enabled = machine_type_parts.gpus > 0
 
     def scheduling() -> dict:
         result = {
