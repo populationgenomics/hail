@@ -21,6 +21,10 @@ for typ in ('highcpu', 'standard', 'highmem'):
     possible_cores = gcp_valid_cores_from_worker_type[typ]
     for cores in possible_cores:
         gcp_valid_machine_types.append(f'{GCP_MACHINE_FAMILY}-{typ}-{cores}')
+# Add accelerator-optimized (A2) machine types for A100 GPUs.
+for num_gpus in (1, 2, 4, 8):
+    gcp_valid_machine_types.append(f'a2-highgpu-{num_gpus}g')
+gcp_valid_machine_types.append('a2-megagpu-16g')
 
 
 gcp_memory_to_worker_type = {'lowmem': 'highcpu', 'standard': 'standard', 'highmem': 'highmem'}
