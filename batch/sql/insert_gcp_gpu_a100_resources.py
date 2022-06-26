@@ -27,8 +27,8 @@ async def main():
             ('memory/a2-nonpreemptible/1', rate_gib_hour_to_mib_msec(0.004237)),
             ('memory/a2-preemptible/1', rate_gib_hour_to_mib_msec(0.0012711)),
             # https://cloud.google.com/compute/all-pricing#gpus
-            ('gpu/a100-nonpreemptible/1', rate_instance_hour_to_fraction_msec(2.934, 1)),
-            ('gpu/a100-preemptible/1', rate_instance_hour_to_fraction_msec(0.88, 1)),
+            ('gpu/a100-nonpreemptible/1', rate_instance_hour_to_fraction_msec(2.934, 1024)),
+            ('gpu/a100-preemptible/1', rate_instance_hour_to_fraction_msec(0.88, 1024)),
         ]
 
         await tx.execute_many('''
