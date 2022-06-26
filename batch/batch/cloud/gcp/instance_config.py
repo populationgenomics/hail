@@ -6,6 +6,7 @@ from .resource_utils import family_worker_type_cores_to_gcp_machine_type, gcp_ma
 from .resources import (
     GCPComputeResource,
     GCPDynamicSizedDiskResource,
+    GCPGPUResource,
     GCPIPFeeResource,
     GCPMemoryResource,
     GCPResource,
@@ -47,6 +48,9 @@ class GCPSlimInstanceConfig(InstanceConfig):
             GCPIPFeeResource.create(product_versions, 1024),
             GCPServiceFeeResource.create(product_versions),
         ]
+
+        if machine_type_parts.gpus > 0:
+            resources.append(GCPGPUResource.create(product_versions, machine_type_parts.gpu_model, machine_type_parts.gpus, preemptible))
 
         return GCPSlimInstanceConfig(
             machine_type=machine_type,

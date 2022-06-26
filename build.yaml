@@ -2005,6 +2005,8 @@ steps:
         script: /io/sql/add-nonpreemptible-pools.sql
       - name: add-pool-label
         script: /io/sql/add-pool-label.sql
+      - name: insert-gcp-gpu-a100-resources
+        script: /io/sql/insert_gcp_gpu_a100_resources.py
     inputs:
       - from: /repo/batch/sql
         to: /io/sql

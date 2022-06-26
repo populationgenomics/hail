@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 log = logging.getLogger('utils')
 
 GCP_MAX_PERSISTENT_SSD_SIZE_GIB = 64 * 1024
-MACHINE_TYPE_REGEX = re.compile('(?P<machine_family>[^-]+)-(?P<machine_type>[^-]+)-(?P<cores>\\d+)')
+MACHINE_TYPE_REGEX = re.compile('(?P<machine_family>[^-]+)-(?P<machine_type>[^-]+)-(?P<cores>\\d+)g?')
 GCP_MACHINE_FAMILY = 'n1'
 
 
@@ -39,6 +39,18 @@ class MachineTypeParts:
         self.machine_family = machine_family
         self.worker_type = worker_type
         self.cores = cores
+        self.gpus = 0
+        self.gpu_family = None
+
+        # Remap for A2 machines.
+        if machine_family == 'a2':
+            self.gpus = cores
+            self.gpu_model = 'a100'
+            if worker_type == 'highgpu':
+                self.cores = self.gpus * 12
+            else:
+                assert worker_type == 'megagpu' and self.gpus == 16
+                self.cores = 96
 
 
 def gcp_machine_type_to_parts(machine_type: str) -> Optional[MachineTypeParts]:

@@ -11,6 +11,7 @@ from ...resources import (
     Resource,
     ServiceFeeResourceMixin,
     StaticSizedDiskResourceMixin,
+    GPUResourceMixin,
 )
 
 
@@ -212,6 +213,40 @@ class GCPIPFeeResource(IPFeeResourceMixin, GCPResource):
         return {'type': self.TYPE, 'name': self.name, 'format_version': self.FORMAT_VERSION}
 
 
+class GCPGPUResource(GPUResourceMixin, GCPResource):
+    FORMAT_VERSION = 1
+    TYPE = 'gcp_gpu'
+
+    @staticmethod
+    def product_name(gpu_model: str, preemptible: bool) -> str:
+        preemptible_str = 'preemptible' if preemptible else 'nonpreemptible'
+        return f'gpu/{gpu_model}-{preemptible_str}'
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> 'GCPGPUResource':
+        assert data['type'] == GCPGPUResource.TYPE
+        return GCPGPUResource(data['name'], data['gpus'])
+
+    @staticmethod
+    def create(
+        product_versions: ProductVersions,
+        gpu_model: str,
+        gpus: int,
+        preemptible: bool,
+    ) -> 'GCPGPUResource':
+        product = GCPGPUResource.product_name(gpu_model, preemptible)
+        name = product_versions.resource_name(product)
+        assert name, product
+        return GCPGPUResource(name, gpus)
+
+    def __init__(self, name: str, gpus: int):
+        self.name = name
+        self.gpus = gpus
+
+    def to_dict(self) -> dict:
+        return {'type': self.TYPE, 'name': self.name, 'gpus': self.gpus, 'format_version': self.FORMAT_VERSION}
+
+
 def gcp_resource_from_dict(data: dict) -> GCPResource:
     typ = data['type']
     if typ == GCPStaticSizedDiskResource.TYPE:
@@ -224,5 +259,7 @@ def gcp_resource_from_dict(data: dict) -> GCPResource:
         return GCPMemoryResource.from_dict(data)
     if typ == GCPServiceFeeResource.TYPE:
         return GCPServiceFeeResource.from_dict(data)
+    if typ == GCPGPUResource.TYPE:
+        return GCPGPUResource.from_dict(data)
     assert typ == GCPIPFeeResource.TYPE
     return GCPIPFeeResource.from_dict(data)
