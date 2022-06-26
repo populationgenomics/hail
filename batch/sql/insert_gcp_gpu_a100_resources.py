@@ -36,7 +36,7 @@ async def main():
     VALUES (%s, %s)
     ''',
                             rates)
-        
+
         resource_versions = [
             ('compute/a2-nonpreemptible', 1),
             ('compute/a2-preemptible', 1),
@@ -51,7 +51,7 @@ async def main():
     VALUES (%s, %s)
     ''',
                                     resource_versions)
-    
+
     await populate()
     await db.async_close()
 
