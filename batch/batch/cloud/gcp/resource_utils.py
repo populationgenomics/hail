@@ -115,9 +115,12 @@ def gcp_worker_memory_per_core_mib(worker_type: str) -> int:
         m = 3840
     elif worker_type == 'highmem':
         m = 6656
-    else:
-        assert worker_type == 'highcpu', worker_type
+    elif worker_type == 'highcpu':
         m = 924  # this number must be divisible by 4. I rounded up to the nearest MiB
+    elif worker_type == 'highgpu' or worker_type == 'megagpu':
+        m = 7252 # this number must be divisible by 4, therefore slightly lower than 87040/12.
+    else:
+        raise ValueError(f'unknown worker type: {worker_type}')
     return m
 
 
