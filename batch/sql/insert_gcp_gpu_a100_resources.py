@@ -1,6 +1,7 @@
 import asyncio
+import os
 
-from gear import Database
+from gear import Database, transaction
 from hailtop.utils import (
     rate_cpu_hour_to_mcpu_msec,
     rate_gib_hour_to_mib_msec,
@@ -9,11 +10,16 @@ from hailtop.utils import (
 
 
 async def main():
+    cloud = os.environ['HAIL_CLOUD']
+
     db = Database()
     await db.async_init()
 
     @transaction(db)
     async def populate(tx):
+        if cloud != 'gcp':
+            return
+
         rates = [
             # https://cloud.google.com/compute/vm-instance-pricing#accelerator-optimized
             ('compute/a2-nonpreemptible/1', rate_cpu_hour_to_mcpu_msec(0.031611)),
