@@ -46,6 +46,9 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$DISTRIBUTION/libnvidia-
             tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 apt update && apt install -y cuda docker-ce nvidia-docker2
 
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#step-3-rootless-containers-setup
+sed -i 's/^#no-cgroups = false/no-cgroups = true/;' /etc/nvidia-container-runtime/config.toml
+
 rm -rf /var/lib/apt/lists/*
 
 [ -f /etc/docker/daemon.json ] || echo "{}" > /etc/docker/daemon.json
