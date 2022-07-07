@@ -27,7 +27,7 @@ resource "azurerm_mysql_flexible_server" "db" {
   administrator_login          = "mysqladmin"
   administrator_password = random_password.db_root_password.result
 
-  version    = "5.7"
+  version    = "8.0"
   sku_name   = "MO_Standard_E4ds_v4" # 4 vCPU, 8192 Mb per vCPU
   storage {
     auto_grow_enabled = true
