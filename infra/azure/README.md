@@ -125,7 +125,7 @@ Deploy unmanaged resources by running
 ./bootstrap.sh deploy_unmanaged
 ```
 
-If the final letsencrypt step in deploy_unmangaed fails, copy the kubectl secrete from
+If the final letsencrypt step in deploy_unmangaed fails, copy the kubectl secret from
 stdout and apply it manually
 
 Build the batch worker image by running the following in $HAIL/batch:
@@ -136,7 +136,7 @@ Build the batch worker image by running the following in $HAIL/batch:
 
 Finally, run the following to deploy Hail in the cluster.
 
-``` 
+```
 download-secret global-config && sudo cp -r contents /global-config
 download-secret database-server-config && sudo cp -r contents /sql-config
 cd ~/hail/infra/azure
@@ -147,6 +147,7 @@ Create the initial (developer) user. The OBJECT_ID is the Azure Active
 Directory user's object ID.
 
 You can find the current object id locally if you're logged in ,musing:
+
 ```
 az ad signed-in-user show | jq '.objectId'
 ```
