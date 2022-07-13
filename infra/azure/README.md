@@ -81,9 +81,9 @@ We'll complete the rest of the process on a VM. To create one, run
 Find the public ip of the created bootstrap vm doing the following:
 
 ```
-$ BOOTSTRAP_VM=$(az vm list -g hail | jq -r '.[].name')
-$ PUBLIC_IP=$(az vm show -d -n $BOOTSTRAP_VM -g hail --query "publicIps" -o tsv)
-
+BOOTSTRAP_VM=$(az vm list -g hail | jq -r '.[].name')
+PUBLIC_IP=$(az vm show -d -n $BOOTSTRAP_VM -g hail --query "publicIps" -o tsv)
+echo $BOOTSTRAP_VM $PUBLIC_IP
 ```
 
 SSH into the VM (ssh -i ~/.ssh/id_rsa <username>@$PUBLIC_IP).
