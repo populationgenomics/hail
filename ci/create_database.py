@@ -5,6 +5,7 @@ import os
 import secrets
 import string
 import sys
+import logging
 from shlex import quote as shq
 from typing import Optional
 
@@ -14,6 +15,8 @@ from hailtop.utils import check_shell, check_shell_output
 
 assert len(sys.argv) == 1
 create_database_config = json.load(sys.stdin)
+
+logger = logging.getLogger(__name__)
 
 
 def generate_token(size=12):
@@ -99,7 +102,7 @@ async def create_database():
         user_password = f.read()
 
     # print create user command
-    print(
+    logger.info(
         f'''
 CREATE DATABASE IF NOT EXISTS `{_name}`;
 
@@ -112,7 +115,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}
 ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
 
 ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-'''
+''',
     )
 
     await db.just_execute(
