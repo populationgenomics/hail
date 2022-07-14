@@ -20,10 +20,14 @@ def generate_token(size=12):
     assert size > 0
     alpha = string.ascii_lowercase
     alnum = string.ascii_lowercase + string.digits
-    return secrets.choice(alpha) + ''.join([secrets.choice(alnum) for _ in range(size - 1)])
+    return secrets.choice(alpha) + ''.join(
+        [secrets.choice(alnum) for _ in range(size - 1)]
+    )
 
 
-async def write_user_config(namespace: str, database_name: str, user: str, config: SQLConfig):
+async def write_user_config(
+    namespace: str, database_name: str, user: str, config: SQLConfig
+):
     with open('/sql-config/server-ca.pem', 'r') as f:
         server_ca = f.read()
     client_cert: Optional[str]
@@ -93,6 +97,23 @@ async def create_database():
 
     with open(create_database_config['user_password_file']) as f:
         user_password = f.read()
+
+    # print create user command
+    print(
+        f'''
+CREATE DATABASE IF NOT EXISTS `{_name}`;
+
+CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
+GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
+
+CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';
+GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
+
+ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
+
+ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
+'''
+    )
 
     await db.just_execute(
         f'''
@@ -186,7 +207,9 @@ async def migrate(database_name, db, i, migration):
     script_sha1 = out.decode('utf-8').strip()
     print(f'script_sha1 {script_sha1}')
 
-    row = await db.execute_and_fetchone(f'SELECT version FROM `{database_name}_migration_version`;')
+    row = await db.execute_and_fetchone(
+        f'SELECT version FROM `{database_name}_migration_version`;'
+    )
     current_version = row['version']
 
     if current_version + 1 == to_version:
@@ -218,7 +241,8 @@ VALUES (%s, %s, %s);
 
         # verify checksum
         row = await db.execute_and_fetchone(
-            f'SELECT * FROM `{database_name}_migrations` WHERE version = %s;', (to_version,)
+            f'SELECT * FROM `{database_name}_migrations` WHERE version = %s;',
+            (to_version,),
         )
         assert row is not None
         assert name == row['name'], row
@@ -254,7 +278,9 @@ kubectl -n {namespace} get -o json secret {shq(admin_secret_name)}
     db = Database()
     await db.async_init()
 
-    rows = db.execute_and_fetchall(f"SHOW TABLES LIKE '{database_name}_migration_version';")
+    rows = db.execute_and_fetchall(
+        f"SHOW TABLES LIKE '{database_name}_migration_version';"
+    )
     rows = [row async for row in rows]
     if len(rows) == 0:
         await db.just_execute(
