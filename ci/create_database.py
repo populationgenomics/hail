@@ -16,7 +16,11 @@ from hailtop.utils import check_shell, check_shell_output
 assert len(sys.argv) == 1
 create_database_config = json.load(sys.stdin)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('create_database.py')
+logger.setLevel(logging.DEBUG)
+fh = logging.FileHandler('create_database.log')
+fh.setLevel(logging.DEBUG)
+logger.addHandler(fh)
 
 
 def generate_token(size=12):
@@ -71,6 +75,7 @@ async def create_database():
     database_name = create_database_config['database_name']
     cant_create_database = create_database_config['cant_create_database']
 
+    logging.info(sql_config)
     if cant_create_database:
         assert sql_config.db is not None
 
@@ -104,34 +109,53 @@ async def create_database():
     # print create user command
     logger.info(
         f'''
-CREATE DATABASE IF NOT EXISTS `{_name}`;
+        CREATE DATABASE IF NOT EXISTS `{_name}`;
 
-CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
-GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
+        CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
+        GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
 
-CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
+        CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';
+        GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
 
-ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
+        ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
 
-ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-''',
+        ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
+        '''
+    )
+
+    admin_exists = await db.execute_and_fetchone(
+        f"SELECT user FROM mysql.user WHERE user='{admin_username}'"
+    )
+    user_exists = await db.execute_and_fetchone(
+        f"SELECT user FROM mysql.user WHERE user='{user_username}'"
+    )
+
+    create_admin = (
+        f"CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';"
+        if not admin_exists
+        else ""
+    )
+
+    create_user = (
+        f"CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';"
+        if not user_exists
+        else ""
     )
 
     await db.just_execute(
         f'''
-CREATE DATABASE IF NOT EXISTS `{_name}`;
+        CREATE DATABASE IF NOT EXISTS `{_name}`;
 
-CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
-GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
+        {create_admin}        
+        GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
 
-CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
+        {create_user}
+        GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
 
-ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
+        ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
 
-ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-'''
+        ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
+        '''
     )
 
     await write_user_config(
