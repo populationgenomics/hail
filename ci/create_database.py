@@ -126,9 +126,14 @@ async def create_database():
     admin_exists = await db.execute_and_fetchone(
         f"SELECT user FROM mysql.user WHERE user='{admin_username}'"
     )
+    admin_exists = admin_exists.get('user') == admin_username
+
     user_exists = await db.execute_and_fetchone(
         f"SELECT user FROM mysql.user WHERE user='{user_username}'"
     )
+    user_exists = user_exists.get('user') == user_username
+
+    logger.info(f'admin_exists: "{admin_exists}", user_exists: "{user_exists}"')
 
     create_admin = (
         f"CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';"
