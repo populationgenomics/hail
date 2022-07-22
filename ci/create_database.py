@@ -106,23 +106,6 @@ async def create_database():
     with open(create_database_config['user_password_file']) as f:
         user_password = f.read()
 
-    # print create user command
-    logger.info(
-        f'''
-        CREATE DATABASE IF NOT EXISTS `{_name}`;
-
-        CREATE USER IF NOT EXISTS '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
-        GRANT ALL ON `{_name}`.* TO '{admin_username}'@'%';
-
-        CREATE USER IF NOT EXISTS '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-        GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{_name}`.* TO '{user_username}'@'%';
-
-        ALTER USER '{admin_username}'@'%' IDENTIFIED BY '{admin_password}';
-
-        ALTER USER '{user_username}'@'%' IDENTIFIED BY '{user_password}';
-        '''
-    )
-
     admin_exists = await db.execute_and_fetchone(
         f"SELECT user FROM mysql.user WHERE user='{admin_username}'"
     )
