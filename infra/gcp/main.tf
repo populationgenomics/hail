@@ -39,6 +39,7 @@ variable "gcp_zone" {}
 variable "gcp_location" {}
 variable "domain" {}
 variable "organization_domain" {}
+variable "github_organization" {}
 variable "use_artifact_registry" {
   type = bool
   description = "pull the ubuntu image from Artifact Registry. Otherwise, GCR"
@@ -60,7 +61,7 @@ locals {
 }
 
 data "sops_file" "terraform_sa_key_sops" {
-  source_file = "${var.organization_domain}/terraform_sa_key.enc.json"
+  source_file = "${var.github_organization}/terraform_sa_key.enc.json"
 }
 
 provider "google" {
@@ -96,6 +97,7 @@ data "google_compute_subnetwork" "default_region" {
 }
 
 resource "google_container_cluster" "vdc" {
+  provider = google-beta
   name = "vdc"
   location = var.gcp_zone
   network = google_compute_network.default.name
@@ -107,9 +109,6 @@ resource "google_container_cluster" "vdc" {
   initial_node_count = 1
 
   master_auth {
-    username = ""
-    password = ""
-
     client_certificate_config {
       issue_client_certificate = false
     }
@@ -117,6 +116,21 @@ resource "google_container_cluster" "vdc" {
 
   release_channel {
     channel = "STABLE"
+  }
+
+  cluster_autoscaling {
+    enabled = true
+    autoscaling_profile = "OPTIMIZE_UTILIZATION"
+    resource_limits {
+      resource_type = "cpu"
+      minimum       = 4
+      maximum       = 100
+    }
+    resource_limits {
+      resource_type = "memory"
+      minimum       = 8
+      maximum       = 500
+    }
   }
 }
 
@@ -135,7 +149,7 @@ resource "google_container_node_pool" "vdc_preemptible_pool" {
 
   node_config {
     preemptible = true
-    machine_type = "n1-standard-8"
+    machine_type = "n1-standard-4"
 
     labels = {
       "preemptible" = "true"
@@ -172,7 +186,7 @@ resource "google_container_node_pool" "vdc_nonpreemptible_pool" {
 
   node_config {
     preemptible = false
-    machine_type = "n1-standard-8"
+    machine_type = "n1-standard-4"
 
     labels = {
       preemptible = "false"
@@ -220,7 +234,7 @@ resource "google_compute_network_peering_routes_config" "private_vpc_peering_con
 
 resource "google_sql_database_instance" "db" {
   name = "db-${random_id.db_name_suffix.hex}"
-  database_version = "MYSQL_5_7"
+  database_version = "MYSQL_8_0"
   region = var.gcp_region
 
   depends_on = [google_service_networking_connection.private_vpc_connection]
@@ -636,7 +650,7 @@ resource "kubernetes_cluster_role_binding" "batch" {
 }
 
 data "sops_file" "auth_oauth2_client_secret_sops" {
-  source_file = "${var.organization_domain}/auth_oauth2_client_secret.enc.json"
+  source_file = "${var.github_organization}/auth_oauth2_client_secret.enc.json"
 }
 
 resource "kubernetes_secret" "auth_oauth2_client_secret" {
@@ -650,8 +664,8 @@ resource "kubernetes_secret" "auth_oauth2_client_secret" {
 }
 
 data "sops_file" "ci_config_sops" {
-  count = fileexists("${var.organization_domain}/ci_config.enc.json") ? 1 : 0
-  source_file = "${var.organization_domain}/ci_config.enc.json"
+  count = fileexists("${var.github_organization}/ci_config.enc.json") ? 1 : 0
+  source_file = "${var.github_organization}/ci_config.enc.json"
 }
 
 locals {
