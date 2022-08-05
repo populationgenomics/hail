@@ -443,6 +443,7 @@ async def init_batch(
         worker_memory: Optional[str] = None,
         name_prefix: Optional[str] = None,
         token: Optional[str] = None,
+        requester_pays_project: Optional[str] = None,
 ):
     from hail.backend.service_backend import ServiceBackend
     # FIXME: pass local_tmpdir and use on worker and driver
@@ -455,7 +456,8 @@ async def init_batch(
                                           worker_cores=worker_cores,
                                           worker_memory=worker_memory,
                                           name_prefix=name_prefix,
-                                          token=token)
+                                          token=token,
+                                          requester_pays_project=requester_pays_project)
 
     log = _get_log(log)
     if tmpdir is None:

@@ -204,7 +204,8 @@ class ServiceBackend(Backend):
                      worker_cores: Optional[Union[int, str]] = None,
                      worker_memory: Optional[str] = None,
                      name_prefix: Optional[str] = None,
-                     token: Optional[str] = None):
+                     token: Optional[str] = None,
+                     requester_pays_project: Optional[str]=None):
         billing_project = configuration_of('batch', 'billing_project', billing_project, None)
         if billing_project is None:
             raise ValueError(
@@ -213,7 +214,8 @@ class ServiceBackend(Backend):
                 "MY_BILLING_PROJECT'"
             )
 
-        async_fs = RouterAsyncFS('file')
+        gcs_kwargs = {'project', requester_pays_project}
+        async_fs = RouterAsyncFS('file', gcs_kwargs=gcs_kwargs)
         sync_fs = RouterFS(async_fs)
         if batch_client is None:
             batch_client = await aiohb.BatchClient.create(billing_project, _token=token)
