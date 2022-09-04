@@ -720,12 +720,11 @@ class VCFTests(unittest.TestCase):
 
 
 class PLINKTests(unittest.TestCase):
-    @fails_service_backend()
     def test_import_fam(self):
         fam_file = resource('sample.fam')
         nfam = hl.import_fam(fam_file).count()
         i = 0
-        with open(fam_file) as f:
+        with hl.current_backend().fs.open(fam_file) as f:
             for line in f:
                 if len(line.strip()) != 0:
                     i += 1
@@ -741,7 +740,7 @@ class PLINKTests(unittest.TestCase):
                             is_female=hl.missing(hl.tbool), is_case=hl.missing(hl.tbool))
         mt = mt.select_entries('GT')
 
-        bfile = '/tmp/test_import_export_plink'
+        bfile = new_temp_file(prefix='test_import_export_plink')
         hl.export_plink(mt, bfile, ind_id=mt.s, cm_position=mt.cm_position)
 
         mt_imported = hl.import_plink(bfile + '.bed', bfile + '.bim', bfile + '.fam',
@@ -753,16 +752,14 @@ class PLINKTests(unittest.TestCase):
     @fails_local_backend()
     def test_import_plink_empty_fam(self):
         mt = get_dataset().filter_cols(False)
-        bfile = '/tmp/test_empty_fam'
+        bfile = new_temp_file(prefix='test_empty_fam')
         hl.export_plink(mt, bfile, ind_id=mt.s)
         with self.assertRaisesRegex(FatalError, "Empty FAM file"):
             hl.import_plink(bfile + '.bed', bfile + '.bim', bfile + '.fam')
 
-    @fails_service_backend()
-    @fails_local_backend()
     def test_import_plink_empty_bim(self):
         mt = get_dataset().filter_rows(False)
-        bfile = '/tmp/test_empty_bim'
+        bfile = new_temp_file(prefix='test_empty_bim')
         hl.export_plink(mt, bfile, ind_id=mt.s)
         with self.assertRaisesRegex(FatalError, "BIM file does not contain any variants"):
             hl.import_plink(bfile + '.bed', bfile + '.bim', bfile + '.fam')
@@ -771,7 +768,7 @@ class PLINKTests(unittest.TestCase):
     @fails_local_backend()
     def test_import_plink_a1_major(self):
         mt = get_dataset()
-        bfile = '/tmp/sample_plink'
+        bfile = new_temp_file(prefix='sample_plink')
         hl.export_plink(mt, bfile, ind_id=mt.s)
 
         def get_data(a2_reference):
@@ -830,9 +827,9 @@ class PLINKTests(unittest.TestCase):
                           reference_genome=hl.get_reference('GRCh38'),
                           contig_recoding={"22": "chr22"}))
 
-        hl.export_plink(vcf, '/tmp/sample_plink')
+        bfile = new_temp_file(prefix='sample_plink')
+        hl.export_plink(vcf, bfile)
 
-        bfile = '/tmp/sample_plink'
         plink = hl.import_plink(
             bfile + '.bed', bfile + '.bim', bfile + '.fam',
             a2_reference=True,
@@ -871,7 +868,6 @@ class PLINKTests(unittest.TestCase):
 
     @unittest.skipIf('HAIL_TEST_SKIP_PLINK' in os.environ, 'Skipping tests requiring plink')
     @fails_service_backend()
-    @fails_local_backend()
     def test_export_plink(self):
         vcf_file = resource('sample.vcf')
         mt = hl.split_multi_hts(hl.import_vcf(vcf_file, min_partitions=10))
