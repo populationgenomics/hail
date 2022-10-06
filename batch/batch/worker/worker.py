@@ -36,6 +36,7 @@ import aiohttp
 import aiohttp.client_exceptions
 import aiorwlock
 import async_timeout
+import orjson
 from aiodocker.exceptions import DockerError  # type: ignore
 from aiohttp import web
 from sortedcontainers import SortedSet
@@ -370,11 +371,15 @@ class ImageNotFound(Exception):
     pass
 
 
+class InvalidImageRepository(Exception):
+    pass
+
+
 class Image:
     def __init__(
         self,
         name: str,
-        credentials: Union[CloudUserCredentials, 'JVMUserCredentials'],
+        credentials: Union[CloudUserCredentials, 'JVMUserCredentials', 'CopyStepCredentials'],
         client_session: httpx.ClientSession,
         pool: concurrent.futures.ThreadPoolExecutor,
     ):
@@ -425,7 +430,9 @@ class Image:
             elif self.is_public_image:
                 auth = await self._batch_worker_access_token()
                 await self._ensure_image_is_pulled(auth=auth)
-            elif self.image_ref_str == BATCH_WORKER_IMAGE and isinstance(self.credentials, JVMUserCredentials):
+            elif self.image_ref_str == BATCH_WORKER_IMAGE and isinstance(
+                self.credentials, (JVMUserCredentials, CopyStepCredentials)
+            ):
                 pass
             else:
                 # Pull to verify this user has access to this
@@ -439,8 +446,15 @@ class Image:
         except DockerError as e:
             if e.status == 404 and 'pull access denied' in e.message:
                 raise ImageCannotBePulled from e
+            if (
+                e.status == 500
+                and 'Permission "artifactregistry.repositories.downloadArtifacts" denied on resource' in e.message
+            ):
+                raise ImageCannotBePulled from e
             if 'not found: manifest unknown' in e.message:
                 raise ImageNotFound from e
+            if 'Invalid repository name' in e.message:
+                raise InvalidImageRepository from e
             raise
 
         image_config, _ = await check_exec_output('docker', 'inspect', self.image_ref_str)
@@ -463,7 +477,7 @@ class Image:
         return await CLOUD_WORKER_API.worker_access_token(self.client_session)
 
     def _current_user_access_token(self) -> Dict[str, str]:
-        assert self.credentials
+        assert self.credentials and isinstance(self.credentials, CloudUserCredentials)
         return {'username': self.credentials.username, 'password': self.credentials.password}
 
     async def _extract_rootfs(self):
@@ -580,7 +594,7 @@ def user_error(e):
         # bucket name and your credentials.\n')
         if b'Bad credentials for bucket' in e.stderr:
             return True
-    if isinstance(e, (ImageNotFound, ImageCannotBePulled)):
+    if isinstance(e, (ImageNotFound, ImageCannotBePulled, InvalidImageRepository)):
         return True
     if isinstance(e, (ContainerTimeoutError, ContainerDeletedError)):
         return True
@@ -671,6 +685,8 @@ class Container:
                 self.short_error = 'image not found'
             elif isinstance(e, ImageCannotBePulled):
                 self.short_error = 'image cannot be pulled'
+            elif isinstance(e, InvalidImageRepository):
+                self.short_error = 'image repository is invalid'
 
             self.state = 'error'
             self.error = traceback.format_exc()
@@ -1184,7 +1200,7 @@ def copy_container(
     return Container(
         fs=job.worker.fs,
         name=job.container_name(task_name),
-        image=Image(BATCH_WORKER_IMAGE, job.credentials, client_session, job.pool),
+        image=Image(BATCH_WORKER_IMAGE, CopyStepCredentials(), client_session, job.pool),
         scratch_dir=f'{scratch}/{task_name}',
         command=command,
         cpu_in_mcpu=cpu_in_mcpu,
@@ -1291,6 +1307,8 @@ class Job:
         self.start_time = None
         self.end_time = None
 
+        self.marked_job_started = False
+
         self.cpu_in_mcpu = job_spec['resources']['cores_mcpu']
         self.memory_in_bytes = job_spec['resources']['memory_bytes']
         extra_storage_in_gib = job_spec['resources']['storage_gib']
@@ -1350,6 +1368,11 @@ class Job:
         self.project_id = Job.get_next_xfsquota_project_id()
 
         self.mjs_fut: Optional[asyncio.Future] = None
+
+    def write_batch_config(self):
+        os.makedirs(f'{self.scratch}/batch-config')
+        with open(f'{self.scratch}/batch-config/batch-config.json', 'wb') as config:
+            config.write(orjson.dumps({'version': 1, 'batch_id': self.batch_id}))
 
     @property
     def job_id(self):
@@ -1589,6 +1612,7 @@ class DockerJob(Job):
                 self.state = 'initializing'
 
                 os.makedirs(f'{self.scratch}/')
+                self.write_batch_config()
 
                 with self.step('setup_io'):
                     await self.setup_io()
@@ -1818,6 +1842,7 @@ class JVMJob(Job):
         async with self.worker.cpu_sem(self.cpu_in_mcpu):
             self.start_time = time_msecs()
             os.makedirs(f'{self.scratch}/')
+            self.write_batch_config()
 
             try:
                 with self.step('connecting_to_jvm'):
@@ -1972,9 +1997,11 @@ class JVMCreationError(Exception):
 
 
 class JVMUserCredentials:
-    def __init__(self):
-        self.username = None
-        self.password = None
+    pass
+
+
+class CopyStepCredentials:
+    pass
 
 
 class JVMContainer:
@@ -2298,11 +2325,11 @@ class Worker:
 
     async def _initialize_jvms(self):
         if instance_config.worker_type() in ('standard', 'D', 'highmem', 'E'):
-            jvms = await asyncio.gather(
-                *[JVM.create(i, 1, self) for i in range(CORES)],
-                *[JVM.create(CORES + i, 8, self) for i in range(CORES // 8)],
-            )
-            self._jvms.update(jvms)
+            jvms = []
+            for jvm_cores in (1, 2, 4, 8):
+                for _ in range(CORES // jvm_cores):
+                    jvms.append(JVM.create(len(jvms), jvm_cores, self))
+            self._jvms.update(await asyncio.gather(*jvms))
         log.info(f'JVMs initialized {self._jvms}')
 
     async def borrow_jvm(self, n_cores: int) -> JVM:
@@ -2501,6 +2528,8 @@ class Worker:
             log.exception(f'could not activate after trying for {MAX_IDLE_TIME_MSECS} ms, exiting')
             return
 
+        self.task_manager.ensure_future(periodically_call(60, self.send_billing_update))
+
         try:
             while True:
                 try:
@@ -2633,6 +2662,7 @@ class Worker:
     async def post_job_started(self, job):
         try:
             await self.post_job_started_1(job)
+            job.marked_job_started = True
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -2676,6 +2706,7 @@ class Worker:
         self.headers = {'X-Hail-Instance-Name': NAME, 'Authorization': f'Bearer {resp_json["token"]}'}
         self.active = True
         self.last_updated = time_msecs()
+
         log.info('activated')
 
     async def cleanup_old_images(self):
@@ -2696,6 +2727,33 @@ class Worker:
             raise
         except Exception as e:
             log.exception(f'Error while deleting unused image: {e}')
+
+    async def send_billing_update(self):
+        async def update():
+            update_timestamp = time_msecs()
+            running_attempts = []
+            for (batch_id, job_id), job in self.jobs.items():
+                if not job.marked_job_started or job.end_time is not None:
+                    continue
+                running_attempts.append(
+                    {
+                        'batch_id': batch_id,
+                        'job_id': job_id,
+                        'attempt_id': job.attempt_id,
+                    }
+                )
+
+            if running_attempts:
+                billing_update_data = {'timestamp': update_timestamp, 'attempts': running_attempts}
+
+                await self.client_session.post(
+                    deploy_config.url('batch-driver', '/api/v1alpha/billing_update'),
+                    json=billing_update_data,
+                    headers=self.headers,
+                )
+                log.info(f'sent billing update for {time_msecs_str(update_timestamp)}')
+
+        await retry_transient_errors(update)
 
 
 async def async_main():

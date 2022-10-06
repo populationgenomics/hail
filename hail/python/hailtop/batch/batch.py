@@ -237,7 +237,7 @@ class Batch:
 
         .. code-block:: python
 
-            b = Batch(default_python_image='gcr.io/hail-vdc/python-dill:3.7-slim')
+            b = Batch(default_python_image='hailgenetics/python-dill:3.7-slim')
 
             def hello(name):
                 return f'hello {name}'
@@ -300,6 +300,7 @@ class Batch:
         return jrf
 
     def _new_input_resource_file(self, input_path, value=None):
+        self._backend.validate_file_scheme(input_path)
         if value is None:
             value = f'{secret_alnum_string(5)}/{os.path.basename(input_path.rstrip("/"))}'
         irf = _resource.InputResourceFile(value)

@@ -47,6 +47,16 @@ steps:
       - name: registry-push-credentials
       - name: test-gsa-key
       - name: benchmark-gsa-key
+      - name: billing-monitor-gsa-key
+        clouds:
+          - gcp
+      - name: hail-ci-0-1-service-account-key
+      - name: test-dataproc-service-account-key
+        clouds:
+          - gcp
+      - name: batch-worker-ssh-public-key
+        clouds:
+          - azure
   - kind: buildImage2
     name: echo_image
     dockerFile: /io/echo/Dockerfile
@@ -1903,6 +1913,9 @@ steps:
         script: /io/sql/initial.sql
       - name: invalidated-batches
         script: /io/sql/invalidated-batches.sql
+      - name: add-frozen-mode
+        script: /io/sql/add-frozen-mode.sql
+        online: true
     inputs:
       - from: /repo/ci/sql
         to: /io/sql
@@ -2032,6 +2045,66 @@ steps:
         online: true
       - name: minimize-deadlock-errors
         script: /io/sql/minimize-deadlock-errors.sql
+        online: true
+      - name: add-resource-ids-sql
+        script: /io/sql/add-resource-ids.sql
+        online: true
+      - name: add-resource-ids-python
+        script: /io/sql/add_resource_ids.py
+        online: true
+      - name: modify-resource-id-trigger
+        script: /io/sql/modify-resource-id-trigger.sql
+        online: true
+      - name: rm-resource-names-agg-resources
+        script: /io/sql/rm-resource-names-agg-resources.sql
+        online: true
+      - name: rm-resource-foreign-keys
+        script: /io/sql/rm-resource-foreign-keys.py
+        online: true
+      - name: rm-resource-names-agg-resources-pt-2
+        script: /io/sql/rm-resource-names-agg-resources-pt-2.sql
+        online: true
+      - name: add-att-resources-format-version-lt-3
+        script: /io/sql/add-att-resources-format-version-lt-3.sql
+        online: true
+      - name: insert-attempt-resources-format-version-lt-3
+        script: /io/sql/insert_attempt_resources_format_version_lt_3.py
+        online: true
+      - name: revert-attempt-resources-trigger-back-compat
+        script: /io/sql/revert-attempt-resources-trigger-back-compat.sql
+        online: true
+      - name: add-agg-billing-by-date
+        script: /io/sql/add-agg-billing-by-date.sql
+        online: true
+      - name: populate-agg-billing-by-date
+        script: /io/sql/populate_agg_billing_by_date.py
+        online: true
+      - name: revert-temp-agg-by-date-infra
+        script: /io/sql/revert-temp-agg-by-date-infra.sql
+        online: true
+      - name: rename-timestamp-to-date
+        script: /io/sql/rename-timestamp-to-date.sql
+        online: true
+      - name: add-real-time-billing
+        script: /io/sql/add-real-time-billing.sql
+        online: true
+      - name: add-batch-updates
+        script: /io/sql/add-batch-updates.sql
+        online: true
+      - name: populate-batch-updates
+        script: /io/sql/populate_batch_updates.py
+        online: true
+      - name: cleanup-add-batch-updates
+        script: /io/sql/cleanup-add-batch-updates.sql
+        online: true
+      - name: add-jobs-update-id-index
+        script: /io/sql/add-jobs-update-id-index.sql
+        online: true
+      - name: no-dev-standing-workers-by-default
+        script: /io/sql/no_dev_standing_workers_by_default.py
+        online: true
+      - name: add-commit-updates
+        script: /io/sql/add-commit-updates.sql
         online: true
     inputs:
       - from: /repo/batch/sql
@@ -2512,11 +2585,15 @@ steps:
         -d "{ \"name\" : \"$REPO_NAME\" }"
 
       # checkout new ci repo
-      cd /io
-      for i in {1..12}; do
-          git clone https://$TOKEN@github.com/hail-ci-test/$REPO_NAME.git && break
-          sleep 5;
-      done
+      # Repeated clones should happen in fresh directories so we mv to the final
+      # destination on successful clone
+      set +x
+      clone() {
+        tmp_dir=$(mktemp -d) && git clone https://$1@github.com/hail-ci-test/$2.git $tmp_dir && mv $tmp_dir $2
+      }
+      typeset -fx clone
+      retry clone $TOKEN $REPO_NAME
+      set -x
       cd $REPO_NAME
 
       mkdir -p ./ci/test ./hail/
@@ -2537,7 +2614,7 @@ steps:
       git config user.name ci
       git config user.email ci@hail.is
       git add * && git commit -m "setup repo"
-      git push
+      retry git push
     secrets:
       - name: hail-ci-0-1-service-account-key
         namespace:
@@ -2639,14 +2716,14 @@ steps:
       - create_ci_test_repo
   - kind: buildImage2
     name: hailgenetics_hail_image
-    dockerFile: /io/docker/hail/Dockerfile
-    contextPath: /io/docker/hail/
+    dockerFile: /io/docker/hailgenetics/hail/Dockerfile
+    contextPath: /io/docker/hailgenetics/hail
     publishAs: hailgenetics/hail
     inputs:
-      - from: /repo/docker/hail
-        to: /io/docker/hail
+      - from: /repo/docker/hailgenetics/hail
+        to: /io/docker/hailgenetics/hail
       - from: /just-wheel/wheel-container.tar
-        to: /io/docker/hail/wheel-container.tar
+        to: /io/docker/hailgenetics/hail/wheel-container.tar
     dependsOn:
       - merge_code
       - build_hail_jar_and_wheel_only
@@ -2674,7 +2751,6 @@ steps:
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       export DOCKER_PREFIX="{{ global.docker_prefix }}"
       export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
-      export PYTHON_DILL_IMAGE="{{ global.docker_prefix }}/python-dill:3.7-slim"
       export HAIL_GENETICS_HAIL_IMAGE="{{ hailgenetics_hail_image.image }}"
       hailctl config set batch/billing_project test
       hailctl config set batch/remote_tmpdir {{ global.test_storage_uri }}/batch/
@@ -2937,7 +3013,7 @@ steps:
 
       gcloud auth activate-service-account --key-file=/ci-deploy-0-1--hail-is-hail/ci-deploy-0-1--hail-is-hail.json
 
-      gcloud auth -q configure-docker gcr.io
+      gcloud auth -q configure-docker {{ global.docker_prefix.split('/')[0] }}
       cat /docker-hub-hailgenetics/password | skopeo login --username hailgenetics --password-stdin docker.io
 
       cp /pypi-credentials/pypirc $HOME/.pypirc
@@ -3274,6 +3350,7 @@ steps:
           valueFrom: default_ns.name
         mountPath: /ssl-config
     alwaysRun: true
+    timeout: 300
     dependsOn:
       - create_deploy_config
       - create_accounts
@@ -3380,10 +3457,11 @@ steps:
       set +e
       set -x
       export AZURE_RESOURCE_GROUP="{{ global.azure_resource_group }}"
+      az aks install-cli
       kubectl -n {{ default_ns.name }} scale deployment batch-driver --replicas=0
       az vm list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
           --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
-        | xargs -n1 -r sh -c 'az vm delete --resource-group $AZURE_RESOURCE_GROUP --name "$1" --yes || true' argv0
+        | xargs -n1 -r sh -c 'az vm delete --force-deletion true --resource-group $AZURE_RESOURCE_GROUP --name "$1" --yes || true' argv0
       az network nic list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
           --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
         | xargs -n1 -r sh -c 'az network nic delete --resource-group $AZURE_RESOURCE_GROUP --name "$1" || true' argv0

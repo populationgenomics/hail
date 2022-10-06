@@ -10,7 +10,7 @@ from .geoms import Geom, FigureAttribute
 from .labels import Labels
 from .scale import Scale, ScaleContinuous, ScaleDiscrete, scale_x_continuous, scale_x_genomic, scale_y_continuous, \
     scale_x_discrete, scale_y_discrete, scale_color_discrete, scale_color_continuous, scale_fill_discrete, \
-    scale_fill_continuous
+    scale_fill_continuous, scale_shape_auto
 from .aes import Aesthetic, aes
 from .facets import Faceter
 from .utils import is_continuous_type, is_genomic_type, check_scale_continuity
@@ -91,6 +91,13 @@ class GGPlot:
                     self.scales["fill"] = scale_fill_discrete()
                 elif aesthetic_str == "fill" and is_continuous:
                     self.scales["fill"] = scale_fill_continuous()
+                elif aesthetic_str == "shape" and not is_continuous:
+                    self.scales["shape"] = scale_shape_auto()
+                elif aesthetic_str == "shape" and is_continuous:
+                    raise ValueError(
+                        "The 'shape' aesthetic does not support continuous "
+                        "types. Specify values of a discrete type instead."
+                    )
                 else:
                     if is_continuous:
                         self.scales[aesthetic_str] = ScaleContinuous(aesthetic_str)
@@ -101,7 +108,9 @@ class GGPlot:
         return GGPlot(self.ht, self.aes, self.geoms[:], self.labels, self.coord_cartesian, self.scales, self.facet)
 
     def verify_scales(self):
-        for geom_idx, geom in enumerate(self.geoms):
+        for aes_key in self.aes.keys():
+            check_scale_continuity(self.scales[aes_key], self.aes[aes_key].dtype, aes_key)
+        for geom in self.geoms:
             aesthetic_dict = geom.aes.properties
             for aes_key in aesthetic_dict.keys():
                 check_scale_continuity(self.scales[aes_key], aesthetic_dict[aes_key].dtype, aes_key)
@@ -160,9 +169,9 @@ class GGPlot:
                 stat = self.geoms[geom_idx].get_stat()
                 geom_label = make_geom_label(geom_idx)
                 if use_faceting:
-                    agg = hl.agg.group_by(selected.facet, stat.make_agg(combined_mapping, precomputed[geom_label]))
+                    agg = hl.agg.group_by(selected.facet, stat.make_agg(combined_mapping, precomputed[geom_label], self.scales))
                 else:
-                    agg = stat.make_agg(combined_mapping, precomputed[geom_label])
+                    agg = stat.make_agg(combined_mapping, precomputed[geom_label], self.scales)
                 aggregators[geom_label] = agg
                 labels_to_stats[geom_label] = stat
 

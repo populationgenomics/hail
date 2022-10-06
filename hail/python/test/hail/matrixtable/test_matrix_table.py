@@ -385,6 +385,13 @@ class Tests(unittest.TestCase):
              hl.Struct(row_idx=2, col_idx=1, bar=[4, 6]),
              hl.Struct(row_idx=2, col_idx=2, bar=[8, 10, 12])])
 
+    def test_collect_cols_by_key_with_rand(self):
+        mt = hl.utils.range_matrix_table(3, 3)
+        mt = mt.annotate_cols(x = hl.rand_norm())
+        mt = mt.collect_cols_by_key()
+        mt = mt.annotate_cols(x = hl.rand_norm())
+        mt.cols().collect()
+
     def test_weird_names(self):
         ds = self.get_mt()
         exprs = {'a': 5, '   a    ': 5, r'\%!^!@#&#&$%#$%': [5], '$': 5, 'ß': 5}
@@ -842,19 +849,20 @@ class Tests(unittest.TestCase):
         mt = hl.utils.range_matrix_table(2000, 100, 10)
         f = new_temp_file(extension='mt')
         mt.write(f)
+        mt1 = hl.read_matrix_table(f)
         mt2 = hl.read_matrix_table(f, _intervals=[
             hl.Interval(start=150, end=250, includes_start=True, includes_end=False),
             hl.Interval(start=250, end=500, includes_start=True, includes_end=False),
         ])
         self.assertEqual(mt2.n_partitions(), 2)
-        self.assertTrue(mt.filter_rows((mt.row_idx >= 150) & (mt.row_idx < 500))._same(mt2))
+        self.assertTrue(mt1.filter_rows((mt1.row_idx >= 150) & (mt1.row_idx < 500))._same(mt2))
 
         mt2 = hl.read_matrix_table(f, _intervals=[
             hl.Interval(start=150, end=250, includes_start=True, includes_end=False),
             hl.Interval(start=250, end=500, includes_start=True, includes_end=False),
         ], _filter_intervals=True)
         self.assertEqual(mt2.n_partitions(), 3)
-        self.assertTrue(mt.filter_rows((mt.row_idx >= 150) & (mt.row_idx < 500))._same(mt2))
+        self.assertTrue(mt1.filter_rows((mt1.row_idx >= 150) & (mt1.row_idx < 500))._same(mt2))
 
     def test_indexed_read_vcf(self):
         vcf = self.get_mt(10)
@@ -869,6 +877,34 @@ class Tests(unittest.TestCase):
         p = (vcf.locus >= l1) & (vcf.locus < l2)
         q = (vcf.locus >= l3) & (vcf.locus < l4)
         self.assertTrue(vcf.filter_rows(p | q)._same(mt))
+
+    def test_interval_filter_partitions(self):
+        mt = hl.utils.range_matrix_table(100, 3, 3)
+        path = new_temp_file()
+        mt.write(path)
+        intervals = [
+            hl.Interval(hl.Struct(idx=5), hl.Struct(idx=10)),
+            hl.Interval(hl.Struct(idx=12), hl.Struct(idx=13)),
+            hl.Interval(hl.Struct(idx=15), hl.Struct(idx=17)),
+            hl.Interval(hl.Struct(idx=19), hl.Struct(idx=20))
+        ]
+        assert hl.read_matrix_table(path, _intervals=intervals, _filter_intervals = True).n_partitions() == 1
+
+        intervals = [
+            hl.Interval(hl.Struct(idx=5), hl.Struct(idx=10)),
+            hl.Interval(hl.Struct(idx=12), hl.Struct(idx=13)),
+            hl.Interval(hl.Struct(idx=15), hl.Struct(idx=17)),
+
+            hl.Interval(hl.Struct(idx=45), hl.Struct(idx=50)),
+            hl.Interval(hl.Struct(idx=52), hl.Struct(idx=53)),
+            hl.Interval(hl.Struct(idx=55), hl.Struct(idx=57)),
+
+            hl.Interval(hl.Struct(idx=75), hl.Struct(idx=80)),
+            hl.Interval(hl.Struct(idx=82), hl.Struct(idx=83)),
+            hl.Interval(hl.Struct(idx=85), hl.Struct(idx=87)),
+        ]
+
+        assert hl.read_matrix_table(path, _intervals=intervals, _filter_intervals = True).n_partitions() == 3
 
     @fails_service_backend()
     def test_codecs_matrix(self):
@@ -1587,6 +1623,7 @@ class Tests(unittest.TestCase):
         mt.write(tmp, _partitions=parts)
 
         mt2 = hl.read_matrix_table(tmp)
+        assert mt2.aggregate_rows(hl.agg.all(hl.literal(hl.Interval(hl.Locus('20', 10277621), hl.Locus('20', 11898992))).contains(mt2.locus)))
         assert mt2.n_partitions() == len(parts)
         assert hl.filter_intervals(mt, parts)._same(mt2)
 
@@ -1662,6 +1699,16 @@ class Tests(unittest.TestCase):
         assert t.filter(t.locus.position >= 1).collect() == [
             hl.utils.Struct(idx=0, locus=hl.genetics.Locus(contig='2', position=1, reference_genome='GRCh37'))]
 
+    @fails_service_backend()
+    @fails_local_backend()
+    def test_lower_row_agg_init_arg(self):
+        mt = hl.balding_nichols_model(5, 200, 200)
+        mt2 = hl.variant_qc(mt)
+        mt2 = mt2.filter_rows((mt2.variant_qc.AF[0] > 0.05) & (mt2.variant_qc.AF[0] < 0.95))
+        mt2 = mt2.sample_rows(.99)
+        rows = mt2.rows()
+        mt = mt.semi_join_rows(rows)
+        hl.hwe_normalized_pca(mt.GT)
 
 def test_keys_before_scans():
     mt = hl.utils.range_matrix_table(6, 6)

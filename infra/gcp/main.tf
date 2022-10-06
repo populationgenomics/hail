@@ -2,7 +2,7 @@ terraform {
   required_providers {
     google = {
       source = "hashicorp/google"
-      version = "3.48.0"
+      version = "4.32.0"
     }
     kubernetes = {
       source = "hashicorp/kubernetes"
@@ -119,18 +119,9 @@ resource "google_container_cluster" "vdc" {
   }
 
   cluster_autoscaling {
-    enabled = true
+    # Don't use node auto-provisioning since we manage node pools ourselves
+    enabled = false
     autoscaling_profile = "OPTIMIZE_UTILIZATION"
-    resource_limits {
-      resource_type = "cpu"
-      minimum       = 4
-      maximum       = 100
-    }
-    resource_limits {
-      resource_type = "memory"
-      minimum       = 8
-      maximum       = 500
-    }
   }
 }
 
@@ -148,7 +139,7 @@ resource "google_container_node_pool" "vdc_preemptible_pool" {
   }
 
   node_config {
-    preemptible = true
+    spot = true
     machine_type = "n1-standard-4"
 
     labels = {
@@ -373,6 +364,7 @@ resource "google_service_account_key" "gcr_push_key" {
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_batch_agent_viewer" {
   provider = google-beta
+  project = var.gcp_project
   repository = google_artifact_registry_repository.repository.name
   location = var.gcp_location
   role = "roles/artifactregistry.reader"
@@ -381,6 +373,7 @@ resource "google_artifact_registry_repository_iam_member" "artifact_registry_bat
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_ci_viewer" {
   provider = google-beta
+  project = var.gcp_project
   repository = google_artifact_registry_repository.repository.name
   location = var.gcp_location
   role = "roles/artifactregistry.reader"
@@ -395,6 +388,7 @@ resource "google_storage_bucket_iam_member" "gcr_push_admin" {
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_push_admin" {
   provider = google-beta
+  project = var.gcp_project
   repository = google_artifact_registry_repository.repository.name
   location = var.gcp_location
   role = "roles/artifactregistry.admin"
@@ -417,6 +411,7 @@ resource "kubernetes_secret" "registry_push_credentials" {
 module "auth_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "auth"
+  project = var.gcp_project
   iam_roles = [
     "iam.serviceAccountAdmin",
     "iam.serviceAccountKeyAdmin",
@@ -426,6 +421,7 @@ module "auth_gsa_secret" {
 module "batch_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "batch"
+  project = var.gcp_project
   iam_roles = [
     "compute.instanceAdmin.v1",
     "iam.serviceAccountUser",
@@ -443,15 +439,18 @@ resource "google_storage_bucket_iam_member" "batch_hail_query_bucket_storage_vie
 module "benchmark_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "benchmark"
+  project = var.gcp_project
 }
 
 module "ci_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "ci"
+  project = var.gcp_project
 }
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_viewer" {
   provider = google-beta
+  project = var.gcp_project
   repository = google_artifact_registry_repository.repository.name
   location = var.gcp_location
   role = "roles/artifactregistry.reader"
@@ -461,16 +460,19 @@ resource "google_artifact_registry_repository_iam_member" "artifact_registry_vie
 module "monitoring_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "monitoring"
+  project = var.gcp_project
 }
 
 module "grafana_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "grafana"
+  project = var.gcp_project
 }
 
 module "test_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "test"
+  project = var.gcp_project
   iam_roles = [
     "compute.instanceAdmin.v1",
     "iam.serviceAccountUser",
@@ -500,6 +502,7 @@ resource "google_storage_bucket_iam_member" "test_gcr_viewer" {
 module "test_dev_gsa_secret" {
   source = "./gsa_k8s_secret"
   name = "test-dev"
+  project = var.gcp_project
 }
 
 resource "google_service_account" "batch_agent" {
@@ -515,6 +518,7 @@ resource "google_project_iam_member" "batch_agent_iam_member" {
     "storage.objectViewer",
   ])
 
+  project = var.gcp_project
   role = "roles/${each.key}"
   member = "serviceAccount:${google_service_account.batch_agent.email}"
 }
@@ -675,7 +679,7 @@ locals {
 module "ci" {
   source = "./ci"
   count = local.ci_config != null ? 1 : 0
-  
+
   github_oauth_token = local.ci_config.data["github_oauth_token"]
   github_user1_oauth_token = local.ci_config.data["github_user1_oauth_token"]
   watched_branches = jsondecode(local.ci_config.raw).watched_branches
