@@ -28,7 +28,8 @@ resource "azurerm_mysql_flexible_server" "db" {
   administrator_password = random_password.db_root_password.result
 
   version    = "8.0.21"
-  sku_name   = "MO_Standard_E4ds_v4" # 4 vCPU, 8192 Mb per vCPU
+  # sku_name   = "MO_Standard_E4ds_v4" # 4 vCPU, 8192 Mb per vCPU
+  sku_name   = "B_Standard_B2s" # 4 vCPU, 2048 Mb per vCPU
   storage {
     auto_grow_enabled = true
   }
@@ -56,7 +57,7 @@ resource "azurerm_mysql_flexible_server_configuration" "max_connections" {
   name                = "max_connections"
   resource_group_name = var.resource_group.name
   server_name         = azurerm_mysql_flexible_server.db.name
-  value               = 1000
+  value               = 683
 }
 
 data "http" "db_ca_cert" {
