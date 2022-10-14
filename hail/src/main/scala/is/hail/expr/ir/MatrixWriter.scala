@@ -5,7 +5,7 @@ import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.expr.ir.functions.MatrixWriteBlockMatrix
-import is.hail.expr.ir.lowering.{LowererUnsupportedOperation, RVDToTableStage, TableStage}
+import is.hail.expr.ir.lowering.{LowererUnsupportedOperation, TableStage}
 import is.hail.expr.ir.streams.StreamProducer
 import is.hail.expr.{JSONAnnotationImpex, Nat}
 import is.hail.io._
@@ -222,7 +222,8 @@ case class SplitPartitionNativeWriter(
     val iAnnotationType = PCanonicalStruct(required = true, "entries_offset" -> PInt64())
     val mb = cb.emb
 
-    val indexWriter = ifIndexed { StagedIndexWriter.withDefaults(index.get._2, mb.ecb, annotationType = iAnnotationType) }
+    val indexWriter = ifIndexed { StagedIndexWriter.withDefaults(index.get._2, mb.ecb, annotationType = iAnnotationType,
+      branchingFactor = Option(mb.ctx.getFlag("index_branching_factor")).map(_.toInt).getOrElse(4096)) }
 
     context.toI(cb).map(cb) { pctx =>
       val filename1 = mb.newLocal[String]("filename1")
@@ -393,7 +394,7 @@ case class MatrixVCFWriter(
   def apply(ctx: ExecuteContext, mv: MatrixValue): Unit = {
     val appendStr = getAppendHeaderValue(ctx.fs)
     val tv = mv.toTableValue
-    val ts = RVDToTableStage(tv.rvd, tv.globals.toEncodedLiteral(ctx.theHailClassLoader))
+    val ts = TableExecuteIntermediate(tv).asTableStage(ctx)
     val tl = TableLiteral(tv, ctx.theHailClassLoader)
     CompileAndEvaluate(ctx,
       lower(LowerMatrixIR.colsFieldName, MatrixType.entriesIdentifier, mv.typ.colKey,
@@ -825,7 +826,7 @@ case class MatrixGENWriter(
 ) extends MatrixWriter {
   def apply(ctx: ExecuteContext, mv: MatrixValue): Unit = {
     val tv = mv.toTableValue
-    val ts = RVDToTableStage(tv.rvd, tv.globals.toEncodedLiteral(ctx.theHailClassLoader))
+    val ts = TableExecuteIntermediate(tv).asTableStage(ctx)
     val tl = TableLiteral(tv, ctx.theHailClassLoader)
     CompileAndEvaluate(ctx,
       lower(LowerMatrixIR.colsFieldName, MatrixType.entriesIdentifier, mv.typ.colKey,
@@ -1218,7 +1219,7 @@ case class MatrixPLINKWriter(
 ) extends MatrixWriter {
   def apply(ctx: ExecuteContext, mv: MatrixValue): Unit = {
     val tv = mv.toTableValue
-    val ts = RVDToTableStage(tv.rvd, tv.globals.toEncodedLiteral(ctx.theHailClassLoader))
+    val ts = TableExecuteIntermediate(tv).asTableStage(ctx)
     val tl = TableLiteral(tv, ctx.theHailClassLoader)
     CompileAndEvaluate(ctx,
       lower(LowerMatrixIR.colsFieldName, MatrixType.entriesIdentifier, mv.typ.colKey,

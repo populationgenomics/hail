@@ -47,7 +47,7 @@ class EmitContext(
   val tryingToSplit: Memo[Unit]
 )
 
-case class EmitEnv(bindings: Env[EmitValue], inputValues: IndexedSeq[(EmitCodeBuilder, Value[Region]) => IEmitCode]) {
+case class EmitEnv(bindings: Env[EmitValue], inputValues: IndexedSeq[(EmitCodeBuilder) => IEmitCode]) {
   def bind(name: String, v: EmitValue): EmitEnv = copy(bindings = bindings.bind(name, v))
 
   def bind(newBindings: (String, EmitValue)*): EmitEnv = copy(bindings = bindings.bindIterable(newBindings))
@@ -361,8 +361,13 @@ case class IEmitCodeGen[+A](Lmissing: CodeLabel, Lpresent: CodeLabel, value: A, 
     value
   }
 
-  def get(cb: EmitCodeBuilder, errorMsg: Code[String]=s"expected non-missing", errorID: Code[Int] = const(ErrorIDs.NO_ERROR)): A =
-    handle(cb, cb._fatalWithError(errorID, errorMsg))
+  def get(cb: EmitCodeBuilder, errorMsg: Code[String]=null, errorID: Code[Int] = const(ErrorIDs.NO_ERROR)): A = {
+    val msg: Code[String] = if (errorMsg != null)
+      errorMsg
+    else
+      s"expected non-missing - compiler stacktrace: \n  ${Thread.currentThread().getStackTrace.mkString("\n  ")}"
+    handle(cb, cb._fatalWithError(errorID, msg))
+  }
 
   def consume(cb: EmitCodeBuilder, ifMissing: => Unit, ifPresent: (A) => Unit): Unit = {
     val Lafter = CodeLabel()
@@ -839,7 +844,7 @@ class Emit[C](
 
     val result: IEmitCode = (ir: @unchecked) match {
       case In(i, expectedPType) =>
-        val ev = env.inputValues(i).apply(cb, region)
+        val ev = env.inputValues(i).apply(cb)
         ev
       case I32(x) =>
         presentPC(primitive(const(x)))
@@ -1145,7 +1150,7 @@ class Emit[C](
 
           def lessThan(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_]): Value[Boolean] = {
             cb.emb.ecb.getOrdering(sct.loadedSType, sct.loadedSType)
-              .ltNonnull(cb, sct.loadToSValue(cb, region, l), sct.loadToSValue(cb, region, r))
+              .ltNonnull(cb, sct.loadToSValue(cb, l), sct.loadToSValue(cb, r))
           }
 
           sorter.sort(cb, region, lessThan)
@@ -1170,9 +1175,9 @@ class Emit[C](
           val sorter = new ArraySorter(EmitRegion(mb, region), vab)
 
           def lessThan(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_]): Value[Boolean] = {
-            val lk = cb.memoize(sct.loadToSValue(cb, region, l).asBaseStruct.loadField(cb, 0))
+            val lk = cb.memoize(sct.loadToSValue(cb, l).asBaseStruct.loadField(cb, 0))
 
-            val rk = cb.memoize(sct.loadToSValue(cb, region, r).asBaseStruct.loadField(cb, 0))
+            val rk = cb.memoize(sct.loadToSValue(cb, r).asBaseStruct.loadField(cb, 0))
 
             cb.emb.ecb.getOrdering(lk.st, rk.st)
               .lt(cb, lk, rk, missingEqual = true)
@@ -1210,8 +1215,8 @@ class Emit[C](
           val sorter = new ArraySorter(EmitRegion(mb, region), sortedElts)
 
           def lt(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_]): Value[Boolean] = {
-            val lk = cb.memoize(sct.loadToSValue(cb, region, l).asBaseStruct.loadField(cb, 0))
-            val rk = cb.memoize(sct.loadToSValue(cb, region, r).asBaseStruct.loadField(cb, 0))
+            val lk = cb.memoize(sct.loadToSValue(cb, l).asBaseStruct.loadField(cb, 0))
+            val rk = cb.memoize(sct.loadToSValue(cb, r).asBaseStruct.loadField(cb, 0))
 
             cb.emb.ecb.getOrdering(lk.st, rk.st)
               .lt(cb, lk, rk, missingEqual = true)
@@ -1334,7 +1339,7 @@ class Emit[C](
           val producer = stream.producer
           producer.length match {
             case Some(compLen) =>
-              producer.initialize(cb)
+              producer.initialize(cb, region)
               val xLen = cb.newLocal[Int]("streamlen_x", compLen(cb))
               producer.close(cb)
               primitive(xLen)
@@ -2118,7 +2123,7 @@ class Emit[C](
                 .map(cb)(pc => pc.castTo(cb, producer.elementRegion, stateEmitType.st)))
             }
 
-            producer.unmanagedConsume(cb) { cb =>
+            producer.unmanagedConsume(cb, region) { cb =>
               cb.assign(xElt, producer.element)
 
               if (producer.requiresMemoryManagementPerElement) {
@@ -2177,7 +2182,7 @@ class Emit[C](
               }
             }
 
-            producer.unmanagedConsume(cb) { cb =>
+            producer.unmanagedConsume(cb, region) { cb =>
               cb.assign(xElt, producer.element)
               if (producer.requiresMemoryManagementPerElement) {
                 (accVars, seq).zipped.foreach { (accVar, ir) =>
@@ -2666,8 +2671,8 @@ class Emit[C](
 
     sort.emitWithBuilder[Boolean] { cb =>
       val region = sort.getCodeParam[Region](1)
-      val leftEC = cb.memoize(EmitCode.present(sort, elemSCT.loadToSValue(cb, region, sort.getCodeParam(2)(elemSCT.ti))), "sort_leftEC")
-      val rightEC = cb.memoize(EmitCode.present(sort, elemSCT.loadToSValue(cb, region, sort.getCodeParam(3)(elemSCT.ti))), "sort_rightEC")
+      val leftEC = cb.memoize(EmitCode.present(sort, elemSCT.loadToSValue(cb, sort.getCodeParam(2)(elemSCT.ti))), "sort_leftEC")
+      val rightEC = cb.memoize(EmitCode.present(sort, elemSCT.loadToSValue(cb, sort.getCodeParam(3)(elemSCT.ti))), "sort_rightEC")
 
       if (leftRightComparatorNames.nonEmpty) {
         assert(leftRightComparatorNames.length == 2)

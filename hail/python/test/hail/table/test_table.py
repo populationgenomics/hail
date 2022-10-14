@@ -952,6 +952,22 @@ class Tests(unittest.TestCase):
         self.assertEqual(t2.n_partitions(), 3)
         self.assertTrue(t1.filter((t1.idx >= 150) & (t1.idx < 500))._same(t2))
 
+        t2 = hl.read_table(f, _intervals=[
+            hl.Interval(start=150, end=250, includes_start=False, includes_end=True),
+            hl.Interval(start=250, end=500, includes_start=False, includes_end=True),
+        ], _create_row_uids=True)
+        self.assertEqual(t2.n_partitions(), 2)
+        self.assertEqual(t2.count(), 350)
+        self.assertEqual(t2._force_count(), 350)
+        self.assertTrue(t1.filter((t1.idx > 150) & (t1.idx <= 500))._same(t2))
+
+        t2 = hl.read_table(f, _intervals=[
+            hl.Interval(start=150, end=250, includes_start=False, includes_end=True),
+            hl.Interval(start=250, end=500, includes_start=False, includes_end=True),
+        ], _filter_intervals=True, _create_row_uids=True)
+        self.assertEqual(t2.n_partitions(), 3)
+        self.assertTrue(t1.filter((t1.idx > 150) & (t1.idx <= 500))._same(t2))
+
     def test_order_by_parsing(self):
         hl.utils.range_table(1).annotate(**{'a b c' : 5}).order_by('a b c')._force_count()
 
@@ -1915,6 +1931,32 @@ def test_to_pandas_nd_array():
     pd.testing.assert_frame_equal(df_from_hail, df_from_python)
 
 
+def test_literal_of_numpy_int64():
+    t = hl.utils.range_table(10)
+    x = t.key_by(idx=hl.int64(t.idx)).to_pandas().idx.tolist()
+    hl.eval(hl.literal(x))
+
+
+def test_literal_of_numpy_int32():
+    t = hl.utils.range_table(10)
+    x = t.key_by(idx=t.idx).to_pandas().idx.tolist()
+    hl.eval(hl.literal(x))
+
+
+def test_literal_of_pandas_NA_and_numpy_int64():
+    import hail as hl
+    t = hl.utils.range_table(10)
+    x = t.key_by(idx=hl.or_missing(t.idx == 5, hl.int64(t.idx))).to_pandas().idx.tolist()
+    hl.eval(hl.literal(x))
+
+
+def test_literal_of_pandas_NA_and_numpy_int32():
+    import hail as hl
+    t = hl.utils.range_table(10)
+    x = t.key_by(idx=hl.or_missing(t.idx == 5, t.idx)).to_pandas().idx.tolist()
+    hl.eval(hl.literal(x))
+
+
 def test_write_many():
     t = hl.utils.range_table(5)
     t = t.annotate(a = t.idx, b = t.idx * t.idx, c = hl.str(t.idx))
@@ -1944,3 +1986,17 @@ def test_write_many():
             hl.Struct(idx=3, c='3'),
             hl.Struct(idx=4, c='4')
         ]
+
+@pytest.mark.parametrize('branching_factor', [2, 3, 5, 7, 121])
+def test_indexed_read_boundaries(branching_factor):
+    with hl._with_flags(index_branching_factor=str(branching_factor)):
+        t = hl.utils.range_table(1000, 4)
+        t = t.filter(t.idx % 5 != 0)
+        f = new_temp_file(extension='ht')
+        t.write(f)
+        t1 = hl.read_table(f, _intervals=[
+            hl.Interval(start=140, end=145, includes_start=True, includes_end=True),
+            hl.Interval(start=151, end=153, includes_start=False, includes_end=False),
+        ])
+
+        assert t1.idx.collect() == [141, 142, 143, 144, 152]
