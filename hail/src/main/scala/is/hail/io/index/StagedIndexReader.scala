@@ -69,10 +69,10 @@ class StagedIndexReader(emb: EmitMethodBuilder[_], spec: AbstractIndexSpec) {
     region: Value[Region],
     interval: SIntervalValue): SBaseStructValue = {
     val nKeys = cb.memoize(metadata.invoke[Long]("nKeys"))
-    info(s"INDEXDEBUG: starting interval query for interval=${cb.strValue(interval)}, idx nkeys=${nKeys.toS}")
+    info(s"INDEXDEBUG: starting interval query for interval=${cb.strValue(interval).toString}, idx nkeys=${nKeys.toS.toString}")
 
-    info(s"INDEXDEBUG: leaf at 0=${cb.strValue(queryIndex(cb, region, 0L))}")
-    info(s"INDEXDEBUG: leaf at nKeys-1=${cb.strValue(queryIndex(cb, region, cb.memoize(nKeys-1)))}")
+    info(s"INDEXDEBUG: leaf at 0=${cb.strValue(queryIndex(cb, region, 0L)).toString}")
+    info(s"INDEXDEBUG: leaf at nKeys-1=${cb.strValue(queryIndex(cb, region, cb.memoize(nKeys-1))).toString}")
 
     val start = interval.loadStart(cb).get(cb).asBaseStruct
     val end = interval.loadEnd(cb).get(cb).asBaseStruct
@@ -81,8 +81,8 @@ class StagedIndexReader(emb: EmitMethodBuilder[_], spec: AbstractIndexSpec) {
 
     val startIdx = queryBound(cb, region, start, primitive(cb.memoize(!includesStart)))
     val endIdx = queryBound(cb, region, end, primitive(includesEnd))
-    info(s"INDEXDEBUG: start query result=${startIdx.toS}")
-    info(s"INDEXDEBUG: end query result=${endIdx.toS}")
+    info(s"INDEXDEBUG: start query result=${startIdx.toS.toString}")
+    info(s"INDEXDEBUG: end query result=${endIdx.toS.toString}")
     val n = cb.memoize(endIdx - startIdx)
     cb.ifx(n < 0L, cb._fatal("n less than 0: ", n.toS, ", startIdx=", startIdx.toS, ", endIdx=", endIdx.toS, ", query=", cb.strValue(interval)))
     cb.ifx(n > 0L && startIdx >= nKeys, cb._fatal("bad start idx: ", startIdx.toS, ", nKeys=", nKeys.toS))
@@ -229,7 +229,7 @@ class StagedIndexReader(emb: EmitMethodBuilder[_], spec: AbstractIndexSpec) {
     val Lstart = CodeLabel()
     cb.define(Lstart)
 
-    info(s"INDEXDEBUG: level=${levelSettable.toS}, offset=${offsetSettable.toS}, boundAndSign=${cb.strValue(boundAndSignTuple)}")
+    info(s"INDEXDEBUG: level=${levelSettable.toS.toString}, offset=${offsetSettable.toS.toString}, boundAndSign=${cb.strValue(boundAndSignTuple).toString}")
     cb.ifx(levelSettable ceq 0, {
       val node = readLeafNode(cb, offsetSettable).asBaseStruct
       /*
@@ -264,7 +264,7 @@ class StagedIndexReader(emb: EmitMethodBuilder[_], spec: AbstractIndexSpec) {
       cb.assign(rInd, updatedIndex)
     }, {
       val children = readInternalNode(cb, offsetSettable).loadField(cb, "children").get(cb).asIndexable
-      info(s"INDEXDEBUG: read internal node at ${offset.toS}, with ${children.loadLength().toS} children")
+      info(s"INDEXDEBUG: read internal node at ${offset.toS.toString}, with ${children.loadLength().toS.toString} children")
       cb.ifx(children.loadLength() ceq 0, {
         // empty internal node occurs if the indexed file contains no keys
         cb.assign(rInd, 0L)
@@ -284,7 +284,7 @@ class StagedIndexReader(emb: EmitMethodBuilder[_], spec: AbstractIndexSpec) {
           }
         )
           .search(cb, children, EmitCode.present(cb.emb, boundAndSignTuple))
-        info(s"INDEXDEBUG: internal node idx=${idx.toS}")
+        info(s"INDEXDEBUG: internal node idx=${idx.toS.toString}")
         cb.assign(levelSettable, levelSettable-1)
         cb.assign(offsetSettable, children.loadElement(cb, (idx-1).max(0)).get(cb).asBaseStruct.loadField(cb, "index_file_offset").get(cb).asLong.value)
         cb.goto(Lstart)
