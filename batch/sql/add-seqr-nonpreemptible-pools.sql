@@ -1,5 +1,5 @@
 -- Adds dedicated pools for the seqr loading pipeline, with the 'seqr' pool label, but non-preemptible versions 
--- run after add-seqr-pools.sql and add-seqr-nonpreemptible-pools.sql
+-- run after add-seqr-pools.sql and add-nonpreemptible-pools.sql
 
 INSERT INTO inst_colls (`name`, `is_pool`, `boot_disk_size_gb`, `max_instances`, `max_live_instances`, `cloud`)
 SELECT 'seqr-standard-np', 1, boot_disk_size_gb, max_instances, max_live_instances, cloud
