@@ -57,7 +57,7 @@ resource "azurerm_mysql_flexible_server_configuration" "max_connections" {
   name                = "max_connections"
   resource_group_name = var.resource_group.name
   server_name         = azurerm_mysql_flexible_server.db.name
-  value               = 1000
+  value               = 683
 }
 
 data "http" "db_ca_cert" {
