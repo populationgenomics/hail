@@ -537,7 +537,7 @@ metadata:
   labels:
     app: batch
 spec:
-  clusterIP: None
+  clusterIP: ""
   selector:
     app: batch
 ---
@@ -548,6 +548,6 @@ metadata:
   labels:
     app: batch-driver
 spec:
-  clusterIP: None
+  clusterIP: ""
   selector:
     app: batch-driver
