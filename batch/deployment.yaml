@@ -542,7 +542,7 @@ spec:
     app: batch
   ports:
   - name: https
-    port: 443
+    port: 5000
     protocol: TCP
     targetPort: 5000
 ---
@@ -558,6 +558,6 @@ spec:
     app: batch-driver
   ports:
   - name: https
-    port: 443
+    port: 5000
     protocol: TCP
     targetPort: 5000
