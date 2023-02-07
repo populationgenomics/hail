@@ -545,7 +545,7 @@ spec:
     port: 8080
     protocol: TCP
     targetPort: 8080
-  - name: https
+  - name: http
     port: 5000
     protocol: TCP
     targetPort: 5000
@@ -565,7 +565,7 @@ spec:
     port: 8080
     protocol: TCP
     targetPort: 8080
-  - name: https
+  - name: http
     port: 5000
     protocol: TCP
     targetPort: 5000
