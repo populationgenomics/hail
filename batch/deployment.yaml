@@ -542,6 +542,10 @@ spec:
     app: batch
   ports:
   - name: https
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  - name: https
     port: 5000
     protocol: TCP
     targetPort: 5000
@@ -557,6 +561,10 @@ spec:
   selector:
     app: batch-driver
   ports:
+  - name: https
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
   - name: https
     port: 5000
     protocol: TCP
