@@ -540,6 +540,11 @@ spec:
   clusterIP: ""
   selector:
     app: batch
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 5000
 ---
 apiVersion: v1
 kind: Service
@@ -551,3 +556,8 @@ spec:
   clusterIP: ""
   selector:
     app: batch-driver
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 5000
