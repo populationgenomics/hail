@@ -542,13 +542,9 @@ spec:
     app: batch
   ports:
   - name: https
-    port: 8080
+    port: 443
     protocol: TCP
-    targetPort: 8080
-  - name: http
-    port: 5000
-    protocol: TCP
-    targetPort: 5000
+    targetPort: 443
 ---
 apiVersion: v1
 kind: Service
@@ -562,10 +558,6 @@ spec:
     app: batch-driver
   ports:
   - name: https
-    port: 8080
+    port: 443
     protocol: TCP
-    targetPort: 8080
-  - name: http
-    port: 5000
-    protocol: TCP
-    targetPort: 5000
+    targetPort: 443
