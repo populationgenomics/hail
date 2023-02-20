@@ -1,4 +1,5 @@
 import importlib
+import logging
 import os
 
 import aiohttp
@@ -14,8 +15,10 @@ deploy_config = get_deploy_config()
 
 WEB_COMMON_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+log = logging.getLogger('web_common')
 
 def sass_compile(module_name):
+    log.info('Running SASS compile function')
     module = importlib.import_module(module_name)
     module_root = os.path.dirname(os.path.abspath(module.__file__))
 
@@ -24,7 +27,9 @@ def sass_compile(module_name):
     os.makedirs(scss_path, exist_ok=True)
     os.makedirs(css_path, exist_ok=True)
 
+    log.info('Running SASS compile...')
     sass.compile(dirname=(scss_path, css_path), output_style='compressed', include_paths=[f'{WEB_COMMON_ROOT}/styles'])
+    log.info('Completed SASS compile')
 
 
 def setup_aiohttp_jinja2(app: aiohttp.web.Application, module: str, *extra_loaders: jinja2.BaseLoader):
@@ -41,8 +46,11 @@ def setup_common_static_routes(routes):
     global _compiled
 
     if not _compiled:
+
         sass_compile('web_common')
         _compiled = True
+
+    log.info('Setup common static route')
     routes.static('/common_static', f'{WEB_COMMON_ROOT}/static')
 
 

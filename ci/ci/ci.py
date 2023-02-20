@@ -824,15 +824,22 @@ def run():
 
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
+    log.info('Cleanup finished')
 
     setup_common_static_routes(routes)
+    log.info('Setup common static routes finished')
     app.add_routes(routes)
+    log.info('Add routes finished')
     app.router.add_get("/metrics", server_stats)
+
+    log.info('Setup finished')
+    ssl_context = internal_server_ssl_context()
+    log.info(f'SSL Context {ssl_context}')
 
     web.run_app(
         deploy_config.prefix_application(app, 'ci'),
         host='0.0.0.0',
         port=5000,
         access_log_class=AccessLogger,
-        ssl_context=internal_server_ssl_context(),
+        ssl_context=ssl_context,
     )

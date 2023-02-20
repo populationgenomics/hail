@@ -537,18 +537,9 @@ metadata:
   labels:
     app: batch
 spec:
-  clusterIP: ""
+  clusterIP: None
   selector:
     app: batch
-  ports:
-  - name: https
-    port: 443
-    protocol: TCP
-    targetPort: 443
-  - name: registry
-    port: 5000
-    protocol: TCP
-    targetPort: 5000
 ---
 apiVersion: v1
 kind: Service
@@ -557,15 +548,6 @@ metadata:
   labels:
     app: batch-driver
 spec:
-  clusterIP: ""
+  clusterIP: None
   selector:
     app: batch-driver
-  ports:
-  - name: https
-    port: 443
-    protocol: TCP
-    targetPort: 443
-  - name: registry
-    port: 5000
-    protocol: TCP
-    targetPort: 5000
