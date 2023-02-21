@@ -288,6 +288,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     async for record in db.select_and_fetchall(job_resources_cost_sql, (batch_id, *job_ids)):
         resource = record['resource']
         job_id = record['job_id']
+        # Add, in case there are multiple instances of resources with the same name
         resources_by_job[job_id][resource] += record['usage']
         totals_by_job[job_id][resource] += record['total']
 
