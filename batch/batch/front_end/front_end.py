@@ -283,7 +283,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
     async for record in db.select_and_fetchall(job_attributes_sql, (batch_id, *job_ids)):
         attributes_by_job[record['job_id']][record['key']] = record['value']
 
-    resources_by_job = collections.defaultdict(dict)
+    resources_by_job = collections.defaultdict(lambda: collections.defaultdict(float))
     totals_by_job = collections.defaultdict(lambda: collections.defaultdict(float))
     async for record in db.select_and_fetchall(job_resources_cost_sql, (batch_id, *job_ids)):
         resource = record['resource']
