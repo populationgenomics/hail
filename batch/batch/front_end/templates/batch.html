@@ -20,9 +20,6 @@
     <li><a href="{{ base_path }}/batches/{{ batch['id'] }}?q=success">Succeeded</a>  Jobs: {{ batch['n_succeeded'] }}</li>
     <li><a href="{{ base_path }}/batches/{{ batch['id'] }}?q=failed">Failed</a> Jobs: {{ batch['n_failed'] }}</li>
     <li><a href="{{ base_path }}/batches/{{ batch['id'] }}?q=cancelled">Cancelled</a>  Jobs: {{ batch['n_cancelled'] }}</li>
-    <li>Succeeded Jobs: {{ batch['n_succeeded'] }}</li>
-    <li>Failed Jobs: {{ batch['n_failed'] }}</li>
-    <li>Cancelled Jobs: {{ batch['n_cancelled'] }}</li>
   </ul>
   <li>Duration: {% if 'duration' in batch and batch['duration'] is not none %}{{ batch['duration'] }}{% endif %}</li>
   <li>Cost: {% if 'cost' in batch and batch['cost'] is not none %}{{ batch['cost'] }}{% endif %}</li>
