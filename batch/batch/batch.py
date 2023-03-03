@@ -56,7 +56,7 @@ def batch_record_to_dict(record):
         'time_completed': time_completed,
         'duration': duration,
         'msec_mcpu': record['msec_mcpu'],
-        'cost': coalesce(record['cost'], 0),
+        'cost': coalesce(record.get('cost'), 0),
     }
 
     attributes = json.loads(record['attributes'])
