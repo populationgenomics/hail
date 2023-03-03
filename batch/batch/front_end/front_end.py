@@ -431,7 +431,7 @@ async def get_completed_batches_ordered_by_completed_time(request, userdata):
 
     last_completed_timestamp = request.query.get('last_completed_timestamp')
     if last_completed_timestamp:
-        where_args.append(last_completed_timestamp)
+        where_args.append(int(last_completed_timestamp))
         wheres.append('time_completed < %s')
 
     sql = f"""
@@ -456,14 +456,16 @@ ORDER BY time_completed DESC
 LIMIT 51;
     """
 
-    batches = [
-        batch_record_to_dict(batch)
+    records = [
+        batch
         async for batch in db.select_and_fetchall(sql, where_args, query_name='get_completed_batches')
     ]
-
+    # this comes out as a timestamp (rather than a formed date)
+    last_completed_timestamp = records[-1]['time_completed']
+    batches = [batch_record_to_dict(batch) for batch in records]
     body = {'batches': batches}
     if len(batches) == 51:
-        body['last_completed_timestamp'] = batches[-1]['time_completed']
+        body['last_completed_timestamp'] = last_completed_timestamp
     return web.json_response(body)
 
 
