@@ -86,7 +86,7 @@ def job_record_to_dict(record, name):
         'state': record['state'],
         'exit_code': exit_code,
         'duration': duration,
-        'cost': coalesce(record['cost'], 0),
+        'cost': coalesce(record.get('cost'), 0),
         'msec_mcpu': record['msec_mcpu'],
     }
 
