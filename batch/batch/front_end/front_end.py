@@ -417,6 +417,51 @@ GROUP BY base_t.batch_id, base_t.job_id;
     return (jobs, last_job_id)
 
 
+@routes.get('/api/v1alpha/batches/completed')
+@auth.rest_authenticated_users_only
+async def get_completed_batches_ordered_by_completed_time(request, userdata):
+    db = request.app['db']
+    where_args = [userdata['username']]
+    wheres = [
+        'billing_project_users.`user` = %s',
+        'billing_project_users.billing_project = batches.billing_project',
+        'time_completed IS NOT NULL',
+        'NOT deleted',
+    ]
+
+    last_completed_timestamp = request.query.get('last_completed_timestamp')
+    if last_completed_timestamp:
+        where_args.append(last_completed_timestamp)
+        wheres.append('time_completed < %s')
+
+    sql = f"""
+SELECT batches.*
+FROM batches
+LEFT JOIN billing_projects
+    ON batches.billing_project = billing_projects.name
+LEFT JOIN batches_n_jobs_in_complete_states
+    ON batches.id = batches_n_jobs_in_complete_states.id
+LEFT JOIN batches_cancelled
+    ON batches.id = batches_cancelled.id
+STRAIGHT_JOIN billing_project_users
+    ON batches.billing_project = billing_project_users.billing_project
+WHERE
+    {' AND '.join(wheres)}
+ORDER BY time_completed DESC
+LIMIT 51;
+    """
+
+    batches = [
+        batch_record_to_dict(batch)
+        async for batch in db.select_and_fetchall(sql, where_args, query_name='get_completed_batches')
+    ]
+
+    body = {'batches': batches}
+    if len(batches) == 51:
+        body['last_completed_timestamp'] = batches[-1]['time_completed']
+    return web.json_response(body)
+
+
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs')
 @rest_billing_project_users_only
 async def get_jobs(request, userdata, batch_id):  # pylint: disable=unused-argument
@@ -766,51 +811,6 @@ async def get_job_container_log(request, batch_id):
         raise web.HTTPBadRequest(reason=f'unknown container {container}')
     job_log = await _get_job_container_log(app, batch_id, job_id, container, record)
     return web.Response(body=job_log)
-
-
-@routes.get('/api/v1alpha/batches/finished')
-@rest_billing_project_users_only
-async def get_completed_batches_ordered_by_completed_time(request, userdata):
-    db = request.app['db']
-    where_args = [userdata['username']]
-    wheres = [
-        'billing_project_users.`user` = %s',
-        'billing_project_users.billing_project = batches.billing_project',
-        'time_completed IS NOT NULL',
-        'NOT deleted',
-    ]
-
-    last_completed_timestamp = request.query.get('last_completed_timestamp')
-    if last_completed_timestamp:
-        where_args.append(last_completed_timestamp)
-        wheres.append('time_completed < %s')
-
-    sql = f"""
-SELECT batches.*
-FROM batches
-LEFT JOIN billing_projects
-    ON batches.billing_project = billing_projects.name
-LEFT JOIN batches_n_jobs_in_complete_states
-    ON batches.id = batches_n_jobs_in_complete_states.id
-LEFT JOIN batches_cancelled
-    ON batches.id = batches_cancelled.id
-STRAIGHT_JOIN billing_project_users
-    ON batches.billing_project = billing_project_users.billing_project
-WHERE
-    {' AND '.join(wheres)}
-ORDER BY time_completed DESC
-LIMIT 51;
-    """
-
-    batches = [
-        batch_record_to_dict(batch)
-        async for batch in db.select_and_fetchall(sql, where_args, query_name='get_completed_batches')
-    ]
-
-    body = {'batches': batches}
-    if len(batches) == 51:
-        body['last_completed_timestamp'] = batches[-1]['time_completed']
-    return web.json_response(body)
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/log/{container}')
