@@ -435,7 +435,12 @@ async def get_completed_batches_ordered_by_completed_time(request, userdata):
         wheres.append('time_completed < %s')
 
     sql = f"""
-SELECT batches.*
+SELECT batches.*,
+    batches_cancelled.id IS NOT NULL AS cancelled,
+    batches_n_jobs_in_complete_states.n_completed,
+    batches_n_jobs_in_complete_states.n_succeeded,
+    batches_n_jobs_in_complete_states.n_failed,
+    batches_n_jobs_in_complete_states.n_cancelled
 FROM batches
 LEFT JOIN billing_projects
     ON batches.billing_project = billing_projects.name
