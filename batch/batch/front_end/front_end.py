@@ -429,6 +429,14 @@ async def get_completed_batches_ordered_by_completed_time(request, userdata):
         'NOT deleted',
     ]
 
+    limit = 300
+    query_limit: str = request.query.get('limit')
+    if query_limit:
+        try:
+            limit = int(query_limit)
+        except ValueError as e:
+            raise web.HTTPBadRequest(reason=f'Bad value for "limit": {e}')
+
     last_completed_timestamp = request.query.get('last_completed_timestamp')
     if last_completed_timestamp:
         where_args.append(int(last_completed_timestamp))
@@ -453,18 +461,17 @@ STRAIGHT_JOIN billing_project_users
 WHERE
     {' AND '.join(wheres)}
 ORDER BY time_completed DESC
-LIMIT 51;
+LIMIT %s;
     """
 
     records = [
-        batch
-        async for batch in db.select_and_fetchall(sql, where_args, query_name='get_completed_batches')
+        batch async for batch in db.select_and_fetchall(sql, (*where_args, limit), query_name='get_completed_batches')
     ]
     # this comes out as a timestamp (rather than a formed date)
     last_completed_timestamp = records[-1]['time_completed']
     batches = [batch_record_to_dict(batch) for batch in records]
     body = {'batches': batches}
-    if len(batches) == 51:
+    if len(batches) == limit:
         body['last_completed_timestamp'] = last_completed_timestamp
     return web.json_response(body)
 
