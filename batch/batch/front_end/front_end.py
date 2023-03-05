@@ -429,7 +429,7 @@ async def get_completed_batches_ordered_by_completed_time(request, userdata):
         'NOT deleted',
     ]
 
-    limit = 300
+    limit = 100
     query_limit: str = request.query.get('limit')
     if query_limit:
         try:
