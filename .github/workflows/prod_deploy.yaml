@@ -39,9 +39,10 @@ jobs:
         run: |
           SLACK_MSG="Deploying Hail Batch:\n*GCP:* $DEPLOY_BATCH_URL_GCP\n*Azure:* $DEPLOY_BATCH_URL_AZURE"
           curl --fail --silent --show-error -X POST \
+              -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
               -H "Content-type: application/json" \
-              -d "{\"text\": \"$SLACK_MSG\"}" \
-              ${{ secrets.SLACK_WEBHOOK }}
+              -d "{\"channel\": \"production-announcements\", \"text\": \"$SLACK_MSG\"}" \
+              https://slack.com/api/chat.postMessage
 
       - name: check if any deploy failed
         run: |
