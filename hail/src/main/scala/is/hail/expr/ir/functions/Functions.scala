@@ -6,15 +6,16 @@ import is.hail.expr.ir._
 import is.hail.types._
 import is.hail.utils._
 import is.hail.asm4s.coerce
-import is.hail.backend.ExecuteContext
+import is.hail.backend.{ExecuteContext, HailStateManager}
 import is.hail.experimental.ExperimentalFunctions
+import is.hail.io.bgen.BGENFunctions
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.{EmitType, SCode, SType, SValue}
 import is.hail.types.physical.stypes.concrete._
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.physical.stypes.primitives._
 import is.hail.types.virtual._
-import is.hail.variant.Locus
+import is.hail.variant.{Locus, ReferenceGenome}
 import org.apache.spark.sql.Row
 
 import scala.collection.JavaConverters._
@@ -236,7 +237,8 @@ object IRFunctionRegistry {
     StringFunctions,
     UtilFunctions,
     ExperimentalFunctions,
-    ReferenceGenomeFunctions
+    ReferenceGenomeFunctions,
+    BGENFunctions
   ).foreach(_.registerAll())
 
   def dumpFunctions(): Unit = {
@@ -257,9 +259,14 @@ object IRFunctionRegistry {
 }
 
 object RegistryHelpers {
-  def stupidUnwrapStruct(r: Region, value: Row, ptype: PType): Long = {
+  def stupidUnwrapStruct(rgs: Map[String, ReferenceGenome], r: Region, value: Row, ptype: PType): Long = {
     assert(value != null)
-    ptype.unstagedStoreJavaObject(value, r)
+    ptype.unstagedStoreJavaObject(HailStateManager(rgs), value, r)
+  }
+
+  def stupidUnwrapArray(rgs: Map[String, ReferenceGenome], r: Region, value: IndexedSeq[Annotation], ptype: PType): Long = {
+    assert(value != null)
+    ptype.unstagedStoreJavaObject(HailStateManager(rgs), value, r)
   }
 }
 
@@ -290,7 +297,7 @@ abstract class RegistryFunctions {
     case _ => classInfo[AnyRef]
   }
 
-  def svalueToJavaValue(cb: EmitCodeBuilder, r: Value[Region], sc: SValue): Value[AnyRef] = {
+  def svalueToJavaValue(cb: EmitCodeBuilder, r: Value[Region], sc: SValue, safe: Boolean = false): Value[AnyRef] = {
     sc.st match {
       case SInt32 => cb.memoize(Code.boxInt(sc.asInt32.value))
       case SInt64 => cb.memoize(Code.boxLong(sc.asInt64.value))
@@ -304,7 +311,7 @@ abstract class RegistryFunctions {
         val pt = PType.canonical(t.storageType())
         val addr = pt.store(cb, r, sc, deepCopy = false)
         cb.memoize(Code.invokeScalaObject3[PType, Region, Long, AnyRef](
-          UnsafeRow.getClass, "readAnyRef",
+          if (safe) SafeRow.getClass else UnsafeRow.getClass, "readAnyRef",
           cb.emb.getPType(pt),
           r, addr))
 
@@ -333,6 +340,16 @@ abstract class RegistryFunctions {
           Code.checkcast[java.lang.Integer](arr.invoke[Int, java.lang.Object]("apply", idx)))
         IEmitCode(cb, elt.isNull, primitive(cb.memoize(elt.invoke[Int]("intValue"))))
       }
+    case TArray(TInt64) =>
+      val ast = st.asInstanceOf[SIndexablePointer]
+      val pca = ast.pType.asInstanceOf[PCanonicalArray]
+      val arr = cb.newLocal[IndexedSeq[Int]]("unrwrap_return_array_int64_arr", coerce[IndexedSeq[Int]](value))
+      val len = cb.newLocal[Int]("unwrap_return_array_int64_len", arr.invoke[Int]("length"))
+      pca.constructFromElements(cb, r, len, deepCopy = false) { (cb, idx) =>
+        val elt = cb.newLocal[java.lang.Long]("unwrap_return_array_int64_elt",
+          Code.checkcast[java.lang.Long](arr.invoke[Int, java.lang.Object]("apply", idx)))
+        IEmitCode(cb, elt.isNull, primitive(cb.memoize(elt.invoke[Long]("longValue"))))
+      }
     case TArray(TFloat64) =>
       val ast = st.asInstanceOf[SIndexablePointer]
       val pca = ast.pType.asInstanceOf[PCanonicalArray]
@@ -349,9 +366,15 @@ abstract class RegistryFunctions {
     case t: TBaseStruct =>
       val sst = st.asInstanceOf[SBaseStructPointer]
       val pt = sst.pType.asInstanceOf[PCanonicalBaseStruct]
-      val addr = cb.memoize(Code.invokeScalaObject3[Region, Row, PType, Long](
-        RegistryHelpers.getClass, "stupidUnwrapStruct", r.region, coerce[Row](value), cb.emb.ecb.getPType(pt)))
+      val addr = cb.memoize(Code.invokeScalaObject4[Map[String, ReferenceGenome], Region, Row, PType, Long](
+        RegistryHelpers.getClass, "stupidUnwrapStruct", cb.emb.ecb.emodb.referenceGenomeMap, r.region, coerce[Row](value), cb.emb.ecb.getPType(pt)))
       new SBaseStructPointerValue(SBaseStructPointer(pt.setRequired(false).asInstanceOf[PBaseStruct]), addr)
+    case TArray(t: TBaseStruct) =>
+      val ast = st.asInstanceOf[SIndexablePointer]
+      val pca = ast.pType.asInstanceOf[PCanonicalArray]
+      val array = cb.memoize(Code.invokeScalaObject4[Map[String, ReferenceGenome], Region, IndexedSeq[Annotation], PType, Long](
+        RegistryHelpers.getClass, "stupidUnwrapArray", cb.emb.ecb.emodb.referenceGenomeMap, r.region, coerce[IndexedSeq[Annotation]](value), cb.emb.ecb.getPType(pca)))
+      new SIndexablePointerValue(ast, array, cb.memoize(pca.loadLength(array)), cb.memoize(pca.firstElementOffset(array)))
   }
 
   def registerSCode(
@@ -616,12 +639,17 @@ abstract class RegistryFunctions {
       impl(cb, r, rt, errorID, a1, a2)
     }
 
+  def registerIEmitCode3(name: String, mt1: Type, mt2: Type, mt3: Type, rt: Type, pt: (Type, EmitType, EmitType, EmitType) => EmitType)
+    (impl: (EmitCodeBuilder, Value[Region], SType, Value[Int], EmitCode, EmitCode, EmitCode) => IEmitCode): Unit =
+    registerIEmitCode(name, Array(mt1, mt2, mt3), rt, unwrappedApply(pt)) { case (cb, r, rt, errorID, Array(a1, a2, a3)) =>
+      impl(cb, r, rt, errorID, a1, a2, a3)
+    }
+
   def registerIEmitCode4(name: String, mt1: Type, mt2: Type, mt3: Type, mt4: Type, rt: Type, pt: (Type, EmitType, EmitType, EmitType, EmitType) => EmitType)
     (impl: (EmitCodeBuilder, Value[Region], SType, Value[Int], EmitCode, EmitCode, EmitCode, EmitCode) => IEmitCode): Unit =
     registerIEmitCode(name, Array(mt1, mt2, mt3, mt4), rt, unwrappedApply(pt)) { case (cb, r, rt, errorID, Array(a1, a2, a3, a4)) =>
       impl(cb, r, rt, errorID, a1, a2, a3, a4)
     }
-
 
   def registerIEmitCode5(name: String, mt1: Type, mt2: Type, mt3: Type, mt4: Type, mt5: Type, rt: Type, pt: (Type, EmitType, EmitType, EmitType, EmitType, EmitType) => EmitType)
     (impl: (EmitCodeBuilder, Value[Region], SType, Value[Int], EmitCode, EmitCode, EmitCode, EmitCode, EmitCode) => IEmitCode): Unit =

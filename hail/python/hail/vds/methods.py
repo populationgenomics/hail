@@ -110,15 +110,15 @@ def to_merged_sparse_mt(vds: 'VariantDataset', *, ref_allele_function=None) -> '
     vht = vht.key_by('locus')
 
     merged_schema = {}
-    for e in vds.variant_data.entry:
-        merged_schema[e] = vds.variant_data[e].dtype
-
     for e in vds.reference_data.entry:
+        merged_schema[e] = vds.reference_data[e].dtype
+
+    for e in vds.variant_data.entry:
         if e in merged_schema:
-            if not merged_schema[e] == vds.reference_data[e].dtype:
-                raise TypeError(f"cannot unify field {e!r}: {merged_schema[e]}, {vds.reference_data[e].dtype}")
+            if not merged_schema[e] == vds.variant_data[e].dtype:
+                raise TypeError(f"cannot unify field {e!r}: {merged_schema[e]}, {vds.variant_data[e].dtype}")
         else:
-            merged_schema[e] = vds.reference_data[e].dtype
+            merged_schema[e] = vds.variant_data[e].dtype
 
     ht = vht.join(rht, how='outer').drop('_ref_cols')
 
@@ -865,7 +865,7 @@ def interval_coverage(vds: VariantDataset, intervals: hl.Table, gq_thresholds=(0
         by *interval_size*.
      -  ``sum_dp`` (*int64*): Sum of depth values by base across the interval.
      -  ``mean_dp`` (*float64*): Mean depth of bases across the interval. Computed by dividing
-        *mean_dp* by *interval_size*.
+        *sum_dp* by *interval_size*.
 
     If the `dp_field` parameter is not specified, the ``DP`` is used for depth
     if present. If no ``DP`` field is present, the ``MIN_DP`` field is used. If no ``DP``
@@ -959,7 +959,7 @@ def truncate_reference_blocks(ds, *, max_ref_block_base_pairs=None,
 
     Truncate the longest 1% of reference blocks to the length of the 99th percentile block:
 
-    >>> vds2 = hl.vds.truncate_reference_blocks(vds ref_block_winsorize_fraction=0.01) # doctest: +SKIP
+    >>> vds2 = hl.vds.truncate_reference_blocks(vds, ref_block_winsorize_fraction=0.01) # doctest: +SKIP
 
     Notes
     -----

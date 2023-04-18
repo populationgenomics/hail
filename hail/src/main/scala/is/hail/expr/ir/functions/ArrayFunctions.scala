@@ -3,11 +3,12 @@ package is.hail.expr.ir.functions
 import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.expr.ir._
+import is.hail.expr.ir.orderings.CodeOrdering
 import is.hail.types.tcoerce
 import is.hail.types.physical.{PCanonicalArray, PInt32, PType}
-import is.hail.types.physical.stypes.EmitType
+import is.hail.types.physical.stypes.{EmitType, SType}
 import is.hail.types.physical.stypes.concrete.SIndexablePointer
-import is.hail.types.physical.stypes.primitives.{SBooleanValue, SFloat64, SInt32Value}
+import is.hail.types.physical.stypes.primitives.{SBooleanValue, SFloat64, SInt32, SInt32Value}
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
 import is.hail.utils._
@@ -54,7 +55,7 @@ object ArrayFunctions extends RegistryFunctions {
       If(IsNA(a2),
         NA(typ),
         ToArray(StreamFlatMap(
-          MakeStream(Seq(a1, a2), TStream(typ)),
+          MakeStream(FastIndexedSeq(a1, a2), TStream(typ)),
           uid,
           ToStream(Ref(uid, a1.typ))))))
   }
@@ -100,7 +101,7 @@ object ArrayFunctions extends RegistryFunctions {
     registerIR2("extend", TArray(tv("T")), TArray(tv("T")), TArray(tv("T")))((_, a, b, _) => extend(a, b))
 
     registerIR2("append", TArray(tv("T")), tv("T"), TArray(tv("T"))) { (_, a, c, _) =>
-      extend(a, MakeArray(Seq(c), TArray(c.typ)))
+      extend(a, MakeArray(FastIndexedSeq(c), TArray(c.typ)))
     }
 
     registerIR2("contains", TArray(tv("T")), tv("T"), TBoolean) { (_, a, e, _) => contains(a, e) }
@@ -264,6 +265,15 @@ object ArrayFunctions extends RegistryFunctions {
     registerIR1("flatten", TArray(TArray(tv("T"))), TArray(tv("T"))) { (_, a, _) =>
       val elt = Ref(genUID(), tcoerce[TArray](a.typ).elementType)
       ToArray(StreamFlatMap(ToStream(a), elt.name, ToStream(elt)))
+    }
+
+    registerSCode4("lowerBound", TArray(tv("T")), tv("T"), TInt32, TInt32, TInt32, {
+      (_, _, _, _, _) => SInt32
+    }) { case (r, cb, rt, array, key, begin, end, _) =>
+      val lt = cb.emb.ecb.getOrderingFunction(key.st, array.asIndexable.st.elementType, CodeOrdering.Lt())
+      primitive(BinarySearch.lowerBound(cb, array.asIndexable, { elt =>
+        lt(cb, cb.memoize(elt), EmitValue.present(key))
+      }, begin.asInt.value, end.asInt.value))
     }
 
     registerIEmitCode2("corr", TArray(TFloat64), TArray(TFloat64), TFloat64, {

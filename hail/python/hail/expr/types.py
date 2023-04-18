@@ -16,7 +16,7 @@ from hailtop.hail_frozenlist import frozenlist
 from .nat import NatBase, NatLiteral
 from .type_parsing import type_grammar, type_node_visitor
 from .. import genetics
-from ..typecheck import typecheck, typecheck_method, oneof, transformed
+from ..typecheck import typecheck, typecheck_method, oneof, transformed, nullable
 from ..utils.struct import Struct
 from ..utils.byte_reader import ByteReader
 from ..utils.misc import lookup_bit
@@ -724,7 +724,9 @@ class tndarray(HailType):
         return "ndarray<{}, {}>".format(self.element_type, self.ndim)
 
     def _eq(self, other):
-        return isinstance(other, tndarray) and self.element_type == other.element_type
+        return (isinstance(other, tndarray)
+                and self.element_type == other.element_type
+                and self.ndim == other.ndim)
 
     def _pretty(self, b, indent, increment):
         b.append('ndarray<')
@@ -1779,6 +1781,14 @@ class tlocus(HailType):
     """
 
     struct_repr = tstruct(contig=_tstr(), pos=_tint32())
+
+    @classmethod
+    @typecheck_method(reference_genome=nullable(reference_genome_type))
+    def _schema_from_rg(cls, reference_genome='default'):
+        # must match TLocus.schemaFromRG
+        if reference_genome is None:
+            return hl.tstruct(contig=hl.tstr, position=hl.tint32)
+        return cls(reference_genome)
 
     @typecheck_method(reference_genome=reference_genome_type)
     def __init__(self, reference_genome='default'):

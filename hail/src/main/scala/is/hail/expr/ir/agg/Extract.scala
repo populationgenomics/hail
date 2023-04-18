@@ -1,8 +1,8 @@
 package is.hail.expr.ir.agg
 
 import is.hail.annotations.{Region, RegionPool, RegionValue}
-import is.hail.asm4s._
-import is.hail.backend.ExecuteContext
+import is.hail.asm4s.{HailClassLoader, _}
+import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.backend.spark.SparkTaskContext
 import is.hail.expr.ir
 import is.hail.expr.ir._
@@ -32,6 +32,7 @@ object AggStateSig {
       case Min() | Max()  => TypedStateSig(seqVTypes.head.setRequired(false))
       case Count() => TypedStateSig(VirtualTypeWithReq.fullyOptional(TInt64).setRequired(true))
       case Take() => TakeStateSig(seqVTypes.head)
+      case ReservoirSample() => ReservoirSampleStateSig(seqVTypes.head)
       case Densify() => DensifyStateSig(seqVTypes.head)
       case TakeBy(reverse) =>
         val Seq(vt, kt) = seqVTypes
@@ -61,6 +62,7 @@ object AggStateSig {
     case TypedStateSig(vt) => new TypedRegionBackedAggState(vt, cb)
     case DownsampleStateSig(labelType) => new DownsampleState(cb, labelType)
     case TakeStateSig(vt) => new TakeRVAS(vt, cb)
+    case ReservoirSampleStateSig(vt) => new ReservoirSampleRVAS(vt, cb)
     case DensifyStateSig(vt) => new DensifyState(vt, cb)
     case TakeByStateSig(vt, kt, so) => new TakeByRVAS(vt, kt, cb, so)
     case CollectStateSig(pt) => new CollectAggState(pt, cb)
@@ -86,6 +88,7 @@ case class TypedStateSig(pt: VirtualTypeWithReq) extends AggStateSig(Array(pt), 
 case class DownsampleStateSig(labelType: VirtualTypeWithReq) extends AggStateSig(Array(labelType), None)
 case class TakeStateSig(pt: VirtualTypeWithReq) extends AggStateSig(Array(pt), None)
 case class TakeByStateSig(vt: VirtualTypeWithReq, kt: VirtualTypeWithReq, so: SortOrder) extends AggStateSig(Array(vt, kt), None)
+case class ReservoirSampleStateSig(pt: VirtualTypeWithReq) extends AggStateSig(Array(pt), None)
 case class DensifyStateSig(vt: VirtualTypeWithReq) extends AggStateSig(Array(vt), None)
 case class CollectStateSig(pt: VirtualTypeWithReq) extends AggStateSig(Array(pt), None)
 case class CollectAsSetStateSig(pt: VirtualTypeWithReq) extends AggStateSig(Array(pt), None)
@@ -184,7 +187,7 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
 
   def eltOp(ctx: ExecuteContext): IR = seqPerElt
 
-  def deserialize(ctx: ExecuteContext, spec: BufferSpec): ((Region, Array[Byte]) => Long) = {
+  def deserialize(ctx: ExecuteContext, spec: BufferSpec): ((HailClassLoader, HailTaskContext, Region, Array[Byte]) => Long) = {
     val (_, f) = ir.CompileWithAggregators[AsmFunction1RegionUnit](ctx,
       states,
       FastIndexedSeq(),
@@ -192,8 +195,8 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
       ir.DeserializeAggs(0, 0, spec, states))
 
     val fsBc = ctx.fsBc;
-    { (aggRegion: Region, bytes: Array[Byte]) =>
-      val f2 = f(theHailClassLoaderForSparkWorkers, fsBc.value, 0, aggRegion)
+    { (hcl: HailClassLoader, htc: HailTaskContext, aggRegion: Region, bytes: Array[Byte]) =>
+      val f2 = f(hcl, fsBc.value, htc, aggRegion)
       f2.newAggState(aggRegion)
       f2.setSerializedAgg(0, bytes)
       f2(aggRegion)
@@ -201,7 +204,7 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
     }
   }
 
-  def serialize(ctx: ExecuteContext, spec: BufferSpec): (Region, Long) => Array[Byte] = {
+  def serialize(ctx: ExecuteContext, spec: BufferSpec): (HailClassLoader, HailTaskContext, Region, Long) => Array[Byte] = {
     val (_, f) = ir.CompileWithAggregators[AsmFunction1RegionUnit](ctx,
       states,
       FastIndexedSeq(),
@@ -209,8 +212,8 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
       ir.SerializeAggs(0, 0, spec, states))
 
     val fsBc = ctx.fsBc;
-    { (aggRegion: Region, off: Long) =>
-      val f2 = f(theHailClassLoaderForSparkWorkers, fsBc.value, 0, aggRegion)
+    { (hcl: HailClassLoader, htc: HailTaskContext, aggRegion: Region, off: Long) =>
+      val f2 = f(hcl, fsBc.value, htc, aggRegion)
       f2.setAggState(aggRegion, off)
       f2(aggRegion)
       f2.storeAggsToRegion()
@@ -221,14 +224,15 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
   def combOpFSerializedWorkersOnly(ctx: ExecuteContext, spec: BufferSpec): (Array[Byte], Array[Byte]) => Array[Byte] = {
     combOpFSerializedFromRegionPool(ctx, spec)(() => {
       val htc = SparkTaskContext.get()
+      val hcl = theHailClassLoaderForSparkWorkers
       if (htc == null) {
         throw new UnsupportedOperationException(s"Can't get htc. On worker = ${TaskContext.get != null}")
       }
-      htc.getRegionPool()
+      (htc.getRegionPool(), hcl, htc)
     })
   }
 
-  def combOpFSerializedFromRegionPool(ctx: ExecuteContext, spec: BufferSpec): (() => RegionPool) => ((Array[Byte], Array[Byte]) => Array[Byte]) = {
+  def combOpFSerializedFromRegionPool(ctx: ExecuteContext, spec: BufferSpec): (() => (RegionPool, HailClassLoader, HailTaskContext)) => ((Array[Byte], Array[Byte]) => Array[Byte]) = {
     val (_, f) = ir.CompileWithAggregators[AsmFunction1RegionUnit](ctx,
       states ++ states,
       FastIndexedSeq(),
@@ -241,9 +245,10 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
       )))
 
     val fsBc = ctx.fsBc
-    poolGetter: (() => RegionPool) => { (bytes1: Array[Byte], bytes2: Array[Byte]) =>
-      poolGetter().scopedSmallRegion { r =>
-        val f2 = f(theHailClassLoaderForSparkWorkers, fsBc.value, 0, r)
+    poolGetter: (() => (RegionPool, HailClassLoader, HailTaskContext)) => { (bytes1: Array[Byte], bytes2: Array[Byte]) =>
+      val (pool, hcl, htc) = poolGetter()
+      pool.scopedSmallRegion { r =>
+        val f2 = f(hcl, fsBc.value, htc, r)
         f2.newAggState(r)
         f2.setSerializedAgg(0, bytes1)
         f2.setSerializedAgg(1, bytes2)
@@ -256,7 +261,7 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
 
   // Takes ownership of both input regions, and returns ownership of region in
   // resulting RegionValue.
-  def combOpF(ctx: ExecuteContext, spec: BufferSpec): (RegionValue, RegionValue) => RegionValue = {
+  def combOpF(ctx: ExecuteContext, spec: BufferSpec): (HailClassLoader, HailTaskContext, RegionValue, RegionValue) => RegionValue = {
     val fb = ir.EmitFunctionBuilder[AsmFunction4RegionLongRegionLongLong](
       ctx,
       "combOpF3",
@@ -298,9 +303,8 @@ class Aggs(original: IR, rewriteMap: Memo[IR], bindingNodesReferenced: Memo[Unit
     val f = fb.resultWithIndex()
     val fsBc = ctx.fsBc
 
-    { (l: RegionValue, r: RegionValue) =>
-      // FIXME: this seems wrong? we cannot use broadcasted FSes in the service backend
-      val comb = f(theHailClassLoaderForSparkWorkers, fsBc.value, 0, l.region)
+    { (hcl: HailClassLoader, htc: HailTaskContext, l: RegionValue, r: RegionValue) =>
+      val comb = f(hcl, fsBc.value, htc, l.region)
       l.setOffset(comb(l.region, l.offset, r.region, r.offset))
       r.region.invalidate()
       l
@@ -344,6 +348,7 @@ object Extract {
     case AggSignature(Max(), _, Seq(t)) => t
     case AggSignature(Count(), _, _) => TInt64
     case AggSignature(Take(), _, Seq(t)) => TArray(t)
+    case AggSignature(ReservoirSample(), _, Seq(t)) => TArray(t)
     case AggSignature(CallStats(), _, _) => CallStatsState.resultPType.virtualType
     case AggSignature(TakeBy(_), _, Seq(value, key)) => TArray(value)
     case AggSignature(PrevNonnull(), _, Seq(t)) => t
@@ -369,6 +374,7 @@ object Extract {
     case PhysicalAggSig(Count(), TypedStateSig(_)) => CountAggregator
     case PhysicalAggSig(Take(), TakeStateSig(t)) => new TakeAggregator(t)
     case PhysicalAggSig(TakeBy(_), TakeByStateSig(v, k, _)) => new TakeByAggregator(v, k)
+    case PhysicalAggSig(ReservoirSample(), ReservoirSampleStateSig(t)) => new ReservoirSampleAggregator(t)
     case PhysicalAggSig(Densify(), DensifyStateSig(v)) => new DensifyAggregator(v)
     case PhysicalAggSig(CallStats(), CallStatsStateSig()) => new CallStatsAggregator()
     case PhysicalAggSig(Collect(), CollectStateSig(t)) => new CollectAggregator(t)

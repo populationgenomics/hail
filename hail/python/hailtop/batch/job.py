@@ -7,6 +7,8 @@ import warnings
 from shlex import quote as shq
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union, cast
 
+import hailtop.batch_client.client as bc
+
 from . import backend, batch  # pylint: disable=cyclic-import
 from . import resource as _resource  # pylint: disable=cyclic-import
 from .exceptions import BatchException
@@ -97,6 +99,8 @@ class Job:
         self._mentioned: Set[_resource.Resource] = set()  # resources used in the command
         self._valid: Set[_resource.Resource] = set()  # resources declared in the appropriate place
         self._dependencies: Set[Job] = set()
+        self._submitted: bool = False
+        self._client_job: Optional[bc.Job] = None
 
         def safe_str(s):
             new_s = []
@@ -110,7 +114,12 @@ class Job:
         self._dirname = f'{safe_str(name)}-{self._token}' if name else self._token
 
     def _get_resource(self, item: str) -> '_resource.Resource':
-        raise NotImplementedError
+        if item not in self._resources:
+            r = self._batch._new_job_resource_file(self, value=item)
+            self._resources[item] = r
+            self._resources_inverse[r] = item
+
+        return self._resources[item]
 
     def __getitem__(self, item: str) -> '_resource.Resource':
         return self._get_resource(item)
@@ -310,10 +319,6 @@ class Job:
         """
         Set the job to always run, even if dependencies fail.
 
-        Notes
-        -----
-        Can only be used with the :class:`.backend.ServiceBackend`.
-
         Warning
         -------
         Jobs set to always run are not cancellable!
@@ -335,10 +340,6 @@ class Job:
         -------
         Same job object set to always run.
         """
-
-        if not isinstance(self._batch._backend, backend.ServiceBackend):
-            raise NotImplementedError("A ServiceBackend is required to use the 'always_run' option")
-
         self._always_run = always_run
         return self
 
@@ -664,14 +665,6 @@ class BashJob(Job):
         super().__init__(batch, token, name=name, attributes=attributes, shell=shell)
         self._command: List[str] = []
 
-    def _get_resource(self, item: str) -> '_resource.Resource':
-        if item not in self._resources:
-            r = self._batch._new_job_resource_file(self, value=item)
-            self._resources[item] = r
-            self._resources_inverse[r] = item
-
-        return self._resources[item]
-
     def declare_resource_group(self, **mappings: Dict[str, Any]) -> 'BashJob':
         """Declare a resource group for a job.
 
@@ -908,7 +901,7 @@ class PythonJob(Job):
         self._function_calls: List[Tuple[_resource.PythonResult, int, Tuple[Any, ...], Dict[str, Any]]] = []
         self.n_results = 0
 
-    def _get_resource(self, item: str) -> '_resource.PythonResult':
+    def _get_python_resource(self, item: str) -> '_resource.PythonResult':
         if item not in self._resources:
             r = self._batch._new_python_result(self, value=item)
             self._resources[item] = r
@@ -1081,6 +1074,16 @@ class PythonJob(Job):
             if isinstance(value, Job):
                 raise BatchException('arguments to a PythonJob cannot be other job objects.')
 
+        # Some builtins like `print` do not have signatures
+        try:
+            inspect.signature(unapplied).bind(*args, **kwargs)
+        except ValueError as e:
+            # Some builtins like `print` don't have a signature that inspect can read
+            if 'no signature found for builtin' not in e.args[0]:
+                raise e
+        except TypeError as e:
+            raise BatchException(f'Cannot call {unapplied.__name__} with the supplied arguments') from e
+
         def handle_arg(r):
             if r._source != self:
                 self._add_inputs(r)
@@ -1104,7 +1107,7 @@ class PythonJob(Job):
                 handle_arg(value)
 
         self.n_results += 1
-        result = self._get_resource(f'result{self.n_results}')
+        result = self._get_python_resource(f'result{self.n_results}')
         handle_arg(result)
 
         unapplied_id = self._batch._register_python_function(unapplied)

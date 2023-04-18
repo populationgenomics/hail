@@ -81,6 +81,8 @@ object Children {
       Array(nds)
     case ArraySort(a, _, _, lessThan) =>
       Array(a, lessThan)
+    case ArrayMaximalIndependentSet(a, tieBreaker) =>
+      Array(a) ++ tieBreaker.map { case (_, _, tb) => tb }
     case ToSet(a) =>
       Array(a)
     case ToDict(a) =>
@@ -245,7 +247,7 @@ object Children {
     case WritePartition(stream, ctx, _) => Array(stream, ctx)
     case WriteMetadata(writeAnnotations, _) => Array(writeAnnotations)
     case ReadValue(path, _, _) => Array(path)
-    case WriteValue(value, path, spec) => Array(value, path)
+    case WriteValue(value, path, _, staged) => Array(value, path) ++ staged.toArray[IR]
     case LiftMeOut(child) => Array(child)
   }
 }

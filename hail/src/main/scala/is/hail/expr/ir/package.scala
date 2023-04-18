@@ -1,12 +1,10 @@
 package is.hail.expr
 
-import is.hail.asm4s
 import is.hail.asm4s._
 import is.hail.expr.ir.functions.IRFunctionRegistry
-import is.hail.types.physical._
 import is.hail.types.physical.stypes.SValue
+import is.hail.types.tcoerce
 import is.hail.types.virtual._
-import is.hail.types.{tcoerce, _}
 import is.hail.utils._
 
 import java.util.UUID
@@ -60,15 +58,15 @@ package object ir {
 
   implicit def irToPrimitiveIR(ir: IR): PrimitiveIR = new PrimitiveIR(ir)
 
-  implicit def intToIR(i: Int): IR = I32(i)
+  implicit def intToIR(i: Int): I32 = I32(i)
 
-  implicit def longToIR(l: Long): IR = I64(l)
+  implicit def longToIR(l: Long): I64 = I64(l)
 
-  implicit def floatToIR(f: Float): IR = F32(f)
+  implicit def floatToIR(f: Float): F32 = F32(f)
 
-  implicit def doubleToIR(d: Double): IR = F64(d)
+  implicit def doubleToIR(d: Double): F64 = F64(d)
 
-  implicit def booleanToIR(b: Boolean): IR = if (b) True() else False()
+  implicit def booleanToIR(b: Boolean): TrivialIR = if (b) True() else False()
 
   def zero(t: Type): IR = t match {
     case TInt32 => I32(0)
@@ -160,6 +158,12 @@ package object ir {
     StreamJoin(left, right, lkey, rkey, lRef.name, rRef.name, f(lRef, rRef), joinType, requiresMemoryManagement)
   }
 
+  def joinRightDistinctIR(left: IR, right: IR, lkey: IndexedSeq[String], rkey: IndexedSeq[String], joinType: String)(f: (Ref, Ref) => IR): IR = {
+    val lRef = Ref(genUID(), left.typ.asInstanceOf[TStream].elementType)
+    val rRef = Ref(genUID(), right.typ.asInstanceOf[TStream].elementType)
+    StreamJoinRightDistinct(left, right, lkey, rkey, lRef.name, rRef.name, f(lRef, rRef), joinType)
+  }
+
   def streamSumIR(stream: IR): IR = {
     foldIR(stream, 0){ case (accum, elt) => accum + elt}
   }
@@ -171,8 +175,8 @@ package object ir {
 
   def rangeIR(start: IR, stop: IR): IR = StreamRange(start, stop, 1)
 
-  def insertIR(old: IR, fields: (String, IR)*): InsertFields = InsertFields(old, fields)
-  def selectIR(old: IR, fields: String*): SelectFields = SelectFields(old, fields)
+  def insertIR(old: IR, fields: (String, IR)*): InsertFields = InsertFields(old, fields.toArray[(String, IR)])
+  def selectIR(old: IR, fields: String*): SelectFields = SelectFields(old, fields.toArray[String])
 
   def zip2(s1: IR, s2: IR, behavior: ArrayZipBehavior.ArrayZipBehavior)(f: (Ref, Ref) => IR): IR = {
     val r1 = Ref(genUID(), tcoerce[TStream](s1.typ).elementType)
@@ -191,13 +195,13 @@ package object ir {
     )
   }
 
-  def zipIR(ss: IndexedSeq[IR], behavior: ArrayZipBehavior.ArrayZipBehavior)(f: IndexedSeq[Ref] => IR): IR = {
+  def zipIR(ss: IndexedSeq[IR], behavior: ArrayZipBehavior.ArrayZipBehavior, errorId: Int = ErrorIDs.NO_ERROR)(f: IndexedSeq[Ref] => IR): IR = {
     val refs = ss.map(s => Ref(genUID(), tcoerce[TStream](s.typ).elementType))
-    StreamZip(ss, refs.map(_.name), f(refs), behavior, ErrorIDs.NO_ERROR)
+    StreamZip(ss, refs.map(_.name), f(refs), behavior, errorId)
   }
 
-  def makestruct(fields: (String, IR)*): MakeStruct = MakeStruct(fields)
-  def maketuple(fields: IR*): MakeTuple = MakeTuple(fields.zipWithIndex.map{ case (field, idx) => (idx, field)})
+  def makestruct(fields: (String, IR)*): MakeStruct = MakeStruct(fields.toArray[(String, IR)])
+  def maketuple(fields: IR*): MakeTuple = MakeTuple(fields.toArray.zipWithIndex.map { case (field, idx) => (idx, field) })
 
   def aggBindIR(v: IR, isScan: Boolean = false)(body: Ref => IR): IR = {
     val ref = Ref(genUID(), v.typ)
@@ -243,6 +247,8 @@ package object ir {
     }
     s
   }
+
+  def logIR(result: IR, messages: AnyRef*): IR = ConsoleLog(strConcat(messages: _*), result)
 
   implicit def toRichIndexedSeqEmitSettable(s: IndexedSeq[EmitSettable]): RichIndexedSeqEmitSettable = new RichIndexedSeqEmitSettable(s)
 

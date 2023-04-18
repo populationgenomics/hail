@@ -3,14 +3,15 @@ import itertools
 import pandas
 import numpy as np
 import pyspark
-from typing import Optional, Dict, Callable, Sequence
+from typing import Optional, Dict, Callable, Sequence, Union
 
 from hail.expr.expressions import Expression, StructExpression, \
     BooleanExpression, expr_struct, expr_any, expr_bool, analyze, Indices, \
     construct_reference, to_expr, construct_expr, extract_refs_by_indices, \
     ExpressionException, TupleExpression, unify_all, NumericExpression, \
     StringExpression, CallExpression, CollectionExpression, DictExpression, \
-    IntervalExpression, LocusExpression, NDArrayExpression, expr_stream
+    IntervalExpression, LocusExpression, NDArrayExpression, expr_stream, \
+    expr_array
 from hail.expr.types import hail_type, tstruct, types_match, tarray, tset, dtypes_from_pandas
 from hail.expr.table_type import ttable
 import hail.ir as ir
@@ -18,6 +19,7 @@ from hail.typecheck import typecheck, typecheck_method, dictof, anytype, \
     anyfunc, nullable, sequenceof, oneof, numeric, lazy, enumeration, \
     table_key_type, func_spec
 from hail.utils import deduplicate
+from hail.utils.interval import Interval
 from hail.utils.placement_tree import PlacementTree
 from hail.utils.java import Env, info, warning
 from hail.utils.misc import wrap_to_tuple, storage_level, plural, \
@@ -458,8 +460,12 @@ class Table(ExprContainer):
                       schema=nullable(hail_type),
                       key=table_key_type,
                       n_partitions=nullable(int),
-                      partial_type=nullable(dict))
-    def parallelize(cls, rows, schema=None, key=None, n_partitions=None, *, partial_type=None) -> 'Table':
+                      partial_type=nullable(dict),
+                      globals=nullable(expr_struct()))
+    def parallelize(cls, rows, schema=None, key=None, n_partitions=None, *,
+                    partial_type=None,
+                    globals=None
+                    ) -> 'Table':
         """Parallelize a local array of structs into a distributed table.
 
         Examples
@@ -519,6 +525,8 @@ class Table(ExprContainer):
         partial_type : :obj:`dict`, optional
             A value type which may elide fields or have ``None`` in arbitrary places. The partial
             type is used by hail where the type cannot be imputed.
+        globals: :class:`dict` of :class:`str` to :obj:`any` or :class:`.StructExpression`, optional
+            A `dict` or `struct{..}` containing supplementary global data.
 
         Returns
         -------
@@ -537,12 +545,55 @@ class Table(ExprContainer):
         if not isinstance(rows.dtype.element_type, tstruct):
             raise TypeError("'parallelize' expects an array with element type 'struct', found '{}'"
                             .format(rows.dtype))
-        table = Table(ir.TableParallelize(ir.MakeStruct([
-            ('rows', rows._ir),
-            ('global', ir.MakeStruct([]))]), n_partitions))
+        table = Table(ir.TableParallelize(
+            ir.MakeStruct([
+                ('rows', rows._ir),
+                ('global', (globals or hl.struct())._ir)
+            ]),
+            n_partitions
+        ))
         if key is not None:
             table = table.key_by(*key)
         return table
+
+    @staticmethod
+    @typecheck(
+        contexts=expr_array(expr_any),
+        partitions=oneof(sequenceof(Interval), int),
+        rowfn=func_spec(2, expr_array(expr_struct())),
+        globals=nullable(expr_struct())
+    )
+    def _generate(
+        contexts: 'hl.ArrayExpression',
+        partitions: 'Union[Sequence[Interval], int]',
+        rowfn: 'Callable[[hl.Expression, hl.StructExpression], hl.ArrayExpression]',
+        globals: 'Optional[hl.StructExpression]' = None,
+    ) -> 'Table':
+        """
+        Never you mind.
+        """
+        context_name = f"context_{Env.get_uid()}"
+        ctype = contexts.dtype.element_type
+        cexpr = construct_expr(ir.Ref(context_name, ctype), ctype)
+
+        globals_name = f"globals_{Env.get_uid()}"
+        globals = globals or hl.struct()
+        gexpr = construct_expr(ir.Ref(globals_name, globals.dtype), globals.dtype)
+
+        body = ir.toStream(rowfn(cexpr, gexpr)._ir)
+
+        if isinstance(partitions, int):
+            partitions = [
+                Interval(hl.Struct(), hl.Struct(), True, True)
+                for _ in range(partitions)
+            ]
+
+        partitioner = ir.Partitioner(partitions[0].point_type, partitions)
+
+        return Table(ir.TableGen(
+            ir.toStream(contexts._ir), globals._ir, context_name,
+            globals_name, body, partitioner
+        ))
 
     @typecheck_method(keys=oneof(str, expr_any),
                       named_keys=expr_any)
@@ -1094,6 +1145,8 @@ class Table(ExprContainer):
         delimiter : :class:`str`
             Field delimiter.
         """
+        hl.current_backend().validate_file_scheme(output)
+
         parallel = ir.ExportType.default(parallel)
         Env.backend().execute(
             ir.TableWrite(self._tir, ir.TableTextWriter(output, types_file, header, parallel, delimiter)))
@@ -1271,6 +1324,8 @@ class Table(ExprContainer):
         >>> table1 = table1.checkpoint('output/table_checkpoint.ht')
 
         """
+        hl.current_backend().validate_file_scheme(output)
+
         if _codec_spec is None:
             _codec_spec = """{
   "name": "LEB128BufferSpec",
@@ -1331,6 +1386,8 @@ class Table(ExprContainer):
         overwrite : bool
             If ``True``, overwrite an existing file at the destination.
         """
+
+        hl.current_backend().validate_file_scheme(output)
 
         Env.backend().execute(ir.TableWrite(self._tir, ir.TableNativeWriter(output, overwrite, stage_locally, _codec_spec)))
 
@@ -1457,6 +1514,8 @@ class Table(ExprContainer):
         overwrite : bool
             If ``True``, overwrite an existing file at the destination.
         """
+
+        hl.current_backend().validate_file_scheme(output)
 
         Env.backend().execute(
             ir.TableWrite(
@@ -3465,15 +3524,18 @@ class Table(ExprContainer):
         """
         return Env.spark_backend('to_spark').to_spark(self, flatten)
 
-    @typecheck_method(flatten=bool)
-    def to_pandas(self, flatten=True):
+    @typecheck_method(flatten=bool, types=dictof(oneof(str, hail_type), str))
+    def to_pandas(self, flatten=True, types={}):
         """Converts this table to a Pandas DataFrame.
 
         Parameters
         ----------
         flatten : :obj:`bool`
             If ``True``, :meth:`flatten` before converting to Pandas DataFrame.
-
+        types : :obj:`dict` mapping :class:`str` or :class:`.HailType` to :class:`str`
+            Dictionary defining Pandas DataFrame dtypes.
+            If a key is :class:`str`, a field with the specified key name is mapped to a Pandas dtype.
+            If a key is :class:`.HailType`, all fields with the specified :class:`.HailType` are mapped to a Pandas dtype.
         Returns
         -------
         :class:`.pandas.DataFrame`
@@ -3485,21 +3547,22 @@ class Table(ExprContainer):
         column_struct_array = table.aggregate(hl.struct(**collect_dict))
         columns = list(column_struct_array.keys())
         data_dict = {}
+        hl_default_dtypes = {
+            hl.tstr: "string",
+            hl.tint32: "Int32",
+            hl.tint64: "Int64",
+            hl.tfloat32: "Float32",
+            hl.tfloat64: "Float64",
+            hl.tbool: "boolean"
+        }
+        all_types = {**hl_default_dtypes, **types}
 
         for column in columns:
             hl_dtype = dtypes_struct[column]
-            if hl_dtype == hl.tstr:
-                pd_dtype = 'string'
-            elif hl_dtype == hl.tint32:
-                pd_dtype = 'Int32'
-            elif hl_dtype == hl.tint64:
-                pd_dtype = 'Int64'
-            elif hl_dtype == hl.tfloat32:
-                pd_dtype = 'Float32'
-            elif hl_dtype == hl.tfloat64:
-                pd_dtype = 'Float64'
-            elif hl_dtype == hl.tbool:
-                pd_dtype = 'boolean'
+            if column in all_types:
+                pd_dtype = all_types[column]
+            elif hl_dtype in all_types:
+                pd_dtype = all_types[hl_dtype]
             else:
                 pd_dtype = hl_dtype.to_numpy()
             data_dict[column] = pandas.Series(column_struct_array[column], dtype=pd_dtype)
@@ -3740,7 +3803,7 @@ class Table(ExprContainer):
 
     @typecheck_method(parts=sequenceof(int), keep=bool)
     def _filter_partitions(self, parts, keep=True) -> 'Table':
-        return Table(ir.TableToTableApply(self._tir, {'name': 'TableFilterPartitions', 'parts': parts, 'keep': keep})).persist()
+        return Table(ir.TableToTableApply(self._tir, {'name': 'TableFilterPartitions', 'parts': parts, 'keep': keep}))
 
     @typecheck_method(entries_field_name=str,
                       cols_field_name=str,
@@ -3824,12 +3887,12 @@ class Table(ExprContainer):
             raise ValueError('Table._map_partitions must preserve key fields')
 
         body_ir = ir.Let('global', ir.Ref(globals_uid, self._global_type), body._ir)
-        return Table(ir.TableMapPartitions(self._tir, globals_uid, rows_uid, body_ir))
+        return Table(ir.TableMapPartitions(self._tir, globals_uid, rows_uid, body_ir, len(self.key), len(self.key)))
 
     def _calculate_new_partitions(self, n_partitions):
         """returns a set of range bounds that can be passed to write"""
         return Env.backend().execute(ir.TableToValueApply(
-            self._tir,
+            self.select().select_globals()._tir,
             {'name': 'TableCalculateNewPartitions',
              'nPartitions': n_partitions}))
 

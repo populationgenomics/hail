@@ -1,6 +1,6 @@
 package is.hail.expr.ir
 
-import is.hail.annotations.{Annotation, Region, SafeRow}
+import is.hail.annotations.{Annotation, Region}
 import is.hail.asm4s.Value
 import is.hail.backend.ExecuteContext
 import is.hail.expr.ir.ArrayZipBehavior.ArrayZipBehavior
@@ -9,14 +9,14 @@ import is.hail.expr.ir.functions._
 import is.hail.expr.ir.lowering.TableStageDependency
 import is.hail.expr.ir.streams.StreamProducer
 import is.hail.io.avro.{AvroPartitionReader, AvroSchemaSerializer}
-import is.hail.io.fs.FS
+import is.hail.io.bgen.BgenPartitionReader
 import is.hail.io.{AbstractTypedCodecSpec, BufferSpec, TypedCodecSpec}
 import is.hail.rvd.RVDSpecMaker
 import is.hail.types.encoded._
 import is.hail.types.physical._
+import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.concrete.SJavaString
 import is.hail.types.physical.stypes.interfaces._
-import is.hail.types.physical.stypes._
 import is.hail.types.virtual._
 import is.hail.types.{RIterable, RStruct, TypeWithRequiredness, tcoerce}
 import is.hail.utils.{FastIndexedSeq, _}
@@ -69,15 +69,18 @@ sealed trait TypedIR[T <: Type] extends IR {
   override def typ: T = tcoerce[T](super.typ)
 }
 
+// Mark Refs and constants as IRs that are safe to duplicate
+sealed trait TrivialIR extends IR
+
 object Literal {
   def coerce(t: Type, x: Any): IR = {
     if (x == null)
       return NA(t)
     t match {
-      case TInt32 => I32(x.asInstanceOf[Int])
-      case TInt64 => I64(x.asInstanceOf[Long])
-      case TFloat32 => F32(x.asInstanceOf[Float])
-      case TFloat64 => F64(x.asInstanceOf[Double])
+      case TInt32 => I32(x.asInstanceOf[Number].intValue())
+      case TInt64 => I64(x.asInstanceOf[Number].longValue())
+      case TFloat32 => F32(x.asInstanceOf[Number].floatValue())
+      case TFloat64 => F64(x.asInstanceOf[Number].doubleValue())
       case TBoolean => if (x.asInstanceOf[Boolean]) True() else False()
       case TString => Str(x.asInstanceOf[String])
       case _ => Literal(t, x)
@@ -138,16 +141,16 @@ class WrappedByteArrays(val ba: Array[Array[Byte]]) {
   }
 }
 
-final case class I32(x: Int) extends IR
-final case class I64(x: Long) extends IR
-final case class F32(x: Float) extends IR
-final case class F64(x: Double) extends IR
-final case class Str(x: String) extends IR {
+final case class I32(x: Int) extends IR with TrivialIR
+final case class I64(x: Long) extends IR with TrivialIR
+final case class F32(x: Float) extends IR with TrivialIR
+final case class F64(x: Double) extends IR with TrivialIR
+final case class Str(x: String) extends IR with TrivialIR {
   override def toString(): String = s"""Str("${StringEscapeUtils.escapeString(x)}")"""
 }
-final case class True() extends IR
-final case class False() extends IR
-final case class Void() extends IR
+final case class True() extends IR with TrivialIR
+final case class False() extends IR with TrivialIR
+final case class Void() extends IR with TrivialIR
 
 object UUID4 {
   def apply(): UUID4 = UUID4(genUID())
@@ -163,7 +166,7 @@ final case class UUID4(id: String) extends IR
 final case class Cast(v: IR, _typ: Type) extends IR
 final case class CastRename(v: IR, _typ: Type) extends IR
 
-final case class NA(_typ: Type) extends IR
+final case class NA(_typ: Type) extends IR with TrivialIR
 final case class IsNA(value: IR) extends IR
 
 final case class Coalesce(values: Seq[IR]) extends IR {
@@ -177,7 +180,7 @@ final case class If(cond: IR, cnsq: IR, altr: IR) extends IR
 final case class AggLet(name: String, value: IR, body: IR, isScan: Boolean) extends IR
 final case class Let(name: String, value: IR, body: IR) extends IR
 
-sealed abstract class BaseRef extends IR {
+sealed abstract class BaseRef extends IR with TrivialIR {
   def name: String
   def _typ: Type
 }
@@ -202,10 +205,10 @@ final case class ApplyComparisonOp(op: ComparisonOp[_], l: IR, r: IR) extends IR
 object MakeArray {
   def apply(args: IR*): MakeArray = {
     assert(args.nonEmpty)
-    MakeArray(args, TArray(args.head.typ))
+    MakeArray(args.toArray, TArray(args.head.typ))
   }
 
-  def unify(ctx: ExecuteContext, args: Seq[IR], requestedType: TArray = null): MakeArray = {
+  def unify(ctx: ExecuteContext, args: IndexedSeq[IR], requestedType: TArray = null): MakeArray = {
     assert(requestedType != null || args.nonEmpty)
 
     if(args.nonEmpty)
@@ -220,10 +223,10 @@ object MakeArray {
   }
 }
 
-final case class MakeArray(args: Seq[IR], _typ: TArray) extends IR
+final case class MakeArray(args: IndexedSeq[IR], _typ: TArray) extends IR
 
 object MakeStream {
-  def unify(ctx: ExecuteContext, args: Seq[IR], requiresMemoryManagementPerElement: Boolean = false, requestedType: TStream = null): MakeStream = {
+  def unify(ctx: ExecuteContext, args: IndexedSeq[IR], requiresMemoryManagementPerElement: Boolean = false, requestedType: TStream = null): MakeStream = {
     assert(requestedType != null || args.nonEmpty)
 
     if (args.nonEmpty)
@@ -238,7 +241,7 @@ object MakeStream {
   }
 }
 
-final case class MakeStream(args: Seq[IR], _typ: TStream, requiresMemoryManagementPerElement: Boolean = false) extends IR
+final case class MakeStream(args: IndexedSeq[IR], _typ: TStream, requiresMemoryManagementPerElement: Boolean = false) extends IR
 
 object ArrayRef {
   def apply(a: IR, i: IR): ArrayRef = ArrayRef(a, i, ErrorIDs.NO_ERROR)
@@ -248,6 +251,7 @@ final case class ArrayRef(a: IR, i: IR, errorID: Int) extends IR
 final case class ArraySlice(a: IR, start: IR, stop: Option[IR], step:IR = I32(1), errorID: Int = ErrorIDs.NO_ERROR) extends IR
 final case class ArrayLen(a: IR) extends IR
 final case class ArrayZeros(length: IR) extends IR
+final case class ArrayMaximalIndependentSet(edges: IR, tieBreaker: Option[(String, String, IR)]) extends IR
 
 /**
   * [[StreamIota]] is an infinite stream producer, whose element is an integer starting at `start`, updated by
@@ -447,10 +451,15 @@ sealed trait NDArrayIR extends TypedIR[TNDArray] {
 }
 
 object MakeNDArray {
-  def fill(elt: IR, shape: IndexedSeq[Long], rowMajor: IR): MakeNDArray =
+  def fill(elt: IR, shape: IndexedSeq[IR], rowMajor: IR): MakeNDArray = {
+    val flatSize: IR = if (shape.nonEmpty)
+      shape.reduce { (l, r) => l * r }
+    else
+      0L
     MakeNDArray(
-      ToArray(StreamMap(StreamRange(0, shape.product.toInt, 1, errorID = ErrorIDs.NO_ERROR), genUID(), elt)),
-      MakeTuple.ordered(shape.map(I64)), rowMajor, ErrorIDs.NO_ERROR)
+      ToArray(mapIR(rangeIR(flatSize.toI))(_ => elt)),
+      MakeTuple.ordered(shape), rowMajor, ErrorIDs.NO_ERROR)
+  }
 }
 
 final case class MakeNDArray(data: IR, shape: IR, rowMajor: IR, errorId: Int) extends NDArrayIR
@@ -611,8 +620,8 @@ final case class RunAgg(body: IR, result: IR, signature: IndexedSeq[AggStateSig]
 final case class RunAggScan(array: IR, name: String, init: IR, seqs: IR, result: IR, signature: IndexedSeq[AggStateSig]) extends IR
 
 final case class Begin(xs: IndexedSeq[IR]) extends IR
-final case class MakeStruct(fields: Seq[(String, IR)]) extends IR
-final case class SelectFields(old: IR, fields: Seq[String]) extends IR
+final case class MakeStruct(fields: IndexedSeq[(String, IR)]) extends IR
+final case class SelectFields(old: IR, fields: IndexedSeq[String]) extends IR
 
 object InsertFields {
   def apply(old: IR, fields: Seq[(String, IR)]): InsertFields = InsertFields(old, fields, None)
@@ -634,10 +643,10 @@ object GetFieldByIdx {
 final case class GetField(o: IR, name: String) extends IR
 
 object MakeTuple {
-  def ordered(types: Seq[IR]): MakeTuple = MakeTuple(types.iterator.zipWithIndex.map { case (ir, i) => (i, ir) }.toFastIndexedSeq)
+  def ordered(types: IndexedSeq[IR]): MakeTuple = MakeTuple(types.zipWithIndex.map { case (ir, i) => (i, ir) })
 }
 
-final case class MakeTuple(fields: Seq[(Int, IR)]) extends IR
+final case class MakeTuple(fields: IndexedSeq[(Int, IR)]) extends IR
 final case class GetTupleElement(o: IR, idx: Int) extends IR
 
 object In {
@@ -750,6 +759,7 @@ object PartitionReader {
       classOf[PartitionNativeIntervalReader],
       classOf[PartitionZippedNativeReader],
       classOf[PartitionZippedIndexedNativeReader],
+      classOf[BgenPartitionReader],
       classOf[AbstractTypedCodecSpec],
       classOf[TypedCodecSpec],
       classOf[AvroPartitionReader]),
@@ -761,12 +771,12 @@ object PartitionReader {
     new ETypeSerializer +
     new AvroSchemaSerializer
 
-  def extract(fs: FS, jv: JValue): PartitionReader = {
+  def extract(ctx: ExecuteContext, jv: JValue): PartitionReader = {
     (jv \ "name").extract[String] match {
       case "PartitionNativeIntervalReader" =>
         val path = (jv \ "path").extract[String]
-        val spec = TableNativeReader.read(fs, path, None).spec
-        PartitionNativeIntervalReader(path, spec, (jv \ "uidFieldName").extract[String])
+        val spec = TableNativeReader.read(ctx.fs, path, None).spec
+        PartitionNativeIntervalReader(ctx.stateManager, path, spec, (jv \ "uidFieldName").extract[String])
       case _ => jv.extract[PartitionReader]
     }
   }
@@ -826,6 +836,7 @@ abstract class PartitionReader {
   def emitStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
+    mb: EmitMethodBuilder[_],
     context: EmitCode,
     requestedType: TStruct
   ): IEmitCode
@@ -903,7 +914,7 @@ final case class WritePartition(value: IR, writeCtx: IR, writer: PartitionWriter
 final case class WriteMetadata(writeAnnotations: IR, writer: MetadataWriter) extends IR
 
 final case class ReadValue(path: IR, spec: AbstractTypedCodecSpec, requestedType: Type) extends IR
-final case class WriteValue(value: IR, path: IR, spec: AbstractTypedCodecSpec) extends IR
+final case class WriteValue(value: IR, path: IR, spec: AbstractTypedCodecSpec, stagingFile: Option[IR] = None) extends IR
 
 class PrimitiveIR(val self: IR) extends AnyVal {
   def +(other: IR): IR = {

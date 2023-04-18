@@ -4,8 +4,10 @@ import is.hail.backend.ExecuteContext
 import is.hail.expr.ir.streams.StreamUtils
 import is.hail.types.tcoerce
 import is.hail.types.virtual._
-import is.hail.utils._
 import is.hail.utils.StackSafe._
+import is.hail.utils._
+
+import scala.reflect.ClassTag
 
 object TypeCheck {
   def apply(ctx: ExecuteContext, ir: BaseIR): Unit = {
@@ -31,7 +33,7 @@ object TypeCheck {
         .zipWithIndex
         .foreachRecur { case (child, i) =>
           for {
-            _ <- check(ctx, child, ChildBindings(ir, i, env))
+            _ <- call(check(ctx, child, ChildBindings(ir, i, env)))
           } yield {
             if (child.typ == TVoid) {
               checkVoidTypedChild(ctx, ir, i, env)
@@ -163,6 +165,13 @@ object TypeCheck {
         assert(x.typ == tcoerce[TArray](a.typ))
       case ArrayLen(a) =>
         assert(a.typ.isInstanceOf[TArray])
+      case ArrayMaximalIndependentSet(edges, tieBreaker) =>
+        assert(edges.typ.isInstanceOf[TArray])
+        val edgeType = tcoerce[TArray](edges.typ).elementType
+        assert(edgeType.isInstanceOf[TBaseStruct])
+        val Array(leftType, rightType) = edgeType.asInstanceOf[TBaseStruct].types
+        assert(leftType == rightType)
+        tieBreaker.foreach { case (_, _, tb) => assert(tb.typ == TFloat64) }
       case StreamIota(start, step, _) =>
         assert(start.typ == TInt32)
         assert(step.typ == TInt32)
@@ -530,14 +539,15 @@ object TypeCheck {
       case x@ReadValue(path, spec, requestedType) =>
         assert(path.typ == TString)
         assert(spec.encodedType.decodedPType(requestedType).virtualType == requestedType)
-      case x@WriteValue(value, path, spec) =>
+      case WriteValue(_, path, _, stagingFile) =>
         assert(path.typ == TString)
+        assert(stagingFile.forall(_.typ == TString))
       case LiftMeOut(_) =>
       case Consume(_) =>
       case TableMapRows(child, newRow) =>
         val newFieldSet = newRow.typ.asInstanceOf[TStruct].fieldNames.toSet
         assert(child.typ.key.forall(newFieldSet.contains))
-      case TableMapPartitions(child, globalName, partitionStreamName, body) =>
+      case TableMapPartitions(child, globalName, partitionStreamName, body, requestedKey, allowedOverlap) =>
         assert(StreamUtils.isIterationLinear(body, partitionStreamName), "must iterate over the partition exactly once")
         val newRowType = body.typ.asInstanceOf[TStream].elementType.asInstanceOf[TStruct]
         child.typ.key.foreach { k => if (!newRowType.hasField(k)) throw new RuntimeException(s"prev key: ${child.typ.key}, new row: ${newRowType}")}
@@ -552,4 +562,13 @@ object TypeCheck {
       case _: BlockMatrixIR =>
     }
   }
+
+  def coerce[A <: Type](argname: String, typ: Type)(implicit tag: ClassTag[A]): A =
+    if (tag.runtimeClass.isInstance(typ)) typ.asInstanceOf[A]
+    else throw new IllegalArgumentException(
+      s"""'$argname': Type mismatch.
+         |  Expected: ${tag.runtimeClass.getName}
+         |    Actual: ${typ.getClass.getName}""".stripMargin
+    )
+
 }
