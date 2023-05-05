@@ -47,7 +47,7 @@ steps:
           - azure
   - kind: runImage
     name: copy_third_party_images
-    image: quay.io/skopeo/stable:v1.11.2
+    image: quay.io/skopeo/stable:v1.11.1
     script: |
       set -ex
 
@@ -140,7 +140,7 @@ steps:
       valueFrom: hail_ubuntu_image.image
     script: |
       set -ex
-      pip install pip-tools==6.13.0
+      pip install pip-tools==6.9.0
       cd /io/repo
       chmod 755 ./check_pip_requirements.sh
       ./check_pip_requirements.sh \
@@ -592,17 +592,17 @@ steps:
     dependsOn:
       - merge_code
       - hail_ubuntu_image
-  # - kind: buildImage2
-  #   name: hailgenetics_vep_grch38_95_image
-  #   dockerFile: /io/repo/docker/hailgenetics/vep/grch38/95/Dockerfile
-  #   contextPath: /io/repo/docker/vep/
-  #   publishAs: hailgenetics/vep-grch38-95
-  #   inputs:
-  #     - from: /repo
-  #       to: /io/repo
-  #   dependsOn:
-  #     - merge_code
-  #     - hail_ubuntu_image
+  - kind: buildImage2
+    name: hailgenetics_vep_grch38_95_image
+    dockerFile: /io/repo/docker/hailgenetics/vep/grch38/95/Dockerfile
+    contextPath: /io/repo/docker/vep/
+    publishAs: hailgenetics/vep-grch38-95
+    inputs:
+      - from: /repo
+        to: /io/repo
+    dependsOn:
+      - merge_code
+      - hail_ubuntu_image
   - kind: buildImage2
     name: monitoring_image
     dockerFile: /io/repo/monitoring/Dockerfile
@@ -829,24 +829,29 @@ steps:
       - hail_build_image
       - merge_code
   - kind: runImage
-    name: jvm_entryway_jar
+    name: compile_batch_worker_jvm_entryway
     image:
-      valueFrom: hail_build_image.image
+      valueFrom: base_image.image
     script: |
       set -ex
 
-      cd /io/batch/jvm-entryway
+      cd /io
 
-      chmod 755 ./gradlew
-      ./gradlew shadowJar
+      curl -sSfL https://github.com/kohlschutter/junixsocket/releases/download/junixsocket-parent-2.3.3/junixsocket-selftest-2.3.3-jar-with-dependencies.jar \
+           > junixsocket-selftest-2.3.3-jar-with-dependencies.jar
+
+      javac -cp junixsocket-selftest-2.3.3-jar-with-dependencies.jar \
+            batch/src/main/java/is/hail/JVMEntryway.java
     inputs:
       - from: /repo/batch
         to: /io/batch
     outputs:
-      - from: /io/batch/jvm-entryway/build/libs/jvm-entryway.jar
-        to: /jvm-entryway.jar
+      - from: /io/junixsocket-selftest-2.3.3-jar-with-dependencies.jar
+        to: /junixsocket-selftest-2.3.3-jar-with-dependencies.jar
+      - from: /io/batch/src/main/java/is/hail
+        to: /batch-jvm-entryway-classes
     dependsOn:
-      - hail_build_image
+      - base_image
       - merge_code
   - kind: buildImage2
     name: batch_worker_image
@@ -874,14 +879,16 @@ steps:
         to: /io/repo/web_common
       - from: /repo/letsencrypt/subdomains.txt
         to: /repo/letsencrypt/subdomains.txt
-      - from: /jvm-entryway.jar
-        to: /io/repo/batch/jvm-entryway/build/libs/jvm-entryway.jar
+      - from: /batch-jvm-entryway-classes
+        to: /io/repo/batch/src/main/java/is/hail
+      - from: /junixsocket-selftest-2.3.3-jar-with-dependencies.jar
+        to: /io/repo/batch/jars/junixsocket-selftest-2.3.3-jar-with-dependencies.jar
       - from: /hail_version
         to: /io/repo/hail_version
     dependsOn:
       - merge_code
       - hail_ubuntu_image
-      - jvm_entryway_jar
+      - compile_batch_worker_jvm_entryway
   - kind: buildImage2
     name: memory_image
     dockerFile: /io/repo/memory/Dockerfile
@@ -995,13 +1002,13 @@ steps:
       - build_hail
       - merge_code
   - kind: buildImage2
-    name: hail_pip_installed_python39_image
-    dockerFile: /io/repo/hail/Dockerfile.hail-pip-installed-python39
+    name: hail_pip_installed_python37_image
+    dockerFile: /io/repo/hail/Dockerfile.hail-pip-installed-python37
     contextPath: /io/repo
-    publishAs: hail-pip-installed-python39
+    publishAs: hail-pip-installed-python37
     inputs:
-      - from: /repo/hail/Dockerfile.hail-pip-installed-python39
-        to: /io/repo/hail/Dockerfile.hail-pip-installed-python39
+      - from: /repo/hail/Dockerfile.hail-pip-installed-python37
+        to: /io/repo/hail/Dockerfile.hail-pip-installed-python37
       - from: /repo/hail/python/pinned-requirements.txt
         to: /io/repo/hail/python/pinned-requirements.txt
       - from: /repo/hail/python/dev/pinned-requirements.txt
@@ -1039,9 +1046,9 @@ steps:
       - hail_ubuntu_image
       - merge_code
   - kind: runImage
-    name: check_hail_python39
+    name: check_hail_python37
     image:
-      valueFrom: hail_pip_installed_python39_image.image
+      valueFrom: hail_pip_installed_python37_image.image
     script: |
       set -x
       SITE_PACKAGES=$(pip3 show hail | grep Location | sed 's/Location: //')
@@ -1056,7 +1063,7 @@ steps:
 
       exit $exit_status
     dependsOn:
-      - hail_pip_installed_python39_image
+      - hail_pip_installed_python37_image
   - kind: runImage
     name: check_hail_python38
     image:
@@ -2162,9 +2169,6 @@ steps:
       - name: dedup-attempt-resources
         script: /io/sql/dedup_attempt_resources.py
         online: true
-      - name: mitigate-bad-attempt-resources-trigger
-        script: /io/sql/mitigate-bad-attempt-resources-trigger.sql
-        online: true
     inputs:
       - from: /repo/batch/sql
         to: /io/sql
@@ -2332,6 +2336,7 @@ steps:
       export HAIL_TEST_RESOURCES_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/test/resources/"
       export HAIL_DOCTEST_DATA_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/doctest/data/"
       export HAIL_GENETICS_VEP_GRCH37_85_IMAGE={{ hailgenetics_vep_grch37_85_image.image }}
+      export HAIL_GENETICS_VEP_GRCH38_95_IMAGE={{ hailgenetics_vep_grch38_95_image.image }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       if [[ "$HAIL_CLOUD" = "gcp" ]]
@@ -2402,6 +2407,7 @@ steps:
       - upload_test_resources_to_blob_storage
       - build_hail_jar_and_wheel_only
       - hailgenetics_vep_grch37_85_image
+      - hailgenetics_vep_grch38_95_image
   - kind: buildImage2
     name: netcat_ubuntu_image
     publishAs: netcat
@@ -2744,6 +2750,10 @@ steps:
         namespace:
           valueFrom: default_ns.name
         mountPath: /user-tokens
+      - name: hail-ci-0-1-service-account-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /secret/ci-secrets
       - name: ssl-config-ci-tests
         namespace:
           valueFrom: default_ns.name
@@ -3196,6 +3206,7 @@ steps:
                              docker://{{ hailgenetics_hail_image.image }} \
                              docker://{{ hailgenetics_hailtop_image.image }} \
                              docker://{{ hailgenetics_vep_grch37_85_image.image }} \
+                             docker://{{ hailgenetics_vep_grch38_95_image.image }} \
                              /io/wheel-for-azure/hail-*-py3-none-any.whl \
                              /io/www.tar.gz
     inputs:
@@ -3239,6 +3250,7 @@ steps:
       - hailgenetics_hail_image
       - hailgenetics_hailtop_image
       - hailgenetics_vep_grch37_85_image
+      - hailgenetics_vep_grch38_95_image
       - build_wheel_for_azure
       - make_docs
     clouds:
@@ -3297,7 +3309,7 @@ steps:
       - gcp
   - kind: runImage
     name: mirror_hailgenetics_images
-    image: quay.io/skopeo/stable:v1.11.2
+    image: quay.io/skopeo/stable:v1.11.1
     script: |
       set -ex
 
