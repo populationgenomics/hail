@@ -47,7 +47,6 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx_autodoc_typehints',
     'IPython.sphinxext.ipython_console_highlighting',
-    'sphinx_rtd_theme',
 ]
 
 automodapi_inheritance_diagram = False
@@ -78,7 +77,7 @@ master_doc = 'index'
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = 'en'
+language = None
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -118,7 +117,7 @@ html_theme = 'sphinx_rtd_theme'
 # html_sidebars = {}
 
 # https://www.sphinx-doc.org/en/master/usage/extensions/intersphinx.html
-intersphinx_mapping = {'python': ('https://docs.python.org/3.8', None)}
+intersphinx_mapping = {'python': ('https://docs.python.org/3.7', None)}
 
 
 # -- Extension configuration -------------------------------------------------

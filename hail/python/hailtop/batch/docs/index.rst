@@ -22,7 +22,7 @@ Contents
    Batch Service <service>
    Cookbooks <cookbook>
    Reference (Python API) <api>
-   Change Log And Version Policy <change_log>
+   Change Log <change_log>
 
 
 Indices and tables
