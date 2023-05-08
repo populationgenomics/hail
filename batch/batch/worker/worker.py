@@ -1636,6 +1636,8 @@ class DockerJob(Job):
 
         if self.cloudfuse:
             for config in self.cloudfuse:
+                assert config['read_only']
+                assert config['mount_path'] != '/io'
                 bucket = config['bucket']
                 self.main_volume_mounts.append(
                     {
