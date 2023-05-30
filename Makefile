@@ -3,7 +3,8 @@
 include config.mk
 
 SERVICES := auth batch ci memory notebook monitoring website
-SERVICES_IMAGES := $(patsubst %, %-image, $(SERVICES))
+SERVICES_PLUS_ADMIN_POD := $(SERVICES) admin-pod
+SERVICES_IMAGES := $(patsubst %, %-image, $(SERVICES_PLUS_ADMIN_POD))
 SERVICES_MODULES := $(SERVICES) gear web_common
 CHECK_SERVICES_MODULES := $(patsubst %, check-%, $(SERVICES_MODULES))
 
@@ -70,6 +71,19 @@ isort-%:
 .PHONY: check-pip-requirements
 check-pip-requirements:
 	./check_pip_requirements.sh \
+		hail/python/hailtop \
+		hail/python \
+		hail/python/dev \
+		gear \
+		web_common \
+		auth \
+		batch \
+		ci \
+		memory
+
+.PHONY: check-linux-pip-requirements
+check-linux-pip-requirements:
+	./check_linux_pip_requirements.sh \
 		hail/python/hailtop \
 		hail/python \
 		hail/python/dev \
