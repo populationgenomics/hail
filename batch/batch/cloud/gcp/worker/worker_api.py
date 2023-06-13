@@ -49,7 +49,7 @@ class GCPWorkerAPI(CloudWorkerAPI[GCPUserCredentials]):
     def get_compute_client(self) -> aiogoogle.GoogleComputeClient:
         return self._compute_client
 
-    def user_credentials(self, credentials: Dict[str, bytes]) -> GCPUserCredentials:
+    def user_credentials(self, credentials: Dict[str, str]) -> GCPUserCredentials:
         return GCPUserCredentials(credentials)
 
     async def worker_container_registry_credentials(self, session: httpx.ClientSession) -> ContainerRegistryCredentials:
