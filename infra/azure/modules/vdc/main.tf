@@ -69,16 +69,13 @@ resource "azurerm_kubernetes_cluster" "vdc" {
     type = "SystemAssigned"
   }
 
-  addon_profile {
-    oms_agent {
-      enabled = true
-      log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
-    }
+  oms_agent {
+    log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
   }
 
   # https://github.com/hashicorp/terraform-provider-azurerm/issues/7396
   lifecycle {
-    ignore_changes = [addon_profile.0, default_node_pool.0.node_count]
+    ignore_changes = [oms_agent, default_node_pool.0.node_count]
   }
 }
 
