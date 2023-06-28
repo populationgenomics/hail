@@ -45,7 +45,7 @@ resource "azurerm_mysql_flexible_server" "db" {
   # │   on modules/db/main.tf line 22, in resource "azurerm_mysql_flexible_server" "db":
   # │   22: resource "azurerm_mysql_flexible_server" "db" {
   # │
-  # zone = 1
+  zone = 1
 
   delegated_subnet_id = var.subnet_id
   private_dns_zone_id = azurerm_private_dns_zone.db.id

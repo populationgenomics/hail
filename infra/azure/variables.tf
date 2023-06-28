@@ -61,5 +61,6 @@ variable oauth2_developer_redirect_uris {
 }
 
 variable storage_account_suffix {
-  type = string
+  type    = string
+  default = ""
 }
