@@ -60,7 +60,7 @@ google-api-core==2.11.0
     #   -c hail/gear/../hail/python/hailtop/pinned-requirements.txt
     #   -c hail/gear/../hail/python/pinned-requirements.txt
     #   google-api-python-client
-google-api-python-client==2.88.0
+google-api-python-client==2.91.0
     # via google-cloud-profiler
 google-auth==2.19.1
     # via
@@ -129,11 +129,11 @@ pyasn1-modules==0.3.0
     #   -c hail/gear/../hail/python/hailtop/pinned-requirements.txt
     #   -c hail/gear/../hail/python/pinned-requirements.txt
     #   google-auth
-pymysql==1.0.3
+pymysql==1.1.0
     # via
     #   -r hail/gear/requirements.txt
     #   aiomysql
-pyparsing==3.0.9
+pyparsing==3.1.0
     # via
     #   -c hail/gear/../hail/python/dev/pinned-requirements.txt
     #   httplib2

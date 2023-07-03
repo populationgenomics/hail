@@ -104,7 +104,7 @@ idna==3.4
     #   requests
 imagesize==1.4.1
     # via sphinx
-importlib-metadata==6.6.0
+importlib-metadata==6.7.0
     # via
     #   jupyter-client
     #   nbconvert
@@ -115,7 +115,7 @@ importlib-resources==5.12.0
     #   matplotlib
 iniconfig==2.0.0
     # via pytest
-ipykernel==6.23.1
+ipykernel==6.23.3
     # via
     #   ipywidgets
     #   jupyter
@@ -150,7 +150,7 @@ jinja2==3.1.2
     #   nbsphinx
     #   notebook
     #   sphinx
-jsonpointer==2.3
+jsonpointer==2.4
     # via jsonschema
 jsonschema[format-nongpl]==4.17.3
     # via
@@ -158,7 +158,7 @@ jsonschema[format-nongpl]==4.17.3
     #   nbformat
 jupyter==1.0.0
     # via -r hail/hail/python/dev/requirements.txt
-jupyter-client==8.2.0
+jupyter-client==8.3.0
     # via
     #   ipykernel
     #   jupyter-console
@@ -169,7 +169,7 @@ jupyter-client==8.2.0
     #   qtconsole
 jupyter-console==6.6.3
     # via jupyter
-jupyter-core==5.3.0
+jupyter-core==5.3.1
     # via
     #   ipykernel
     #   jupyter-client
@@ -183,7 +183,7 @@ jupyter-core==5.3.0
     #   qtconsole
 jupyter-events==0.6.3
     # via jupyter-server
-jupyter-server==2.6.0
+jupyter-server==2.7.0
     # via
     #   nbclassic
     #   notebook-shim
@@ -210,7 +210,7 @@ matplotlib-inline==0.1.6
     #   ipython
 mccabe==0.7.0
     # via pylint
-mistune==2.0.5
+mistune==3.0.1
     # via nbconvert
 mypy==0.990
     # via -r hail/hail/python/dev/requirements.txt
@@ -222,7 +222,7 @@ nbclassic==1.0.0
     # via notebook
 nbclient==0.8.0
     # via nbconvert
-nbconvert==7.4.0
+nbconvert==7.6.0
     # via
     #   jupyter
     #   jupyter-server
@@ -287,12 +287,12 @@ pillow==9.5.0
     #   matplotlib
 pkgutil-resolve-name==1.3.10
     # via jsonschema
-platformdirs==3.5.3
+platformdirs==3.8.0
     # via
     #   black
     #   jupyter-core
     #   pylint
-pluggy==1.0.0
+pluggy==1.2.0
     # via pytest
 prometheus-client==0.17.0
     # via
@@ -327,11 +327,11 @@ pygments==2.15.1
     #   sphinx
 pylint==2.17.4
     # via -r hail/hail/python/dev/requirements.txt
-pyparsing==3.0.9
+pyparsing==3.1.0
     # via matplotlib
 pyrsistent==0.19.3
     # via jsonschema
-pytest==7.3.2
+pytest==7.4.0
     # via
     #   -r hail/hail/python/dev/requirements.txt
     #   pytest-asyncio
@@ -399,7 +399,7 @@ rfc3986-validator==0.1.1
     # via
     #   jsonschema
     #   jupyter-events
-ruff==0.0.272
+ruff==0.0.275
     # via -r hail/hail/python/dev/requirements.txt
 send2trash==1.8.2
     # via
@@ -441,7 +441,7 @@ sphinxcontrib-jquery==4.1
     # via sphinx-rtd-theme
 sphinxcontrib-jsmath==1.0.1
     # via sphinx
-sphinxcontrib-katex==0.9.5
+sphinxcontrib-katex==0.9.6
     # via -r hail/hail/python/dev/requirements.txt
 sphinxcontrib-qthelp==1.0.3
     # via sphinx
@@ -501,7 +501,7 @@ types-decorator==5.1.8.3
     # via -r hail/hail/python/dev/requirements.txt
 types-deprecated==1.2.9.2
     # via -r hail/hail/python/dev/requirements.txt
-types-pymysql==1.0.19.7
+types-pymysql==1.1.0.0
     # via -r hail/hail/python/dev/requirements.txt
 types-python-dateutil==2.8.19.13
     # via -r hail/hail/python/dev/requirements.txt
@@ -509,7 +509,7 @@ types-pyyaml==6.0.12.10
     # via -r hail/hail/python/dev/requirements.txt
 types-requests==2.31.0.1
     # via -r hail/hail/python/dev/requirements.txt
-types-setuptools==67.8.0.0
+types-setuptools==68.0.0.0
     # via -r hail/hail/python/dev/requirements.txt
 types-six==1.16.21.8
     # via -r hail/hail/python/dev/requirements.txt
@@ -527,7 +527,7 @@ typing-extensions==4.6.3
     #   ipython
     #   mypy
     #   pylint
-uri-template==1.2.0
+uri-template==1.3.0
     # via jsonschema
 urllib3==1.26.16
     # via
@@ -541,7 +541,7 @@ webencodings==0.5.1
     # via
     #   bleach
     #   tinycss2
-websocket-client==1.5.3
+websocket-client==1.6.1
     # via jupyter-server
 widgetsnbextension==4.0.7
     # via ipywidgets
