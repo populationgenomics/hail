@@ -9,12 +9,13 @@ import aiohttp
 import orjson
 import secrets
 
+from hailtop import is_notebook
 from hailtop.config import get_deploy_config, DeployConfig
 from hailtop.aiocloud.common import Session
 from hailtop.aiocloud.common.credentials import CloudCredentials
 from hailtop.auth import hail_credentials
 from hailtop.utils import bounded_gather, sleep_before_try
-from hailtop.utils.rich_progress_bar import is_notebook, BatchProgressBar, BatchProgressBarTask
+from hailtop.utils.rich_progress_bar import BatchProgressBar, BatchProgressBarTask
 from hailtop import httpx
 
 from .types import GetJobsResponseV1Alpha, JobListEntryV1Alpha, GetJobResponseV1Alpha
