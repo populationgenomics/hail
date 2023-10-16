@@ -46,8 +46,9 @@ def batch_record_to_dict(record: Dict[str, Any]) -> Dict[str, Any]:
         duration_ms = None
         duration = None
 
-    if record['cost_breakdown'] is not None:
-        record['cost_breakdown'] = cost_breakdown_to_dict(json.loads(record['cost_breakdown']))
+    cost_breakdown = record.get('cost_breakdown')
+    if cost_breakdown is not None:
+        cost_breakdown = cost_breakdown_to_dict(json.loads(cost_breakdown))
 
     d = {
         'id': record['id'],
@@ -69,7 +70,7 @@ def batch_record_to_dict(record: Dict[str, Any]) -> Dict[str, Any]:
         'duration': duration,
         'msec_mcpu': record['msec_mcpu'],
         'cost': coalesce(record.get('cost'), 0),
-        'cost_breakdown': record['cost_breakdown'],
+        'cost_breakdown': cost_breakdown,
     }
 
     attributes = json.loads(record['attributes'])
