@@ -91,8 +91,9 @@ def job_record_to_dict(record: Dict[str, Any], name: Optional[str]) -> JobListEn
         exit_code = None
         duration = None
 
-    if record['cost_breakdown'] is not None:
-        record['cost_breakdown'] = cost_breakdown_to_dict(json.loads(record['cost_breakdown']))
+    cost_breakdown = record.get('cost_breakdown')
+    if cost_breakdown is not None:
+        cost_breakdown = cost_breakdown_to_dict(json.loads(cost_breakdown))
 
     return {
         'batch_id': record['batch_id'],
@@ -105,7 +106,7 @@ def job_record_to_dict(record: Dict[str, Any], name: Optional[str]) -> JobListEn
         'duration': duration,
         'cost': coalesce(record.get('cost'), 0),
         'msec_mcpu': record['msec_mcpu'],
-        'cost_breakdown': record['cost_breakdown'],
+        'cost_breakdown': cost_breakdown,
     }
 
 
