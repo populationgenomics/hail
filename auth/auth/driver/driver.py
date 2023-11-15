@@ -10,16 +10,15 @@ import aiohttp
 import kubernetes_asyncio.client
 import kubernetes_asyncio.client.rest
 import kubernetes_asyncio.config
-from hailtop import aiotools
-from hailtop import batch_client as bc
-from hailtop import httpx
-from hailtop.aiocloud.aioazure import AzureGraphClient
-from hailtop.aiocloud.aiogoogle import GoogleIAmClient
-from hailtop.utils import secret_alnum_string, time_msecs
 
 from gear import Database, create_session
 from gear.clients import get_identity_client
 from gear.cloud_config import get_gcp_config, get_global_config
+from hailtop import aiotools, httpx
+from hailtop import batch_client as bc
+from hailtop.aiocloud.aioazure import AzureGraphClient
+from hailtop.aiocloud.aiogoogle import GoogleIAmClient
+from hailtop.utils import secret_alnum_string, time_msecs
 
 log = logging.getLogger('auth.driver')
 
