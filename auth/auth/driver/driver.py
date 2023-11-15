@@ -442,6 +442,8 @@ WHERE id = %(id)s AND state = 'creating';
         raise DatabaseConflictError
 
 
+# 2023-11-16 mfranklin: disable trial bp because there's an auth problem
+#   https://hail.zulipchat.com/#narrow/stream/300487-Hail-Batch-Dev/topic/Issue.20creating.20users/near/401890787
 async def create_user(app, user, skip_trial_bp=True):
     cleanup: List[Callable[[], Awaitable[None]]] = []
     try:
