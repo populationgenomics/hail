@@ -394,9 +394,9 @@ FROM batches
 LEFT JOIN billing_projects
     ON batches.billing_project = billing_projects.name
 LEFT JOIN job_groups_n_jobs_in_complete_states
-       ON batches.id = job_groups_n_jobs_in_complete_states.id
+    ON batches.id = job_groups_n_jobs_in_complete_states.id
 LEFT JOIN job_groups_cancelled
-       ON batches.id = job_groups_cancelled.id
+    ON batches.id = job_groups_cancelled.id
 STRAIGHT_JOIN billing_project_users
     ON batches.billing_project = billing_project_users.billing_project
 LEFT JOIN LATERAL (
