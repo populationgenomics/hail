@@ -521,6 +521,57 @@ async def get_jobs_for_billing(request, userdata, batch_id):
     return web.json_response(resp)
 
 
+@routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
+@billing_project_users_only()
+async def get_job_resource_usage(request, userdata, batch_id, job_id):
+    """
+    Get jobs for batch to check the amount of resources used.
+    Takes a "last_job_id" and "limit" parameter that can be used to implement paging.
+
+    Returns
+    -------
+    Example response:
+    {
+        // eg: input, main, output
+        "[job_stage]": {
+            "columns":[
+                "time_msecs",
+                "memory_in_bytes",
+                "cpu_usage",
+                "non_io_storage_in_bytes",
+                "io_storage_in_bytes",
+                "network_bandwidth_upload_in_bytes_per_second",
+                "network_bandwidth_download_in_bytes_per_second"
+            ],
+            "index":[0, 1, ...],
+            "data": [[<records>]],
+        }
+    }
+    """
+
+    job_record = _get_job_record(request.app, batch_id, job_id)
+    # effectively the auth check
+    if not job_record:
+        raise web.HTTPNotFound()
+
+    # this also calls
+    resources: Optional[Dict[str, Optional[pd.DataFrame]]] = (
+        await _get_job_resource_usage_from_record(request, record=job_record)
+    )
+
+    if not resources:
+        # empty response if not available yet
+        return web.json_response({})
+
+    return web.json_response(
+        {
+            stage: stage_resource.to_json(orient='split')
+            for stage, stage_resource in resources.items()
+            if stage_resource is not None
+        }
+    )
+
+
 async def _get_job_record(app, batch_id, job_id):
     db: Database = app['db']
 
@@ -638,6 +689,9 @@ async def _get_job_log(app, batch_id, job_id) -> Dict[str, Optional[bytes]]:
 
 async def _get_job_resource_usage(app, batch_id, job_id) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
     record = await _get_job_record(app, batch_id, job_id)
+    return await _get_job_resource_usage_from_record(app, record)
+
+async def _get_job_resource_usage_from_record(app, record) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
 
     client_session: httpx.ClientSession = app['client_session']
     file_store: FileStore = app['file_store']
