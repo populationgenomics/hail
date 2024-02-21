@@ -523,10 +523,10 @@ async def get_jobs_for_billing(request, userdata, batch_id):
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
 @billing_project_users_only()
-async def get_job_resource_usage(request, userdata, batch_id, job_id):
+async def get_job_resource_usage(request, _, batch_id):
     """
-    Get jobs for batch to check the amount of resources used.
-    Takes a "last_job_id" and "limit" parameter that can be used to implement paging.
+    Get the resource_usage data for a job. The data is returned as a JSON object
+    transformed from a pandas DataFrame using the 'split' orientation.
 
     Returns
     -------
@@ -549,27 +549,29 @@ async def get_job_resource_usage(request, userdata, batch_id, job_id):
     }
     """
 
-    job_record = _get_job_record(request.app, batch_id, job_id)
+    # pull this out separately as billing_project_users_only() does a permission
+    # check for us, but has a fixed signature
+    job_id = int(request.match_info['job_id'])
+
+    job_record = await _get_job_record(request.app, batch_id, job_id)
+
     # effectively the auth check
     if not job_record:
         raise web.HTTPNotFound()
 
-    # this also calls
-    resources: Optional[Dict[str, Optional[pd.DataFrame]]] = (
-        await _get_job_resource_usage_from_record(request, record=job_record)
+    resources: Optional[Dict[str, Optional[pd.DataFrame]]] = await _get_job_resource_usage_from_record(
+        app=request.app, record=job_record, batch_id=batch_id, job_id=job_id
     )
 
     if not resources:
         # empty response if not available yet
         return web.json_response({})
 
-    return web.json_response(
-        {
-            stage: stage_resource.to_json(orient='split')
-            for stage, stage_resource in resources.items()
-            if stage_resource is not None
-        }
-    )
+    return web.json_response({
+        stage: stage_resource.to_dict(orient='split')
+        for stage, stage_resource in resources.items()
+        if stage_resource is not None
+    })
 
 
 async def _get_job_record(app, batch_id, job_id):
@@ -687,11 +689,14 @@ async def _get_job_log(app, batch_id, job_id) -> Dict[str, Optional[bytes]]:
     return dict(zip(containers, logs))
 
 
-async def _get_job_resource_usage(app, batch_id, job_id) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
+async def _get_job_resource_usage(app, batch_id: int, job_id: int) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
     record = await _get_job_record(app, batch_id, job_id)
-    return await _get_job_resource_usage_from_record(app, record)
+    return await _get_job_resource_usage_from_record(app, record, batch_id=batch_id, job_id=job_id)
 
-async def _get_job_resource_usage_from_record(app, record) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
+
+async def _get_job_resource_usage_from_record(
+    app, record, batch_id: int, job_id: int
+) -> Optional[Dict[str, Optional[pd.DataFrame]]]:
 
     client_session: httpx.ClientSession = app['client_session']
     file_store: FileStore = app['file_store']
