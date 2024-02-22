@@ -523,7 +523,7 @@ async def get_jobs_for_billing(request, userdata, batch_id):
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
 @billing_project_users_only()
-async def get_job_resource_usage(request, _, batch_id):
+async def get_job_resource_usage(request: web.Request, _, batch_id: int) -> web.Response:
     """
     Get the resource_usage data for a job. The data is returned as a JSON object
     transformed from a pandas DataFrame using the 'split' orientation.
@@ -545,7 +545,7 @@ async def get_job_resource_usage(request, _, batch_id):
             ],
             "index":[0, 1, ...],
             "data": [[<records>]],
-        }
+        }, ...
     }
     """
 
