@@ -5,7 +5,7 @@ from .batch import Batch
 from .batch_pool_executor import BatchPoolExecutor
 from .docker import build_python_image
 from .exceptions import BatchException
-from .resource import PythonResult, Resource, ResourceFile, ResourceGroup
+from .resource import InputResourceFile, JobResourceFile, PythonResult, Resource, ResourceFile, ResourceGroup
 from .utils import concatenate, plink_merge
 
 __all__ = [
@@ -21,6 +21,8 @@ __all__ = [
     'PythonResult',
     'Resource',
     'ResourceFile',
+    'InputResourceFile',
+    'JobResourceFile',
     'ResourceGroup',
 ]
 
