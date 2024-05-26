@@ -96,6 +96,7 @@ def create_app(
         web.get('/', root),
         web.get('/computeMetadata/v1/project/project-id', project_id),
         web.get('/computeMetadata/v1/project/numeric-project-id', numeric_project_id),
+        web.get('/computeMetadata/v1/instance/service-accounts', service_accounts),
         web.get('/computeMetadata/v1/instance/service-accounts/', service_accounts),
         web.get('/computeMetadata/v1/instance/service-accounts/{gsa}/', user_service_account),
         web.get('/computeMetadata/v1/instance/service-accounts/{gsa}/email', user_email),
