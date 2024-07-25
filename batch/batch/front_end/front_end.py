@@ -412,7 +412,7 @@ async def get_completed_batches_ordered_by_completed_time(request, userdata):
         wheres.append('batches.time_completed < %s')
 
     sql = f"""
-SELECT DISTINCT batches.*,
+SELECT batches.*,
   cancelled_t.cancelled IS NOT NULL AS cancelled,
   job_groups_n_jobs_in_complete_states.n_completed,
   job_groups_n_jobs_in_complete_states.n_succeeded,
