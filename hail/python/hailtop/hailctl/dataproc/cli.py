@@ -246,7 +246,7 @@ def start(
         requester_pays_allow_annotation_db,
         debug_mode,
         use_gcloud_beta,
-        public_ip_address=public_ip_address,
+        public_ip_address,
     )
 
 
