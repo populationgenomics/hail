@@ -190,7 +190,7 @@ def randwhitespace():
 def test_single_job_empty_command(batch, randwhitespace):
     j = batch.new_job()
     with pytest.warns(match='Ignoring empty command'):
-        j.command(randwhitespace)  # this should fail!
+        j.command(randwhitespace)
 
 
 def test_declare_resource_group(batch):
