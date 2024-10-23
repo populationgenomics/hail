@@ -59,7 +59,7 @@ if id -nG "$USER" | grep -qw "docker"; then
     # Print "Generating certificates..." in yellow with a warning sign emoji
     printf "\e[33mGenerating certificates...\e[0m \e[33m⚠️\e[0m\n"
     cd letsencrypt
-    make run NAMESPACE=default
+    sudo make run NAMESPACE=default
 
     # If the command above fails, the script will exit else print "Certificates generated successfully!" in green with a green check mark
     if [ $? -eq 0 ]; then
