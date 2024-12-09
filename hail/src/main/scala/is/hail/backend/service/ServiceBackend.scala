@@ -31,6 +31,7 @@ import java.io._
 import java.nio.charset.StandardCharsets
 import java.util.concurrent._
 
+import com.fasterxml.jackson.core.StreamReadConstraints
 import org.apache.log4j.Logger
 import org.json4s.{DefaultFormats, Formats}
 import org.json4s.JsonAST._
@@ -464,7 +465,12 @@ object ServiceBackendAPI {
 
     implicit val formats: Formats = DefaultFormats
 
+    StreamReadConstraints.overrideDefaultStreamReadConstraints(
+      StreamReadConstraints.builder().maxStringLength(Integer.MAX_VALUE).build()
+    )
     val input = using(fs.openNoCompression(inputURL))(JsonMethods.parse(_))
+    StreamReadConstraints.overrideDefaultStreamReadConstraints(StreamReadConstraints.builder().build())
+
     val rpcConfig = (input \ "config").extract[ServiceBackendRPCPayload]
 
     // FIXME: when can the classloader be shared? (optimizer benefits!)
