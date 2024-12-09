@@ -31,10 +31,11 @@ import java.io._
 import java.nio.charset.StandardCharsets
 import java.util.concurrent._
 
+import com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_INTEGER_FOR_INTS
+
 import org.apache.log4j.Logger
 import org.json4s.{DefaultFormats, Formats}
 import org.json4s.JsonAST._
-import org.json4s.jackson.JsonMethods
 
 class ServiceBackendContext(
   val billingProject: String,
@@ -464,7 +465,17 @@ object ServiceBackendAPI {
 
     implicit val formats: Formats = DefaultFormats
 
-    val input = using(fs.openNoCompression(inputURL))(JsonMethods.parse(_))
+    val JsonFactory factory = JsonFactory.builder()
+      .streamReadConstraints(StreamReadConstraints.builder().maxStringLength(Integer.MAX_VALUE).build())
+      .build();
+
+    val mapper = new ObjectMapper(factory)
+    mapper.registerModule(new Json4sScalaModule)
+    mapper.configure(USE_BIG_INTEGER_FOR_INTS, true)
+
+    val reader = mapper.readerFor(classOf[JValue])
+    val input = using(fs.openNoCompression(inputURL))(reader.readValue[JValue](_))
+
     val rpcConfig = (input \ "config").extract[ServiceBackendRPCPayload]
 
     // FIXME: when can the classloader be shared? (optimizer benefits!)
