@@ -79,6 +79,7 @@ class Backend(abc.ABC, Generic[RunningBatchType]):
         -------
         This method should not be called directly. Instead, use :meth:`.batch.Batch.run`.
         """
+        print(f'*** Backend._run({batch=}, {dry_run=}, {verbose=}, {delete_scratch_on_exit=}, ...)')
         return async_to_blocking(self._async_run(batch, dry_run, verbose, delete_scratch_on_exit, **backend_kwargs))
 
     @abc.abstractmethod
@@ -688,6 +689,8 @@ class ServiceBackend(Backend[bc.Batch]):
         if backend_kwargs:
             raise ValueError(f'ServiceBackend does not support any of these keywords: {backend_kwargs}')
 
+        print(f'*** ServiceBackend._async_run({batch=}, {dry_run=}, {verbose=}, {delete_scratch_on_exit=}, {wait=}, {open=}, {disable_progress_bar=}, {callback=}, token=<snip>)')
+
         build_dag_start = time.time()
 
         uid = uuid.uuid4().hex[:6]
@@ -922,6 +925,8 @@ class ServiceBackend(Backend[bc.Batch]):
 
         if not wait:
             print(f'Submitted batch {batch_id}, see {url}')
+        else:
+            print(f'Waiting for batch {batch_id}, see {url}')
 
         if open:
             webbrowser.open(url)
