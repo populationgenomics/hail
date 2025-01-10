@@ -655,6 +655,7 @@ class ServiceBackend(Backend[bc.Batch]):
         disable_progress_bar: bool = False,
         callback: Optional[str] = None,
         token: Optional[str] = None,
+        banana: bool = False,
         **backend_kwargs,
     ) -> Optional[bc.Batch]:  # pylint: disable-msg=too-many-statements
         """Execute a batch.
@@ -689,7 +690,7 @@ class ServiceBackend(Backend[bc.Batch]):
         if backend_kwargs:
             raise ValueError(f'ServiceBackend does not support any of these keywords: {backend_kwargs}')
 
-        print(f'*** ServiceBackend._async_run({batch=}, {dry_run=}, {verbose=}, {delete_scratch_on_exit=}, {wait=}, {open=}, {disable_progress_bar=}, {callback=}, token=<snip>)')
+        if banana: print(f'*** ServiceBackend._async_run({batch=}, {dry_run=}, {verbose=}, {delete_scratch_on_exit=}, {wait=}, {open=}, {disable_progress_bar=}, {callback=}, token=<snip>)')
 
         build_dag_start = time.time()
 
@@ -702,6 +703,8 @@ class ServiceBackend(Backend[bc.Batch]):
         attributes = copy.deepcopy(batch.attributes)
         if batch.name is not None:
             attributes['name'] = batch.name
+
+        if banana: print('*** ServiceBackend._async_run(): one')
 
         if batch._async_batch is None:
             batch._async_batch = (await self._batch_client()).create_batch(
@@ -718,6 +721,8 @@ class ServiceBackend(Backend[bc.Batch]):
 
         jobs_to_command = {}
         commands = []
+
+        if banana: print('*** ServiceBackend._async_run(): two')
 
         bash_flags = 'set -e' + ('x' if verbose else '')
 
@@ -761,6 +766,7 @@ class ServiceBackend(Backend[bc.Batch]):
                 n_jobs_submitted += 1
 
         unsubmitted_jobs = batch._unsubmitted_jobs
+        if banana: print('*** ServiceBackend._async_run(): three')
 
         pyjobs = [j for j in unsubmitted_jobs if isinstance(j, PythonJob)]
         for pyjob in pyjobs:
@@ -768,6 +774,7 @@ class ServiceBackend(Backend[bc.Batch]):
                 pyjob._image = HAIL_GENETICS_HAIL_IMAGE
         await batch._serialize_python_functions_to_input_files(batch_remote_tmpdir, dry_run=dry_run)
 
+        if banana: print('*** ServiceBackend._async_run(): four')
         disable_setup_steps_progress_bar = disable_progress_bar or len(unsubmitted_jobs) < 10_000
         with SimpleCopyToolProgressBar(
             total=len(unsubmitted_jobs), description='upload code', disable=disable_setup_steps_progress_bar
@@ -778,6 +785,7 @@ class ServiceBackend(Backend[bc.Batch]):
                 pbar.update(1)
                 return used_remote_tmpdir
 
+            if banana: print('*** ServiceBackend._async_run(): five')
             used_remote_tmpdir_results = await bounded_gather(
                 *[functools.partial(compile_job, j) for j in unsubmitted_jobs],
                 parallelism=150,
@@ -794,6 +802,8 @@ class ServiceBackend(Backend[bc.Batch]):
             outputs += [x for r in job._external_outputs for x in copy_external_output(r)]
 
             symlinks = [x for r in job._mentioned for x in symlink_input_resource_group(r)]
+
+            if banana: print('*** ServiceBackend._async_run(): six')
 
             if job._image is None:
                 if verbose:
@@ -859,6 +869,7 @@ class ServiceBackend(Backend[bc.Batch]):
                 )
 
             env = {**job._env, 'BATCH_TMPDIR': local_tmpdir}
+            if banana: print('*** ServiceBackend._async_run(): seven')
 
             j = async_batch.create_job(
                 image=image,
@@ -882,11 +893,13 @@ class ServiceBackend(Backend[bc.Batch]):
 
             job._client_job = bc.Job(j)
             jobs_to_command[j] = cmd
+            if banana: print('*** ServiceBackend._async_run(): eight')
 
         if dry_run:
             print("\n\n".join(commands))
             return None
 
+        if banana: print('*** ServiceBackend._async_run(): nine')
         if delete_scratch_on_exit and used_remote_tmpdir:
             parents = list(jobs_to_command.keys())
             j = async_batch.create_job(
@@ -901,6 +914,7 @@ class ServiceBackend(Backend[bc.Batch]):
 
         if verbose:
             print(f'Built DAG with {n_jobs_submitted} jobs in {round(time.time() - build_dag_start, 3)} seconds.')
+        if banana: print('*** ServiceBackend._async_run(): ten')
 
         submit_batch_start = time.time()
         await async_batch.submit(disable_progress_bar=disable_progress_bar)
@@ -912,6 +926,7 @@ class ServiceBackend(Backend[bc.Batch]):
 
         jobs_to_command = {j.id: cmd for j, cmd in jobs_to_command.items()}
 
+        if banana: print('*** ServiceBackend._async_run(): eleven')
         if verbose:
             print(
                 f'Submitted batch {batch_id} with {n_jobs_submitted} jobs in {round(time.time() - submit_batch_start, 3)} seconds:'
@@ -923,10 +938,12 @@ class ServiceBackend(Backend[bc.Batch]):
         deploy_config = get_deploy_config()
         url = deploy_config.external_url('batch', f'/batches/{batch_id}')
 
+        if banana: print('*** ServiceBackend._async_run(): twelve')
         if not wait:
             print(f'Submitted batch {batch_id}, see {url}')
         else:
             print(f'Waiting for batch {batch_id}, see {url}')
+        if banana: print('*** ServiceBackend._async_run(): thirteen')
 
         if open:
             webbrowser.open(url)
