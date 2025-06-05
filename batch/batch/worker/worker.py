@@ -3046,12 +3046,13 @@ class Worker:
         while True:
             try:
                 requested_n_cores = self._waiting_for_jvm_with_n_cores.get_nowait()
-                if not self._jvmpools_by_cores[requested_n_cores].full():
+                jvm_pool = self._jvmpools_by_cores[requested_n_cores]
+                if not jvm_pool.full() and jvm_pool.total_jvms_including_borrowed < jvm_pool.max_jvms:
                     log.info(f'Worker._initialize_jvms woke up for {requested_n_cores=}, creating one')
-                    await self._jvmpools_by_cores[requested_n_cores].create_jvm()
+                    await jvm_pool.create_jvm()
                 else:
                     log.info(f'Worker._initialize_jvms woke up for {requested_n_cores=}, already full')
-                log.info(f'Worker._initialize_jvms after wakeup JVM creation: {self._jvmpools_by_cores[requested_n_cores]!r}')
+                log.info(f'Worker._initialize_jvms after wakeup JVM creation: {jvm_pool!r}')
             except asyncio.QueueEmpty:
                 next_unfull_jvmpool = None
                 for jvmpool in self._jvmpools_by_cores.values():
