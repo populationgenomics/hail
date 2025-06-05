@@ -2978,9 +2978,10 @@ class JVMPool:
         log.info(f'killed {jvm} and recreated a new jvm')
 
     async def create_jvm(self):
-        assert self.queue.qsize() < self.max_jvms
-        assert self.total_jvms_including_borrowed < self.max_jvms
         try:
+            log.info(f'JVMPool.create_jvm: {self.n_cores=}: {self.queue.qsize()=} {self.total_jvms_including_borrowed=} {self.max_jvms=}')
+            assert self.queue.qsize() < self.max_jvms
+            assert self.total_jvms_including_borrowed < self.max_jvms
             self.queue.put_nowait(await JVM.create(JVMPool.global_jvm_index, self.n_cores, self.worker))
             log.info(f'JVMPool.create_jvm: created JVM-{JVMPool.global_jvm_index} for {self.n_cores=}')
             self.total_jvms_including_borrowed += 1
