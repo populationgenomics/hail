@@ -3078,6 +3078,7 @@ class Worker:
     def _initialize_jvms_postmortem(task: asyncio.Task):
         try:
             _ = task.result()
+            log.info('JVMs all initialized okay')
         except Exception as e:
             log.exception(f'JVMs not all initialized due to {type(e).__name__}')
 
