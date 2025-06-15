@@ -1632,7 +1632,7 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
 
         if spec.get('mount_tokens', False):
             # Clients stopped using `mount_tokens` prior to the introduction of terra deployments
-            assert not os.environ.get('HAIL_TERRA', False)
+            assert not os.environ.get('HAIL_TERRA')
             secrets.append({
                 'namespace': DEFAULT_NAMESPACE,
                 'name': userdata['tokens_secret_name'],
@@ -3777,6 +3777,18 @@ async def swagger(request):
 async def openapi(request):
     page_context = {'base_path': deploy_config.base_path('batch'), 'spec_version': __version__}
     return await render_template('batch', request, None, 'openapi.yaml', page_context)
+
+
+@routes.get('/tos')
+@web_security_headers
+async def tos(request):
+    return await render_template('batch', request, None, 'tos.html', {})
+
+
+@routes.get('/privacy')
+@web_security_headers
+async def privacy(request):
+    return await render_template('batch', request, None, 'privacy.html', {})
 
 
 async def cancel_batch_loop_body(app):

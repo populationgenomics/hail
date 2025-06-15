@@ -549,6 +549,7 @@ class VCFTests(unittest.TestCase):
         mt = hl.read_matrix_table(vcf_path + '.mt')
         self.assertTrue(mt._same(vcf))
 
+    @test_timeout(4 * 60)
     def test_combiner_works(self):
         from hail.vds.combiner.combine import combine_variant_datasets, transform_gvcf
 
@@ -1476,9 +1477,11 @@ class BGENTests(unittest.TestCase):
 
     def test_index_multiple_bgen_files_does_not_fail_and_is_importable(self):
         original_bgen_files = [resource('random-b.bgen'), resource('random-c.bgen'), resource('random-a.bgen')]
-        with hl.TemporaryFilename(suffix='.bgen') as f, hl.TemporaryFilename(suffix='.bgen') as g, hl.TemporaryFilename(
-            suffix='.bgen'
-        ) as h:
+        with (
+            hl.TemporaryFilename(suffix='.bgen') as f,
+            hl.TemporaryFilename(suffix='.bgen') as g,
+            hl.TemporaryFilename(suffix='.bgen') as h,
+        ):
             newly_indexed_bgen_files = [f, g, h]
             for source, temp in zip(original_bgen_files, newly_indexed_bgen_files):
                 hl.current_backend().fs.copy(source, temp)

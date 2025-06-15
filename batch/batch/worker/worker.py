@@ -1054,7 +1054,6 @@ class Container:
             async with async_timeout.timeout(self.timeout):
                 with open(self.log_path, 'w', encoding='utf-8') as container_log:
                     stdin = asyncio.subprocess.PIPE if self.stdin else None
-
                     self.process = await asyncio.create_subprocess_exec(
                         'crun',
                         'run',
@@ -1065,15 +1064,15 @@ class Container:
                         stdout=container_log,
                         stderr=container_log,
                     )
-
                     assert self.netns
 
                     self.monitor = self.new_resource_usage_monitor(self.resource_usage_path)
                     assert self.monitor
                     async with self.monitor:
-                        if self.stdin is not None:
+                        if self.stdin is not None and self.process is not None:
                             await self.process.communicate(self.stdin.encode('utf-8'))
-                        await self.process.wait()
+                        if self.process is not None:
+                            await self.process.wait()
         except asyncio.TimeoutError:
             return True
         finally:
@@ -1303,7 +1302,7 @@ class Container:
                     'source': 'shm',
                     'destination': '/dev/shm',
                     'type': 'tmpfs',
-                    'options': ['nosuid', 'noexec', 'nodev', 'mode=1777', f'size={self.memory_in_bytes//2}'],
+                    'options': ['nosuid', 'noexec', 'nodev', 'mode=1777', f'size={self.memory_in_bytes // 2}'],
                 },
                 {
                     'source': f'/etc/netns/{self.netns.network_ns_name}/resolv.conf',
@@ -2672,8 +2671,7 @@ class JVMProfiler:
             raise
         except Exception:
             log.warning(f'could not start JVM profiling for {self.container.container.name}')
-        finally:
-            return self  # pylint: disable=lost-exception
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.output_file is None:
@@ -3101,7 +3099,7 @@ class Worker:
         log.info(f'Returning borked {jvm} after use')
         return await self._jvmpools_by_cores[jvm.n_cores].return_broken_jvm(jvm)
 
-    async def headers(self):
+    async def headers(self) -> Dict[str, str]:
         headers = {'X-Hail-Instance-Name': NAME, 'X-Hail-Instance-Token': self.instance_token}
         if isinstance(CLOUD_WORKER_API, TerraAzureWorkerAPI):
             headers.update(await CLOUD_WORKER_API.extra_hail_headers())
