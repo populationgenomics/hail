@@ -1068,7 +1068,6 @@ class Container:
             async with async_timeout.timeout(self.timeout):
                 with open(self.log_path, 'w', encoding='utf-8') as container_log:
                     stdin = asyncio.subprocess.PIPE if self.stdin else None
-
                     self.process = await asyncio.create_subprocess_exec(
                         'crun',
                         'run',
@@ -1079,15 +1078,15 @@ class Container:
                         stdout=container_log,
                         stderr=container_log,
                     )
-
                     assert self.netns
 
                     self.monitor = self.new_resource_usage_monitor(self.resource_usage_path)
                     assert self.monitor
                     async with self.monitor:
-                        if self.stdin is not None:
+                        if self.stdin is not None and self.process is not None:
                             await self.process.communicate(self.stdin.encode('utf-8'))
-                        await self.process.wait()
+                        if self.process is not None:
+                            await self.process.wait()
         except asyncio.TimeoutError:
             return True
         finally:
@@ -1317,7 +1316,7 @@ class Container:
                     'source': 'shm',
                     'destination': '/dev/shm',
                     'type': 'tmpfs',
-                    'options': ['nosuid', 'noexec', 'nodev', 'mode=1777', f'size={self.memory_in_bytes//2}'],
+                    'options': ['nosuid', 'noexec', 'nodev', 'mode=1777', f'size={self.memory_in_bytes // 2}'],
                 },
                 {
                     'source': f'/etc/netns/{self.netns.network_ns_name}/resolv.conf',
@@ -2686,8 +2685,7 @@ class JVMProfiler:
             raise
         except Exception:
             log.warning(f'could not start JVM profiling for {self.container.container.name}')
-        finally:
-            return self  # pylint: disable=lost-exception
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.output_file is None:
@@ -3010,17 +3008,6 @@ class JVMPool:
     def __repr__(self):
         return f'JVMPool({self.queue!r}, {self.total_jvms_including_borrowed!r}, {self.max_jvms!r}, {self.n_cores!r})'
 
-def _jvm_initializer_task_callback(future: asyncio.Future):
-    # Check if cancelled, otherwise calling .exception will raise an exception
-    if future.cancelled():
-        return
-    exception = future.exception()
-    if exception is None:
-        log.info('JVM Initializer completed successfully')
-    else:
-        log.error(f'JVM Initializer failed with {type(exception)}')
-        dump = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
-        log.error(f'JVM Initializer failed with exception: {dump}')
 
 class Worker:
     def __init__(self):
@@ -3050,7 +3037,7 @@ class Worker:
         self._jvmpools_by_cores: Dict[int, JVMPool] = {n_cores: JVMPool(n_cores, self) for n_cores in (1, 2, 4, 8)}
         self._waiting_for_jvm_with_n_cores: asyncio.Queue[int] = asyncio.Queue()
         self._jvm_initializer_task = asyncio.create_task(self._initialize_jvms())
-        self._jvm_initializer_task.add_done_callback(_jvm_initializer_task_callback)
+        self._jvm_initializer_task.add_done_callback(self._initialize_jvms_postmortem)
 
     async def _initialize_jvms(self):
         assert instance_config
@@ -3087,6 +3074,13 @@ class Worker:
         assert all_full
         log.info(f'JVMs initialized {self._jvmpools_by_cores}')
 
+    @staticmethod
+    def _initialize_jvms_postmortem(task: asyncio.Task):
+        try:
+            _ = task.result()
+        except Exception as e:
+            log.exception(f'JVMs not all initialized due to {type(e).__name__}')
+
     async def borrow_jvm(self, n_cores: int) -> JVM:
         assert instance_config
         if instance_config.worker_type() not in ('standard', 'D', 'highmem', 'E'):
@@ -3115,7 +3109,7 @@ class Worker:
         log.info(f'Returning borked {jvm} after use')
         return await self._jvmpools_by_cores[jvm.n_cores].return_broken_jvm(jvm)
 
-    async def headers(self):
+    async def headers(self) -> Dict[str, str]:
         headers = {'X-Hail-Instance-Name': NAME, 'X-Hail-Instance-Token': self.instance_token}
         if isinstance(CLOUD_WORKER_API, TerraAzureWorkerAPI):
             headers.update(await CLOUD_WORKER_API.extra_hail_headers())
@@ -3123,6 +3117,7 @@ class Worker:
 
     async def shutdown(self):
         log.info('Worker.shutdown')
+        self._jvm_initializer_task.remove_done_callback(self._initialize_jvms_postmortem)
         self._jvm_initializer_task.cancel()
         async with AsyncExitStack() as cleanup:
             cleanup.push_async_callback(self.client_session.close)
@@ -3435,7 +3430,19 @@ class Worker:
             delay_secs = min(delay_secs * 2, 2 * 60.0)
 
     async def post_job_complete(self, job, mjs_fut: asyncio.Task, full_status):
-        await mjs_fut
+        # Workers notify the driver that jobs have been started optimistically
+        # and hitherto defer checking the outcome of that notification.
+        # At this point, the job has been completed; errors raised by awaiting
+        # `mjs_fut` should not prevent workers notifying the driver of such.
+        try:
+            await mjs_fut
+        except:
+            log.warning(
+                f'awaiting optimistic mark_started call for job {job} failed.',
+                exc_info=True,
+                stack_info=True,
+            )
+
         try:
             await self.post_job_complete_1(job, full_status)
         except asyncio.CancelledError:

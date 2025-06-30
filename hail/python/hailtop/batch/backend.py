@@ -519,8 +519,10 @@ class ServiceBackend(Backend[bc.Batch]):
     regions:
         Cloud regions in which jobs may run. :attr:`.ServiceBackend.ANY_REGION` indicates jobs may
         run in any region. If unspecified or ``None``, the ``batch/regions`` Hail configuration
-        variable is consulted. See examples above. If none of these variables are set, then jobs may
-        run in any region. :meth:`.ServiceBackend.supported_regions` lists the available regions.
+        variable is consulted. See examples above. If none of these variables are set, then jobs run
+        in the region the Batch instance resides in ("us-central1" for the Hail team-maintained instance).
+        :meth:`.ServiceBackend.default_region` returns the default region.
+        :meth:`.ServiceBackend.supported_regions` lists the available regions.
     gcs_bucket_allow_list:
         A list of buckets that the :class:`.ServiceBackend` should be permitted to read from or write to, even if their
         default policy is to use "cold" storage.
@@ -545,6 +547,24 @@ class ServiceBackend(Backend[bc.Batch]):
         """
         with BatchClient('dummy') as dummy_client:
             return dummy_client.supported_regions()
+
+    @staticmethod
+    def default_region():
+        """
+        Get the default cloud region
+
+        This value is "us-central1" for the Hail Team maintained Batch instance.
+
+        Examples
+        --------
+        >>> region = ServiceBackend.default_region()
+
+        Returns
+        -------
+        The default region jobs run in when no regions are specified
+        """
+        with BatchClient('dummy') as dummy_client:
+            return dummy_client.default_region()
 
     def __init__(
         self,
@@ -618,8 +638,11 @@ class ServiceBackend(Backend[bc.Batch]):
             if regions_from_conf is not None:
                 assert isinstance(regions_from_conf, str)
                 regions = regions_from_conf.split(',')
+            else:
+                regions = [ServiceBackend.default_region()]
         elif regions == ServiceBackend.ANY_REGION:
             regions = None
+
         self.regions = regions
         self.__batch_client: Optional[AioBatchClient] = None
 
@@ -694,7 +717,7 @@ class ServiceBackend(Backend[bc.Batch]):
         batch_remote_tmpdir = f'{self.remote_tmpdir}{uid}'
         local_tmpdir = f'/io/batch/{uid}'
 
-        default_image = 'ubuntu:22.04'
+        default_image = 'ubuntu:24.04'
 
         attributes = copy.deepcopy(batch.attributes)
         if batch.name is not None:
@@ -851,9 +874,7 @@ class ServiceBackend(Backend[bc.Batch]):
             image = job._image if job._image else default_image
             image_ref = parse_docker_image_reference(image)
             if image_ref.hosted_in('dockerhub') and image_ref.name() not in HAIL_GENETICS_IMAGES:
-                warnings.warn(
-                    f'Using an image {image} from Docker Hub. ' f'Jobs may fail due to Docker Hub rate limits.'
-                )
+                warnings.warn(f'Using an image {image} from Docker Hub. Jobs may fail due to Docker Hub rate limits.')
 
             env = {**job._env, 'BATCH_TMPDIR': local_tmpdir}
 
@@ -894,6 +915,7 @@ class ServiceBackend(Backend[bc.Batch]):
                 resources={'cpu': '0.25'},
                 attributes={'name': 'remove_tmpdir'},
                 always_run=True,
+                regions=self.regions,
             )
             n_jobs_submitted += 1
 
