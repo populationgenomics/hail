@@ -44,6 +44,7 @@ from gear import (
 )
 from gear.auth import get_session_id, impersonate_user
 from gear.clients import get_cloud_async_fs
+from gear.cloud_config import get_azure_config, get_gcp_config
 from gear.database import CallError
 from gear.profiling import install_profiler_if_requested
 from gear.time_limited_max_size_cache import TimeLimitedMaxSizeCache
@@ -266,6 +267,13 @@ async def rest_cloud(_) -> web.Response:
 @auth.authenticated_users_only()
 async def rest_get_supported_regions(request: web.Request, _) -> web.Response:
     return json_response(list(request.app['regions'].keys()))
+
+
+@routes.get('/api/v1alpha/default_region')
+@api_security_headers
+@auth.authenticated_users_only()
+async def rest_get_default_region(request: web.Request, _) -> web.Response:
+    return web.Response(text=request.app['default_region'])
 
 
 async def _handle_ui_error(
@@ -621,61 +629,6 @@ async def get_jobs_for_billing(request, userdata, batch_id):
         resp['last_job_id'] = last_job_id
 
     return web.json_response(resp)
-
-
-@routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
-@api_security_headers
-@billing_project_users_only()
-@add_metadata_to_request
-async def get_job_resource_usage(request: web.Request, _, batch_id: int) -> web.Response:
-    """
-    Get the resource_usage data for a job. The data is returned as a JSON object
-    transformed from a pandas DataFrame using the 'split' orientation.
-
-    Returns
-    -------
-    Example response:
-    {
-        // eg: input, main, output
-        "[job_stage]": {
-            "columns":[
-                "time_msecs",
-                "memory_in_bytes",
-                "cpu_usage",
-                "non_io_storage_in_bytes",
-                "io_storage_in_bytes",
-                "network_bandwidth_upload_in_bytes_per_second",
-                "network_bandwidth_download_in_bytes_per_second"
-            ],
-            "index":[0, 1, ...],
-            "data": [[<records>]],
-        }, ...
-    }
-    """
-
-    # pull this out separately as billing_project_users_only() does a permission
-    # check for us, but has a fixed signature
-    job_id = int(request.match_info['job_id'])
-
-    job_record = await _get_job_record(request.app, batch_id, job_id)
-
-    # effectively the auth check
-    if not job_record:
-        raise web.HTTPNotFound()
-
-    resources: Optional[Dict[str, Optional[pd.DataFrame]]] = await _get_job_resource_usage_from_record(
-        app=request.app, record=job_record, batch_id=batch_id, job_id=job_id
-    )
-
-    if not resources:
-        # empty response if not available yet
-        return web.json_response({})
-
-    return web.json_response({
-        stage: stage_resource.to_dict(orient='split')
-        for stage, stage_resource in resources.items()
-        if stage_resource is not None
-    })
 
 
 async def _get_job_record(app, batch_id, job_id):
@@ -1640,7 +1593,7 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
 
         if spec.get('mount_tokens', False):
             # Clients stopped using `mount_tokens` prior to the introduction of terra deployments
-            assert not os.environ.get('HAIL_TERRA', False)
+            assert not os.environ.get('HAIL_TERRA')
             secrets.append({
                 'namespace': DEFAULT_NAMESPACE,
                 'name': userdata['tokens_secret_name'],
@@ -2749,6 +2702,7 @@ async def get_job(request: web.Request, _, batch_id: int) -> web.Response:
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
 @api_security_headers
 @billing_project_users_only()
+@add_metadata_to_request
 async def get_job_resource_usage(request: web.Request, _, batch_id: int) -> web.Response:
     """
     Get the resource_usage data for a job. The data is returned as a JSON object
@@ -3787,6 +3741,18 @@ async def openapi(request):
     return await render_template('batch', request, None, 'openapi.yaml', page_context)
 
 
+@routes.get('/tos')
+@web_security_headers
+async def tos(request):
+    return await render_template('batch', request, None, 'tos.html', {})
+
+
+@routes.get('/privacy')
+@web_security_headers
+async def privacy(request):
+    return await render_template('batch', request, None, 'privacy.html', {})
+
+
 async def cancel_batch_loop_body(app):
     client_session = app[CommonAiohttpAppKeys.CLIENT_SESSION]
     await retry_transient_errors(
@@ -3862,6 +3828,12 @@ SELECT instance_id, n_tokens, frozen FROM globals;
 
     app['hail_credentials'] = hail_credentials()
     exit_stack.push_async_callback(app['hail_credentials'].close)
+
+    if CLOUD == 'gcp':
+        app['default_region'] = get_gcp_config().region
+    else:
+        assert CLOUD == 'azure'
+        app['default_region'] = get_azure_config().region
 
     app['frozen'] = row['frozen']
 
