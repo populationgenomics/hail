@@ -2,15 +2,14 @@ package is.hail.types.virtual
 
 import is.hail.annotations.{Annotation, ExtendedOrdering}
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 
 import org.json4s.jackson.JsonMethods
 
 final case class TStream(elementType: Type) extends TIterable {
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("stream<")
+    sb ++= "stream<"
     elementType.pyString(sb)
-    sb.append('>')
+    sb += '>'
   }
 
   def _toPretty = s"Stream[$elementType]"
@@ -26,9 +25,9 @@ final case class TStream(elementType: Type) extends TIterable {
   override def subst() = TStream(elementType.subst())
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("Stream[")
+    sb ++= "Stream["
     elementType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[IndexedSeq[_]] &&
@@ -37,9 +36,6 @@ final case class TStream(elementType: Type) extends TIterable {
   override def str(a: Annotation): String = JsonMethods.compact(export(a))
 
   override def isRealizable = false
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] =
-    throw new UnsupportedOperationException("Streams don't have associated annotations.")
 
   override def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering =
     throw new UnsupportedOperationException("Stream comparison is currently undefined.")

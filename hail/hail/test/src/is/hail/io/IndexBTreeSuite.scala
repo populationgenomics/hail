@@ -1,78 +1,71 @@
 package is.hail.io
 
 import is.hail.HailSuite
-import is.hail.check.Gen._
-import is.hail.check.Prop._
-import is.hail.check.Properties
 
+import scala.collection.mutable.ArrayBuffer
+
+import org.scalacheck.Gen
+import org.scalacheck.Gen._
+import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
-class IndexBTreeSuite extends HailSuite {
+class IndexBTreeSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
-  object Spec extends Properties("BTree") {
-
-    val arraySizeGenerator = for {
-      depth <- frequency((4, const(1)), (5, const(2)), (1, const(3)))
-      arraySize <- choose(
+  val genStarts: Gen[(Int, Array[Long])] =
+    for {
+      depth <- frequency(4 -> const(1), 5 -> const(2), 1 -> const(3))
+      size <- choose(
         math.max(1, math.pow(10, (depth - 1) * math.log10(1024)).toInt),
         math.min(1100000, math.pow(10, depth * math.log10(1024)).toInt),
       )
-    } yield (depth, arraySize)
 
-    def fillRandomArray(arraySize: Int): Array[Long] = {
-      val randArray = new Array[Long](arraySize)
-      var pos = 24.toLong
-      var nIndices = 0
-      while (nIndices != arraySize) {
-        randArray(nIndices) = pos
-        pos += choose(5.toLong, 5000.toLong).sample()
-        nIndices += 1
+      starts <- tailRecM((new ArrayBuffer[Long](size), 24L)) {
+        case (starts, pos) =>
+          if (starts.length == size) const(Right(starts.toArray))
+          else choose(5L, 500L).map(next => Left((starts += pos, pos + next)))
       }
-      randArray
-    }
 
-    property("query gives same answer as array") =
-      forAll(arraySizeGenerator) { case (depth: Int, arraySize: Int) =>
-        val arrayRandomStarts = fillRandomArray(arraySize)
-        val index = ctx.createTmpPath("testBtree", "idx")
+    } yield (depth, starts)
 
-        fs.delete(index, true)
-        IndexBTree.write(arrayRandomStarts, index, fs)
-        val btree = new IndexBTree(index, fs)
+  @Test def queryGivesSameAnswerAsArray(): Unit =
+    forAll(genStarts) { case (depth: Int, arrayRandomStarts: Array[Long]) =>
+      val index = ctx.createTmpPath("testBtree", "idx")
 
-        val indexSize = fs.getFileSize(index)
-        val padding = 1024 - (arraySize % 1024)
-        val numEntries = arraySize + padding + (1 until depth).map {
-          math.pow(1024, _).toInt
-        }.sum
+      fs.delete(index, true)
+      IndexBTree.write(arrayRandomStarts, index, fs)
+      val btree = new IndexBTree(index, fs)
 
-        // make sure index size is correct
-        val indexCorrectSize = if (indexSize == (numEntries * 8)) true else false
+      val indexSize = fs.getFileSize(index)
+      val padding = 1024 - (arrayRandomStarts.length % 1024)
+      val numEntries = arrayRandomStarts.length + padding + (1 until depth).map { i =>
+        math.pow(1024, i.toDouble).toInt
+      }.sum
 
-        // make sure depth is correct
-        val estimatedDepth = btree.calcDepth()
-        val depthCorrect = if (estimatedDepth == depth) true else false
+      // make sure index size is correct
+      val indexCorrectSize = if (indexSize == (numEntries * 8)) true else false
 
-        // make sure query is correct
-        val queryCorrect = if (arrayRandomStarts.length < 100)
-          arrayRandomStarts.forall { case (l) => btree.queryIndex(l - 1).contains(l) }
-        else {
-          val randomIndices = Array(0) ++ Array.fill(100)(choose(0, arraySize - 1).sample())
-          randomIndices.map(arrayRandomStarts).forall { case (l) =>
-            btree.queryIndex(l - 1).contains(l)
-          }
+      // make sure depth is correct
+      val estimatedDepth = btree.calcDepth()
+      val depthCorrect = if (estimatedDepth == depth) true else false
+
+      // make sure query is correct
+      val queryCorrect = if (arrayRandomStarts.length < 100)
+        arrayRandomStarts.forall { case (l) => btree.queryIndex(l - 1).contains(l) }
+      else {
+        val randomIndices: Array[Int] =
+          Array(0) ++ Array.fill(100)(choose(0, arrayRandomStarts.length - 1).sample.get)
+
+        randomIndices.map(arrayRandomStarts).forall { case (l) =>
+          btree.queryIndex(l - 1).contains(l)
         }
-
-        if (!depthCorrect || !indexCorrectSize || !queryCorrect)
-          println(s"depth=$depthCorrect indexCorrect=$indexCorrectSize queryCorrect=$queryCorrect")
-
-        btree.close()
-        depthCorrect && indexCorrectSize && queryCorrect
       }
-  }
 
-  @Test def test(): Unit =
-    Spec.check()
+      if (!depthCorrect || !indexCorrectSize || !queryCorrect)
+        println(s"depth=$depthCorrect indexCorrect=$indexCorrectSize queryCorrect=$queryCorrect")
+
+      btree.close()
+      assert(depthCorrect && indexCorrectSize && queryCorrect)
+    }
 
   @Test def oneVariant(): Unit = {
     val index = Array(24.toLong)
@@ -83,7 +76,7 @@ class IndexBTreeSuite extends HailSuite {
     IndexBTree.write(index, idxFile, fs)
     val btree = new IndexBTree(idxFile, fs)
 
-    intercept[IllegalArgumentException] {
+    assertThrows[IllegalArgumentException] {
       btree.queryIndex(-5)
     }
 
@@ -92,17 +85,16 @@ class IndexBTreeSuite extends HailSuite {
     assert(btree.queryIndex(20).contains(24))
     assert(btree.queryIndex(24).contains(24))
     assert(btree.queryIndex(25).isEmpty)
-    assert(btree.queryIndex(fileSize - 1).isEmpty)
+    assert(btree.queryIndex(fileSize.toLong - 1).isEmpty)
   }
 
-  @Test def zeroVariants(): Unit = {
-    intercept[IllegalArgumentException] {
+  @Test def zeroVariants(): Unit =
+    assertThrows[IllegalArgumentException] {
       val index = Array[Long]()
       val idxFile = ctx.createTmpPath("testBtree_0variant", "idx")
       fs.delete(idxFile, recursive = true)
       IndexBTree.write(index, idxFile, fs)
     }
-  }
 
   @Test def testMultipleOfBranchingFactorDoesNotAddUnnecessaryElements(): Unit = {
     val in = Array[Long](10, 9, 8, 7, 6, 5, 4, 3)
@@ -122,7 +114,7 @@ class IndexBTreeSuite extends HailSuite {
   @Test def writeReadMultipleOfBranchingFactorDoesNotError(): Unit = {
     val idxFile = ctx.createTmpPath("btree")
     IndexBTree.write(
-      Array.tabulate(1024)(i => i),
+      Array.tabulate(1024)(i => i.toLong),
       idxFile,
       fs,
     )
@@ -140,9 +132,9 @@ class IndexBTreeSuite extends HailSuite {
     assert(bt.queryArrayPositionAndFileOffset(2).contains((1, 2)))
     assert(bt.queryArrayPositionAndFileOffset(3).contains((2, 3)))
     for (i <- 4 to 40)
-      assert(bt.queryArrayPositionAndFileOffset(i).contains((3, 40)), s"$i")
+      assert(bt.queryArrayPositionAndFileOffset(i.toLong).contains((3, 40)), s"$i")
     for (i <- 41 to 50)
-      assert(bt.queryArrayPositionAndFileOffset(i).contains((4, 50)), s"$i")
+      assert(bt.queryArrayPositionAndFileOffset(i.toLong).contains((4, 50)), s"$i")
     assert(bt.queryArrayPositionAndFileOffset(65).contains((6, 70)))
     assert(bt.queryArrayPositionAndFileOffset(70).contains((6, 70)))
     assert(bt.queryArrayPositionAndFileOffset(71).isEmpty)
@@ -151,7 +143,7 @@ class IndexBTreeSuite extends HailSuite {
   @Test def queryArrayPositionAndFileOffsetIsCorrectTwoLevelsArray(): Unit = {
     def sqr(x: Long) = x * x
     val f = ctx.createTmpPath("btree")
-    val v = Array.tabulate(1025)(x => sqr(x))
+    val v = Array.tabulate(1025)(x => sqr(x.toLong))
     val branchingFactor = 1024
     IndexBTree.write(v, f, fs, branchingFactor = branchingFactor)
     val bt = new IndexBTree(f, fs, branchingFactor = branchingFactor)
@@ -178,7 +170,7 @@ class IndexBTreeSuite extends HailSuite {
   @Test def queryArrayPositionAndFileOffsetIsCorrectThreeLevelsArray(): Unit = {
     def sqr(x: Long) = x * x
     val f = ctx.createTmpPath("btree")
-    val v = Array.tabulate(1024 * 1024 + 1)(x => sqr(x))
+    val v = Array.tabulate(1024 * 1024 + 1)(x => sqr(x.toLong))
     val branchingFactor = 1024
     IndexBTree.write(v, f, fs, branchingFactor = branchingFactor)
     val bt = new IndexBTree(f, fs, branchingFactor = branchingFactor)
@@ -249,17 +241,19 @@ class IndexBTreeSuite extends HailSuite {
   }
 
   @Test def onDiskBTreeIndexToValueRandomized(): Unit = {
-    val g = for {
-      longs <- buildableOf[Array](choose(0L, Long.MaxValue))
-      indices <- buildableOf[Array](choose(0, longs.length - 1))
-      branchingFactor <- choose(2, 1024)
-    } yield (indices, longs, branchingFactor)
+    val g =
+      for {
+        longs <- nonEmptyContainerOf[Array, Long](choose(0L, Long.MaxValue))
+        indices <- containerOf[Array, Int](choose(0, longs.length - 1))
+        branchingFactor <- choose(2, 1024)
+      } yield (indices, longs, branchingFactor)
+
     forAll(g) { case (indices, longs, branchingFactor) =>
       val f = ctx.createTmpPath("test")
       try {
         IndexBTree.write(longs, f, fs, branchingFactor)
         val bt = new OnDiskBTreeIndexToValue(f, fs, branchingFactor)
-        val actual = bt.positionOfVariants(indices.toArray)
+        val actual = bt.positionOfVariants(indices)
         val expected = indices.sorted.map(longs)
         assert(
           actual sameElements expected,
@@ -272,8 +266,7 @@ class IndexBTreeSuite extends HailSuite {
             t,
           )
       }
-      true
-    }.check()
+    }
   }
 
   @Test def onDiskBTreeIndexToValueFourLayers(): Unit = {

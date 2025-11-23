@@ -1,10 +1,11 @@
 package is.hail.backend
 
-import is.hail.{HailContext, HailFeatureFlags}
+import is.hail.HailFeatureFlags
 import is.hail.annotations.{Region, RegionPool}
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.local.LocalTaskContext
 import is.hail.expr.ir.{BaseIR, CodeCacheKey, CompiledFunction}
+import is.hail.expr.ir.LoweredTableReader.LoweredTableReaderCoercer
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs.FS
 import is.hail.linalg.BlockMatrix
@@ -22,7 +23,7 @@ trait TempFileManager extends AutoCloseable {
   def newTmpPath(tmpdir: String, prefix: String, extension: String = null): String
 }
 
-class OwningTempFileManager(fs: FS) extends TempFileManager {
+class OwningTempFileManager(val fs: FS) extends TempFileManager {
   private[this] val tmpPaths = mutable.ArrayBuffer[String]()
 
   override def newTmpPath(tmpdir: String, prefix: String, extension: String): String = {
@@ -38,7 +39,7 @@ class OwningTempFileManager(fs: FS) extends TempFileManager {
   }
 }
 
-class NonOwningTempFileManager private (owner: TempFileManager) extends TempFileManager {
+private class NonOwningTempFileManager private (owner: TempFileManager) extends TempFileManager {
   override def newTmpPath(tmpdir: String, prefix: String, extension: String): String =
     owner.newTmpPath(tmpdir, prefix, extension)
 
@@ -54,13 +55,6 @@ object NonOwningTempFileManager {
 }
 
 object ExecuteContext {
-  def scoped[T](f: ExecuteContext => T)(implicit E: Enclosing): T = {
-    val result = HailContext.sparkBackend("ExecuteContext.scoped").withExecuteContext(
-      selfContainedExecution = false
-    )(f)
-    result
-  }
-
   def scoped[T](
     tmpdir: String,
     localTmpdir: String,
@@ -71,11 +65,11 @@ object ExecuteContext {
     tempFileManager: TempFileManager,
     theHailClassLoader: HailClassLoader,
     flags: HailFeatureFlags,
-    backendContext: BackendContext,
     irMetadata: IrMetadata,
     blockMatrixCache: mutable.Map[String, BlockMatrix],
     codeCache: mutable.Map[CodeCacheKey, CompiledFunction[_]],
     irCache: mutable.Map[Int, BaseIR],
+    coercerCache: mutable.Map[Any, LoweredTableReaderCoercer],
   )(
     f: ExecuteContext => T
   ): T = {
@@ -92,11 +86,11 @@ object ExecuteContext {
           tempFileManager,
           theHailClassLoader,
           flags,
-          backendContext,
           irMetadata,
           blockMatrixCache,
           codeCache,
           irCache,
+          coercerCache,
         ))(f(_))
       }
     }
@@ -121,14 +115,14 @@ class ExecuteContext(
   val fs: FS,
   val r: Region,
   val timer: ExecutionTimer,
-  _tempFileManager: TempFileManager,
+  val tempFileManager: TempFileManager,
   val theHailClassLoader: HailClassLoader,
   val flags: HailFeatureFlags,
-  val backendContext: BackendContext,
   val irMetadata: IrMetadata,
   val BlockMatrixCache: mutable.Map[String, BlockMatrix],
   val CodeCache: mutable.Map[CodeCacheKey, CompiledFunction[_]],
   val PersistedIrCache: mutable.Map[Int, BaseIR],
+  val PersistedCoercerCache: mutable.Map[Any, LoweredTableReaderCoercer],
 ) extends Closeable {
 
   val rngNonce: Long =
@@ -144,10 +138,7 @@ class ExecuteContext(
 
   val stateManager = HailStateManager(references)
 
-  val tempFileManager: TempFileManager =
-    if (_tempFileManager != null) _tempFileManager else new OwningTempFileManager(fs)
-
-  def fsBc: BroadcastValue[FS] = fs.broadcast
+  lazy val fsBc: BroadcastValue[FS] = backend.broadcast(fs)
 
   val memo: mutable.Map[Any, Any] = new mutable.HashMap[Any, Any]()
 
@@ -157,11 +148,7 @@ class ExecuteContext(
     f: (HailClassLoader, FS, HailTaskContext, Region) => T
   )(implicit E: Enclosing
   ): T =
-    using(new LocalTaskContext(0, 0)) { tc =>
-      time {
-        f(theHailClassLoader, fs, tc, r)
-      }
-    }
+    using(new LocalTaskContext(0, 0))(tc => time(f(theHailClassLoader, fs, tc, r)))
 
   def createTmpPath(prefix: String, extension: String = null, local: Boolean = false): String =
     tempFileManager.newTmpPath(if (local) localTmpdir else tmpdir, prefix, extension)
@@ -193,11 +180,11 @@ class ExecuteContext(
     tempFileManager: TempFileManager = NonOwningTempFileManager(this.tempFileManager),
     theHailClassLoader: HailClassLoader = this.theHailClassLoader,
     flags: HailFeatureFlags = this.flags,
-    backendContext: BackendContext = this.backendContext,
     irMetadata: IrMetadata = this.irMetadata,
     blockMatrixCache: mutable.Map[String, BlockMatrix] = this.BlockMatrixCache,
     codeCache: mutable.Map[CodeCacheKey, CompiledFunction[_]] = this.CodeCache,
     persistedIrCache: mutable.Map[Int, BaseIR] = this.PersistedIrCache,
+    persistedCoercerCache: mutable.Map[Any, LoweredTableReaderCoercer] = this.PersistedCoercerCache,
   )(
     f: ExecuteContext => A
   ): A =
@@ -212,10 +199,10 @@ class ExecuteContext(
       tempFileManager,
       theHailClassLoader,
       flags,
-      backendContext,
       irMetadata,
       blockMatrixCache,
       codeCache,
       persistedIrCache,
+      persistedCoercerCache,
     ))(f)
 }

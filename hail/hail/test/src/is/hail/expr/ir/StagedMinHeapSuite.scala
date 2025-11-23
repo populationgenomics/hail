@@ -4,10 +4,9 @@ import is.hail.HailSuite
 import is.hail.annotations.{Region, SafeIndexedSeq}
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
-import is.hail.check.Gen
-import is.hail.check.Prop.forAll
 import is.hail.expr.ir.functions.LocusFunctions
 import is.hail.expr.ir.streams.StagedMinHeap
+import is.hail.scalacheck._
 import is.hail.types.physical.{PCanonicalArray, PCanonicalLocus, PInt32Required}
 import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.concrete.SIndexablePointerValue
@@ -15,10 +14,15 @@ import is.hail.types.physical.stypes.primitives.{SInt32, SInt32Value}
 import is.hail.utils.{using, FastSeq}
 import is.hail.variant.{Locus, ReferenceGenome}
 
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.Gen
+import org.scalatest
 import org.scalatest.matchers.should.Matchers.{be, convertToAnyShouldWrapper}
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
+import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
-class StagedMinHeapSuite extends HailSuite {
+class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
   implicit object StagedIntCoercions extends StagedCoercions[Int] {
     override def ti: TypeInfo[Int] = implicitly
@@ -32,16 +36,18 @@ class StagedMinHeapSuite extends HailSuite {
   }
 
   @Test def testSorting(): Unit =
-    forAll((xs: IndexedSeq[Int]) => sort(xs) == xs.sorted).check()
+    forAll((xs: IndexedSeq[Int]) => assert(sort(xs) == xs.sorted))
 
   @Test def testHeapProperty(): Unit =
     forAll { (xs: IndexedSeq[Int]) =>
       val heap = heapify(xs)
-      (0 until heap.size / 2).forall { i =>
-        ((2 * i + 1) >= heap.size || heap(i) <= heap(2 * i + 1)) &&
-        ((2 * i + 2) >= heap.size || heap(i) <= heap(2 * i + 2))
+      scalatest.Inspectors.forAll(0 until heap.size / 2) { i =>
+        assert(
+          ((2 * i + 1) >= heap.size || heap(i) <= heap(2 * i + 1)) &&
+            ((2 * i + 2) >= heap.size || heap(i) <= heap(2 * i + 2))
+        )
       }
-    }.check()
+    }
 
   @Test def testNonEmpty(): Unit =
     gen(ctx, "NonEmpty") { (heap: IntHeap) =>
@@ -54,9 +60,9 @@ class StagedMinHeapSuite extends HailSuite {
 
   val loci: Gen[(ReferenceGenome, IndexedSeq[Locus])] =
     for {
-      genome <- ReferenceGenome.gen
-      loci <- Gen.buildableOf(Locus.gen(genome))
-    } yield (genome, loci)
+      rg <- arbitrary[ReferenceGenome]
+      loci <- Gen.containerOf[IndexedSeq, Locus](genLocus(rg))
+    } yield (rg, loci)
 
   @Test def testLocus(): Unit =
     forAll(loci) { case (rg: ReferenceGenome, loci: IndexedSeq[Locus]) =>
@@ -70,9 +76,9 @@ class StagedMinHeapSuite extends HailSuite {
             IndexedSeq.fill(loci.size)(heap.pop())
           }
 
-        sortedLoci == loci.sorted(rg.locusOrdering)
+        assert(sortedLoci == loci.sorted(rg.locusOrdering))
       }
-    }.check()
+    }
 
   def sort(xs: IndexedSeq[Int]): IndexedSeq[Int] =
     gen(ctx, "Sort") { (heap: IntHeap) =>
@@ -110,7 +116,7 @@ class StagedMinHeapSuite extends HailSuite {
       mb.voidWithBuilder { cb =>
         MinHeap.push(cb, A.fromValue(cb, Main.partitionRegion, mb.getCodeParam[A](1)(A.ti)))
       }
-    }
+    }: Unit
 
     Main.defineEmitMethod("pop", FastSeq(), A.ti) { mb =>
       mb.emitWithBuilder[A] { cb =>
@@ -119,11 +125,11 @@ class StagedMinHeapSuite extends HailSuite {
         MinHeap.realloc(cb)
         res
       }
-    }
+    }: Unit
 
     Main.defineEmitMethod("nonEmpty", FastSeq(), BooleanInfo) { mb =>
       mb.emitWithBuilder[Boolean](MinHeap.nonEmpty)
-    }
+    }: Unit
 
     Main.defineEmitMethod("toArray", FastSeq(typeInfo[Region]), LongInfo) { mb =>
       mb.emitWithBuilder { cb =>
@@ -131,7 +137,7 @@ class StagedMinHeapSuite extends HailSuite {
         val arr = MinHeap.toArray(cb, region)
         arr.asInstanceOf[SIndexablePointerValue].a
       }
-    }
+    }: Unit
 
     trait Resource extends AutoCloseable { def init(): Unit }
 
@@ -143,8 +149,8 @@ class StagedMinHeapSuite extends HailSuite {
         // initialise the heap with them.
         MinHeap.init(cb, Main.pool())
       }
-    }
-    Main.defineEmitMethod("close", FastSeq(), UnitInfo)(_.voidWithBuilder(MinHeap.close))
+    }: Unit
+    Main.defineEmitMethod("close", FastSeq(), UnitInfo)(_.voidWithBuilder(MinHeap.close)): Unit
 
     ctx.scopedExecution { (cl, fs, tc, r) =>
       val heap = Main

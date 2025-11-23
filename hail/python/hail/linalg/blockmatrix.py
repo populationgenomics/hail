@@ -72,7 +72,7 @@ from hail.utils.java import Env
 block_matrix_type = lazy()
 
 
-class BlockMatrix(object):
+class BlockMatrix:
     """Hail's block-distributed matrix of :py:data:`.tfloat64` elements.
 
     .. include:: ../_templates/experimental.rst
@@ -830,11 +830,11 @@ class BlockMatrix(object):
     def _check_indices(indices, size):
         if len(indices) == 0:
             raise ValueError('index list must be non-empty')
-        elif not all(x < y for x, y in zip(indices, indices[1:])):
+        if not all(x < y for x, y in itertools.pairwise(indices)):
             raise ValueError('index list must be strictly increasing')
-        elif indices[0] < 0:
+        if indices[0] < 0:
             raise ValueError(f'index list values must be in range [0, {size}), found {indices[0]}')
-        elif indices[-1] >= size:
+        if indices[-1] >= size:
             raise ValueError(f'index list values must be in range [0, {size}), found {indices[-1]}')
 
     @typecheck_method(rows_to_keep=sequenceof(int))
@@ -1171,11 +1171,11 @@ class BlockMatrix(object):
             raise ValueError(f'n_rows must be less than 2^31, found {n_rows}')
         if len(starts) != n_rows or len(stops) != n_rows:
             raise ValueError(f'starts and stops must both have length {n_rows} (the number of rows)')
-        if any([start < 0 for start in starts]):
+        if any(start < 0 for start in starts):
             raise ValueError('all start values must be non-negative')
-        if any([stop > self.n_cols for stop in stops]):
+        if any(stop > self.n_cols for stop in stops):
             raise ValueError(f'all stop values must be less than or equal to {n_cols} (the number of columns)')
-        if any([starts[i] > stops[i] for i in range(0, n_rows)]):
+        if any(starts[i] > stops[i] for i in range(0, n_rows)):
             raise ValueError('every start value must be less than or equal to the corresponding stop value')
 
         return self._sparsify_row_intervals_expr((starts, stops), blocks_only)
@@ -1303,14 +1303,7 @@ class BlockMatrix(object):
         if self.n_rows == 1 and self.n_cols == 1:
             return self
 
-        if self.n_rows == 1:
-            index_expr = [0]
-        elif self.n_cols == 1:
-            index_expr = [1]
-        else:
-            index_expr = [1, 0]
-
-        return BlockMatrix(BlockMatrixBroadcast(self._bmir, index_expr, [self.n_cols, self.n_rows], self.block_size))
+        return BlockMatrix(BlockMatrixBroadcast(self._bmir, [1, 0], [self.n_cols, self.n_rows], self.block_size))
 
     def densify(self):
         """Restore all dropped blocks as explicit blocks of zeros.
@@ -1581,9 +1574,9 @@ class BlockMatrix(object):
             path_prefix = new_temp_file("tree_matmul_tmp")
 
         if splits != 1:
-            inner_brange_size = int(math.ceil(self._n_block_cols / splits))
+            inner_brange_size = math.ceil(self._n_block_cols / splits)
             split_points = [*list(range(0, self._n_block_cols, inner_brange_size)), self._n_block_cols]
-            inner_ranges = list(zip(split_points[:-1], split_points[1:]))
+            inner_ranges = list(itertools.pairwise(split_points))
             blocks_to_multiply = [
                 (
                     self._select_blocks((0, self._n_block_rows), (start, stop)),
@@ -1717,13 +1710,12 @@ class BlockMatrix(object):
         if axis is None:
             bmir = BlockMatrixAgg(self._bmir, [0, 1])
             return BlockMatrix(bmir)[0, 0]
-        elif axis in {0, 1}:
+        if axis in {0, 1}:
             out_index_expr = [axis]
 
             bmir = BlockMatrixAgg(self._bmir, out_index_expr)
             return BlockMatrix(bmir)
-        else:
-            raise ValueError(f'axis must be None, 0, or 1: found {axis}')
+        raise ValueError(f'axis must be None, 0, or 1: found {axis}')
 
     def entries(self, keyed=True):
         """Returns a table with the indices and value of each block matrix entry.
@@ -1824,6 +1816,9 @@ class BlockMatrix(object):
             )
 
         self.write(path, overwrite=True, force_row_major=True)
+
+        # target 16k rows per partition for a sizeable block matrix with default block size
+        n_partitions = max(1, n_partitions or self._n_block_rows // 4)
         reader = TableFromBlockMatrixNativeReader(path, n_partitions, maximum_cache_memory_in_bytes)
         return Table(TableRead(reader))
 
@@ -2096,7 +2091,7 @@ class BlockMatrix(object):
                 raise ValueError(f'rectangle {r} does not have length 4')
             if not (0 <= r[0] <= r[1] <= n_rows and 0 <= r[2] <= r[3] <= n_cols):
                 raise ValueError(
-                    f'rectangle {r} does not satisfy ' f'0 <= r[0] <= r[1] <= n_rows and 0 <= r[2] <= r[3] <= n_cols'
+                    f'rectangle {r} does not satisfy 0 <= r[0] <= r[1] <= n_rows and 0 <= r[2] <= r[3] <= n_cols'
                 )
 
         rectangles = hl.literal(list(itertools.chain(*rectangles)), hl.tarray(hl.tint64))
@@ -2201,7 +2196,7 @@ class BlockMatrix(object):
                 raise ValueError(f'rectangle {r} does not have length 4')
             if not (0 <= r[0] <= r[1] <= self.n_rows and 0 <= r[2] <= r[3] <= self.n_cols):
                 raise ValueError(
-                    f'rectangle {r} does not satisfy ' f'0 <= r[0] <= r[1] <= n_rows and 0 <= r[2] <= r[3] <= n_cols'
+                    f'rectangle {r} does not satisfy 0 <= r[0] <= r[1] <= n_rows and 0 <= r[2] <= r[3] <= n_cols'
                 )
 
         writer = BlockMatrixRectanglesWriter(path_out, rectangles, delimiter, binary)

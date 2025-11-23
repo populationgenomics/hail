@@ -20,7 +20,7 @@ object ExtendedOrdering {
     }
   }
 
-  def iterableOrdering[T](ord: ExtendedOrdering, _missingEqual: Boolean = true): ExtendedOrdering =
+  def iterableOrdering(ord: ExtendedOrdering, _missingEqual: Boolean = true): ExtendedOrdering =
     new ExtendedOrdering {
       val missingEqual = _missingEqual
 
@@ -371,6 +371,12 @@ abstract class ExtendedOrdering extends Serializable {
         gteqNonnull(x, y)
     }
   }
+
+  def max(x: T, y: T): T =
+    if (gt(x, y)) x else y
+
+  def min(x: T, y: T): T =
+    if (lt(x, y)) x else y
 
   // reverses the sense of the non-null comparison only
   def reverse: ExtendedOrdering = new ExtendedOrdering {

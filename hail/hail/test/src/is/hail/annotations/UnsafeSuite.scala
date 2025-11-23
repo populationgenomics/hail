@@ -2,9 +2,9 @@ package is.hail.annotations
 
 import is.hail.HailSuite
 import is.hail.backend.ExecuteContext
-import is.hail.check._
 import is.hail.io._
 import is.hail.rvd.AbstractRVDSpec
+import is.hail.scalacheck._
 import is.hail.types.physical._
 import is.hail.types.virtual.{TArray, TStruct, Type}
 import is.hail.utils._
@@ -15,9 +15,13 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 
 import org.apache.spark.sql.Row
 import org.json4s.jackson.Serialization
+import org.scalacheck._
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.Gen._
+import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.{DataProvider, Test}
 
-class UnsafeSuite extends HailSuite {
+class UnsafeSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
   def subsetType(t: Type): Type = {
     t match {
       case t: TStruct =>
@@ -55,7 +59,7 @@ class UnsafeSuite extends HailSuite {
 
   @DataProvider(name = "codecs")
   def codecs(): Array[Array[Any]] =
-    ExecuteContext.scoped(ctx => codecs(ctx))
+    codecs(ctx)
 
   def codecs(ctx: ExecuteContext): Array[Array[Any]] =
     (BufferSpec.specs ++ Array(TypedCodecSpec(
@@ -77,10 +81,13 @@ class UnsafeSuite extends HailSuite {
     val region3 = Region(pool = pool)
     val region4 = Region(pool = pool)
 
-    val g = Type.genStruct
-      .flatMap(t => Gen.zip(Gen.const(t), t.genValue(sm)))
-      .filter { case (_, a) => a != null }
-    val p = Prop.forAll(g) { case (t, a) =>
+    val g: Gen[(TStruct, Annotation)] =
+      for {
+        pt <- arbitrary[PCanonicalStruct]
+        v <- genVal(ctx, pt.setRequired(true))
+      } yield (pt.virtualType, v)
+
+    forAll(g) { case (t, a) =>
       assert(t.typeCheck(a))
       val pt = PType.canonical(t).asInstanceOf[PStruct]
 
@@ -138,7 +145,6 @@ class UnsafeSuite extends HailSuite {
 
       true
     }
-    p.check()
   }
 
   @Test def testCodecForNonWrappedTypes(): Unit = {
@@ -198,16 +204,20 @@ class UnsafeSuite extends HailSuite {
     val rvb = new RegionValueBuilder(sm, region)
     val rvb2 = new RegionValueBuilder(sm, region2)
 
-    val g = Type.genArb
-      .flatMap(t => Gen.zip(Gen.const(t), t.genValue(sm), Gen.choose(0, 100), Gen.choose(0, 100)))
-      .filter { case (_, a, _, _) => a != null }
-    val p = Prop.forAll(g) { case (t, a, n, n2) =>
+    val g: Gen[(Type, Annotation, Int, Int)] =
+      for {
+        t <- arbitrary[Type]
+        v <- genNullable(ctx, t) if v != null
+        (n, n2) <- zip(choose(0, 100), choose(0, 100))
+      } yield (t, v, n, n2)
+
+    forAll(g) { case (t, a, n, n2) =>
       val pt = PType.canonical(t)
-      t.typeCheck(a)
+      assert(t.typeCheck(a))
 
       // test addAnnotation
       region.clear()
-      region.allocate(1, n) // preallocate
+      region.allocate(1, n.toLong): Unit // preallocate
 
       val offset = pt.unstagedStoreJavaObject(sm, a, region)
 
@@ -216,11 +226,11 @@ class UnsafeSuite extends HailSuite {
 
       // test visitor
       val rv = RegionValue(region, offset)
-      rv.pretty(pt)
+      rv.pretty(pt): Unit
 
       // test addAnnotation from ur
       region2.clear()
-      region2.allocate(1, n2) // preallocate
+      region2.allocate(1, n2.toLong): Unit // preallocate
       val offset2 = pt.unstagedStoreJavaObject(sm, ur, region2)
 
       val ur2 = UnsafeRow.read(pt, region2, offset2)
@@ -228,7 +238,7 @@ class UnsafeSuite extends HailSuite {
 
       // test addRegionValue
       region2.clear()
-      region2.allocate(1, n2) // preallocate
+      region2.allocate(1, n2.toLong): Unit // preallocate
       rvb2.start(pt)
       rvb2.addRegionValue(pt, region, offset)
       val offset3 = rvb2.end()
@@ -240,11 +250,12 @@ class UnsafeSuite extends HailSuite {
         case t: TStruct =>
           val ps = pt.asInstanceOf[PStruct]
           region2.clear()
-          region2.allocate(1, n) // preallocate
+          region2.allocate(1, n.toLong): Unit // preallocate
           val offset4 =
             ps.unstagedStoreJavaObject(sm, Row.fromSeq(a.asInstanceOf[Row].toSeq), region2)
           val ur4 = new UnsafeRow(ps, region2, offset4)
           assert(t.valuesSimilar(a, ur4))
+          ()
         case _ =>
       }
 
@@ -262,24 +273,25 @@ class UnsafeSuite extends HailSuite {
           val offset6 =
             ps.unstagedStoreJavaObject(sm, Row.fromSeq(a.asInstanceOf[Row].toSeq), region)
           val ur6 = new UnsafeRow(ps, region, offset6)
-          assert(t.valuesSimilar(a, ur6))
+          assert(t.valuesSimilar(a, ur6)): Unit
         case _ =>
       }
 
       true
     }
-    p.check()
   }
 
-  val g = (for {
-    s <- Gen.size
-    // prefer smaller type and bigger values
-    fraction <- Gen.choose(0.1, 0.3)
-    x = (fraction * s).toInt
-    y = s - x
-    t <- Type.genStruct.resize(x)
-    v <- t.genNonmissingValue(sm).resize(y)
-  } yield (t, v)).filter(_._2 != null)
+  val g: Gen[(TStruct, Annotation)] =
+    for {
+      s <- size
+      // prefer smaller type and bigger values
+      fraction <- choose(0.1, 0.3)
+      x = (fraction * s).toInt
+      y = s - x
+      t <- resize(x, arbitrary[TStruct])
+      v <- resize(y, genNullable(ctx, t))
+      if v != null
+    } yield (t, v)
 
   @Test def testPacking(): Unit = {
 
@@ -331,15 +343,16 @@ class UnsafeSuite extends HailSuite {
     val region = Region(pool = pool)
     val region2 = Region(pool = pool)
 
-    val g = PType.genStruct
-      .flatMap(t => Gen.zip(Gen.const(t), Gen.zip(t.genValue(sm), t.genValue(sm))))
-      .filter { case (_, (a1, a2)) => a1 != null && a2 != null }
-      .resize(10)
-    val p = Prop.forAll(g) { case (t, (a1, a2)) =>
+    val g: Gen[(PStruct, Annotation, Annotation)] =
+      arbitrary[PCanonicalStruct]
+        .flatMap(t => Gen.zip(const(t), genVal(ctx, t), genVal(ctx, t)))
+        .filter { case (_, a1, a2) => a1 != null && a2 != null }
+
+    forAll(resize(10, g)) { case (t, a1, a2) =>
       val tv = t.virtualType
 
-      tv.typeCheck(a1)
-      tv.typeCheck(a2)
+      assert(tv.typeCheck(a1))
+      assert(tv.typeCheck(a2))
 
       region.clear()
       val offset = t.unstagedStoreJavaObject(sm, a1, region)
@@ -370,8 +383,6 @@ class UnsafeSuite extends HailSuite {
         println(s"a2=$a2")
         println(s"c1=$c1, c2=$c2, c3=$c3")
       }
-      p
     }
-    p.check()
   }
 }

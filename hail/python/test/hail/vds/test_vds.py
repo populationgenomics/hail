@@ -625,9 +625,9 @@ def test_to_dense_mt():
 
     dense = hl.vds.to_dense_mt(vds).select_entries('LGT', 'LA', 'GQ', 'DP')
 
-    assert (
-        dense.rows().select()._same(vds.variant_data.rows().select())
-    ), "rows differ between variant data and dense mt"
+    assert dense.rows().select()._same(vds.variant_data.rows().select()), (
+        "rows differ between variant data and dense mt"
+    )
 
     assert dense.filter_entries(hl.is_defined(dense.LA))._same(
         vds.variant_data.select_entries('LGT', 'LA', 'GQ', 'DP')
@@ -659,6 +659,19 @@ def test_to_dense_mt():
     assert as_dict.get(('chr22:10562436', 'NA12878')) == hl.Struct(LGT=hl.Call([0, 0]), LA=None, GQ=21, DP=9)
 
 
+@test_timeout(local=5 * 60, batch=8 * 60)
+def test_read_dense_mt_and_to_dense_mt_equivalence():
+    vds = hl.vds.read_vds(os.path.join(resource('vds'), '1kg_2samples_starts.vds'))
+    vds = hl.vds.filter_chromosomes(vds, keep='chr22')
+    to_dense_mt_mt = hl.vds.to_dense_mt(vds).select_entries('LGT', 'LA', 'GQ', 'DP')
+
+    mt = hl.vds.read_dense_mt(os.path.join(resource('vds'), '1kg_2samples_starts.vds'))
+    mt = hl.filter_intervals(mt, [hl.parse_locus_interval('chr22', 'GRCh38')])
+    read_dense_mt_mt = mt.select_entries('LGT', 'LA', 'GQ', 'DP')
+
+    assert to_dense_mt_mt._same(read_dense_mt_mt)
+
+
 def test_to_dense_mt_haploid():
     vds = hl.vds.read_vds(os.path.join(resource('vds'), '1kg_2samples_starts.vds'))
     vds = hl.vds.filter_chromosomes(vds, keep='chr22')
@@ -666,9 +679,9 @@ def test_to_dense_mt_haploid():
 
     dense = hl.vds.to_dense_mt(vds).select_entries('LGT', 'LA', 'GQ', 'DP')
 
-    assert (
-        dense.rows().select()._same(vds.variant_data.rows().select())
-    ), "rows differ between variant data and dense mt"
+    assert dense.rows().select()._same(vds.variant_data.rows().select()), (
+        "rows differ between variant data and dense mt"
+    )
 
     assert dense.filter_entries(hl.is_defined(dense.LA))._same(
         vds.variant_data.select_entries('LGT', 'LA', 'GQ', 'DP')
@@ -943,9 +956,9 @@ def test_basic_impex():
 
     new_vds = hl.vds.import_vcf(path, reference_genome=orig_vds.variant_data.locus.dtype.reference_genome)
 
-    assert (
-        VariantDataset.ref_block_max_length_field in new_vds.reference_data.globals
-    ), 'failed to parse ref_block_max_length line from header'
+    assert VariantDataset.ref_block_max_length_field in new_vds.reference_data.globals, (
+        'failed to parse ref_block_max_length line from header'
+    )
     orig_rbml = hl.eval(orig_vds.reference_data[VariantDataset.ref_block_max_length_field])
     new_rbml = hl.eval(new_vds.reference_data[VariantDataset.ref_block_max_length_field])
     assert orig_rbml == new_rbml

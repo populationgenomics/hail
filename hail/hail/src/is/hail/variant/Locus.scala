@@ -1,11 +1,10 @@
 package is.hail.variant
 
 import is.hail.annotations.Annotation
-import is.hail.check.Gen
 import is.hail.expr.Parser
 import is.hail.utils._
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
@@ -33,11 +32,6 @@ object Locus {
 
   def fromRow(r: Row): Locus =
     Locus(r.getAs[String](0), r.getInt(1))
-
-  def gen(rg: ReferenceGenome): Gen[Locus] = for {
-    (contig, length) <- Contig.gen(rg)
-    pos <- Gen.choose(1, length)
-  } yield Locus(contig, pos)
 
   def parse(str: String, rg: ReferenceGenome): Locus = {
     val elts = str.split(":")

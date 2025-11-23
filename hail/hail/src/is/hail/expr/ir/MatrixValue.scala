@@ -1,6 +1,5 @@
 package is.hail.expr.ir
 
-import is.hail.HailContext
 import is.hail.annotations._
 import is.hail.backend.{ExecuteContext, HailStateManager}
 import is.hail.io.{BufferSpec, FileWriteMetadata}
@@ -9,7 +8,10 @@ import is.hail.rvd.{AbstractRVDSpec, RVD}
 import is.hail.types.physical.{PArray, PCanonicalStruct, PStruct, PType}
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant._
+
+import scala.collection.compat._
 
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.Row
@@ -17,7 +19,7 @@ import org.apache.spark.sql.Row
 case class MatrixValue(
   typ: MatrixType,
   tv: TableValue,
-) {
+) extends Logging {
   val colFieldType = tv.globals.t.fieldType(LowerMatrixIR.colsFieldName).asInstanceOf[PArray]
   assert(colFieldType.required)
   assert(colFieldType.elementType.required)
@@ -128,7 +130,7 @@ case class MatrixValue(
       path + "/rows",
       globals.t,
       bufferSpec,
-      Array(globals.javaValue),
+      ArraySeq(globals.javaValue),
     )
     val partitionCounts = fileData.map(_.rowsWritten)
 
@@ -137,8 +139,8 @@ case class MatrixValue(
       path + "/globals",
       PCanonicalStruct.empty(required = true),
       bufferSpec,
-      Array[Annotation](Row()),
-    )
+      ArraySeq[Annotation](Row()),
+    ): Unit
 
     val globalsSpec = TableSpecParameters(
       FileFormat.version.rep,
@@ -161,7 +163,7 @@ case class MatrixValue(
     ctx: ExecuteContext,
     path: String,
     bufferSpec: BufferSpec,
-    fileData: Array[FileWriteMetadata],
+    fileData: IndexedSeq[FileWriteMetadata],
     consoleInfo: Boolean,
   ): Unit = {
     val fs = ctx.fs
@@ -234,7 +236,6 @@ case class MatrixValue(
     using(fs.create(path + "/_SUCCESS"))(_ => ())
 
     val nRows = partitionCounts.sum
-    val printer: String => Unit = if (consoleInfo) info else log.info
 
     val partitionBytesWritten = fileData.map(_.bytesWritten)
     val totalRowsEntriesBytes = partitionBytesWritten.sum
@@ -250,23 +251,25 @@ case class MatrixValue(
       (smallestStr, largestStr)
     }
 
-    printer(s"wrote matrix table with $nRows ${plural(nRows, "row")} " +
-      s"and $nCols ${plural(nCols, "column")} " +
-      s"in ${partitionCounts.length} ${plural(partitionCounts.length, "partition")} " +
-      s"to $path" +
-      s"\n    Total size: ${formatSpace(totalBytesWritten)}" +
-      s"\n    * Rows/entries: ${formatSpace(totalRowsEntriesBytes)}" +
-      s"\n    * Columns: ${formatSpace(colBytesWritten)}" +
-      s"\n    * Globals: ${formatSpace(globalBytesWritten)}" +
-      s"\n    * Smallest partition: $smallestStr" +
-      s"\n    * Largest partition:  $largestStr")
+    logger.info(
+      s"wrote matrix table with $nRows ${plural(nRows, "row")} " +
+        s"and $nCols ${plural(nCols, "column")} " +
+        s"in ${partitionCounts.length} ${plural(partitionCounts.length, "partition")} " +
+        s"to $path" +
+        s"\n    Total size: ${formatSpace(totalBytesWritten)}" +
+        s"\n    * Rows/entries: ${formatSpace(totalRowsEntriesBytes)}" +
+        s"\n    * Columns: ${formatSpace(colBytesWritten)}" +
+        s"\n    * Globals: ${formatSpace(globalBytesWritten)}" +
+        s"\n    * Smallest partition: $smallestStr" +
+        s"\n    * Largest partition:  $largestStr"
+    )
   }
 
-  def toRowMatrix(entryField: String): RowMatrix = {
+  def toRowMatrix(ctx: ExecuteContext, entryField: String): RowMatrix = {
     val partCounts: Array[Long] = rvd.countPerPartition()
     val partStarts = partCounts.scanLeft(0L)(_ + _)
     assert(partStarts.length == rvd.getNumPartitions + 1)
-    val partStartsBc = HailContext.backend.broadcast(partStarts)
+    val partStartsBc = ctx.backend.broadcast(partStarts)
 
     val localRvRowPType = rvRowPType
     val localEntryArrayPType = entryArrayPType
@@ -342,7 +345,7 @@ object MatrixValue {
     }
 
     val fileData = RVD.writeRowsSplitFiles(ctx, mvs.map(_.rvd), paths, bufferSpec, stageLocally)
-    (mvs, paths, fileData).zipped.foreach { case (mv, path, fd) =>
+    (mvs lazyZip paths lazyZip fileData).foreach { case (mv, path, fd) =>
       mv.finalizeWrite(ctx, path, bufferSpec, fd, consoleInfo = false)
     }
   }

@@ -4,8 +4,8 @@ import is.hail.annotations.{Region, RegionValue}
 import is.hail.types.physical.PStruct
 import is.hail.utils.{FlipbookIterator, StagingIterator, StateMachine}
 
-import scala.collection.JavaConverters._
 import scala.io.Source
+import scala.jdk.CollectionConverters._
 import scala.reflect.ClassTag
 
 import java.io.PrintWriter
@@ -26,7 +26,7 @@ class RichIterator[T](val it: Iterator[T]) extends AnyVal {
       new StateMachine[T] {
         def value: T = bit.head
         def isValid = bit.hasNext
-        def advance(): Unit = bit.next()
+        def advance(): Unit = bit.next(): Unit
       }
     )
   }

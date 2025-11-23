@@ -29,9 +29,9 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
   override def containsPointers: Boolean = true
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("PCNDArray[")
+    sb ++= "PCNDArray["
     elementType.pretty(sb, indent, compact)
-    sb.append(s",$nDims]")
+    sb ++= s"," ++= s"$nDims" += ']': Unit
   }
 
   lazy val shapeType: PCanonicalTuple =
@@ -253,13 +253,13 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
             cb += Region.copyFrom(
               dataValue.asInstanceOf[SIndexablePointerValue].elementsAddress,
               result.firstDataAddress,
-              dataValue.loadLength().toL * elementType.byteSize,
+              dataValue.loadLength.toL * elementType.byteSize,
             )
           case _ =>
             val loopCtr = cb.newLocal[Long]("pcanonical_ndarray_construct_by_copying_loop_idx")
             cb.for_(
               cb.assign(loopCtr, 0L),
-              loopCtr < dataValue.loadLength().toL,
+              loopCtr < dataValue.loadLength.toL,
               cb.assign(loopCtr, loopCtr + 1L),
               elementType.storeAtAddress(
                 cb,

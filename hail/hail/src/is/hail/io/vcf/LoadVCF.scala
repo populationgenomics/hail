@@ -27,7 +27,9 @@ import is.hail.variant._
 
 import scala.annotation.meta.param
 import scala.annotation.switch
-import scala.collection.JavaConverters._
+import scala.collection.BufferedIterator
+import scala.collection.compat._
+import scala.jdk.CollectionConverters._
 
 import htsjdk.variant.vcf._
 import org.apache.spark.{Partition, TaskContext}
@@ -77,9 +79,9 @@ object VCFHeaderInfo {
     val formatFields = lookupFields("formatFields")
 
     def lookupAttrs(name: String) = (jv \ name).asInstanceOf[JObject].obj.toMap
-      .mapValues { case elt: JObject =>
-        elt.obj.toMap.mapValues(_.asInstanceOf[JString].s)
-      }
+      .view.mapValues { case elt: JObject =>
+        elt.obj.toMap.view.mapValues(_.asInstanceOf[JString].s).toMap
+      }.toMap
 
     val filterAttrs = lookupAttrs("filterAttrs")
     val infoAttrs = lookupAttrs("infoAttrs")
@@ -216,7 +218,7 @@ class VCFParseError(val msg: String, val pos: Int) extends RuntimeException(msg)
 
 final class VCFLine(
   val line: String,
-  val fileNum: Long,
+  val fileNum: Int,
   val fileOffset: Long,
   arrayElementsRequired: Boolean,
   val abs: MissingArrayBuilder[String],
@@ -306,8 +308,6 @@ final class VCFLine(
     }
   }
 
-  def endFilterArrayElement(p: Int): Boolean = endInfoField
-
   def endField(): Boolean = endField(pos)
 
   def endArrayElement(): Boolean = endArrayElement(pos)
@@ -324,7 +324,7 @@ final class VCFLine(
 
   def endFormatArrayElement(): Boolean = endFormatArrayElement(pos)
 
-  def endFilterArrayElement(): Boolean = endFilterArrayElement(pos)
+  def endFilterArrayElement(): Boolean = endInfoField()
 
   def skipInfoField(): Unit =
     while (!endInfoField())
@@ -1304,15 +1304,13 @@ class ParseLineContext(
   }
 }
 
-object LoadVCF {
-  def warnDuplicates(ids: Array[String]): Unit = {
+object LoadVCF extends Logging {
+  def warnDuplicates(ids: IndexedSeq[String]): Unit = {
     val duplicates = ids.counter().filter(_._2 > 1)
     if (duplicates.nonEmpty) {
-      warn(
-        s"Found ${duplicates.size} duplicate ${plural(duplicates.size, "sample ID")}:\n  @1",
-        duplicates.toArray.sortBy(-_._2).map { case (id, count) =>
-          s"""($count) "$id""""
-        }.truncatable("\n  "),
+      logger.warn(
+        s"Found ${duplicates.size} duplicate ${plural(duplicates.size, "sample ID")}:\n" +
+          s"${duplicates.toArray.sortBy(-_._2).map { case (id, count) => s"""($count) "$id"""" }.mkString("\n  ")}"
       )
     }
   }
@@ -1372,7 +1370,7 @@ object LoadVCF {
     )
       ((id, baseType), (id, attrs), isFlag)
     else if (isFlag) {
-      warn(
+      logger.warn(
         s"invalid VCF header: at INFO field '$id' of type 'Flag', expected 'Number=0', got 'Number=${headerNumberToString(line)}''" +
           s"\n  Interpreting as 'Number=0' regardless."
       )
@@ -1488,7 +1486,7 @@ object LoadVCF {
 
     if (hasRowUID) {
       rvb.startTuple()
-      rvb.addLong(vcfLine.fileNum)
+      rvb.addLong(vcfLine.fileNum.toLong)
       rvb.addLong(vcfLine.fileOffset)
       rvb.endTuple()
     }
@@ -1532,7 +1530,7 @@ object LoadVCF {
               val vcfLine = new VCFLine(
                 line,
                 context.fileNum,
-                lwc.source.position.get,
+                lwc.source.position.get.toLong,
                 arrayElementsRequired,
                 abs,
                 abi,
@@ -1685,7 +1683,7 @@ class PartitionedVCFRDD(
   file: String,
   @(transient @param) reverseContigMapping: Map[String, String],
   @(transient @param) _partitions: Array[Partition],
-) extends RDD[WithContext[String]](SparkBackend.sparkContext("PartitionedVCFRDD"), Seq()) {
+) extends RDD[WithContext[String]](SparkBackend.sparkContext, Seq()) {
 
   val contigRemappingBc =
     if (reverseContigMapping.size != 0) sparkContext.broadcast(reverseContigMapping) else null
@@ -1710,8 +1708,8 @@ class PartitionedVCFRDD(
     val lines = new TabixLineIterator(fsBc.value, file, reg)
 
     // clean up
-    val context = TaskContext.get
-    context.addTaskCompletionListener[Unit]((context: TaskContext) => lines.close())
+    val context = TaskContext.get()
+    context.addTaskCompletionListener[Unit]((context: TaskContext) => lines.close()): Unit
 
     val it: Iterator[WithContext[String]] = new Iterator[WithContext[String]] {
       private var l = lines.next()
@@ -1745,7 +1743,7 @@ class PartitionedVCFRDD(
   }
 }
 
-object MatrixVCFReader {
+object MatrixVCFReader extends Logging {
   def apply(
     ctx: ExecuteContext,
     files: Seq[String],
@@ -1786,7 +1784,7 @@ object MatrixVCFReader {
     val fileListEntries = fs.globAll(params.files)
     fileListEntries.map(_.getPath).foreach { path =>
       if (!(path.endsWith(".vcf") || path.endsWith(".vcf.bgz") || path.endsWith(".vcf.gz")))
-        warn(s"expected input file '$path' to end in .vcf[.bgz, .gz]")
+        logger.warn(s"expected input file '$path' to end in .vcf[.bgz, .gz]")
     }
     checkGzipOfGlobbedFiles(params.files, fileListEntries, params.forceGZ, params.gzAsBGZ)
 
@@ -1804,60 +1802,58 @@ object MatrixVCFReader {
         val files = fileListEntries.map(_.getPath)
         val localFilterAndReplace = params.filterAndReplace
 
-        val fsConfigBC = backend.broadcast(fs.getConfiguration())
-        val (failureOpt, _) = backend.parallelizeAndComputeWithIndex(
-          ctx.backendContext,
-          fs,
-          files.tail.map(_.getBytes),
-          "load_vcf_parse_header",
-        ) { (bytes, htc, _, fs) =>
-          val fsConfig = fsConfigBC.value
-          fs.setConfiguration(fsConfig)
-          val file = new String(bytes)
+        backend
+          .runtimeContext(ctx)
+          .mapCollectPartitions(
+            Array.emptyByteArray,
+            files.tail.map(_.getBytes),
+            "load_vcf_parse_header",
+          ) { (_, bytes, htc, _, fs) =>
+            val file = new String(bytes)
 
-          val hd = parseHeader(getHeaderLines(fs, file, localFilterAndReplace))
-          val hd1 = header1Bc.value
+            val hd = parseHeader(getHeaderLines(fs, file, localFilterAndReplace))
+            val hd1 = header1Bc.value
 
-          if (params.sampleIDs.isEmpty && hd1.sampleIds.length != hd.sampleIds.length) {
-            fatal(
-              s"""invalid sample IDs: expected same number of samples for all inputs.
-                 | ${files(0)} has ${hd1.sampleIds.length} ids and
-                 | $file has ${hd.sampleIds.length} ids.
+            if (params.sampleIDs.isEmpty && hd1.sampleIds.length != hd.sampleIds.length) {
+              fatal(
+                s"""invalid sample IDs: expected same number of samples for all inputs.
+                   | ${files(0)} has ${hd1.sampleIds.length} ids and
+                   | $file has ${hd.sampleIds.length} ids.
          """.stripMargin
-            )
-          }
+              )
+            }
 
-          if (params.sampleIDs.isEmpty) {
-            hd1.sampleIds.iterator.zipAll(hd.sampleIds.iterator, None, None)
-              .zipWithIndex.foreach { case ((s1, s2), i) =>
-                if (s1 != s2) {
-                  fatal(
-                    s"""invalid sample IDs: expected sample ids to be identical for all inputs. Found different sample IDs at position $i.
-                       |    ${files(0)}: $s1
-                       |    $file: $s2""".stripMargin
-                  )
+            if (params.sampleIDs.isEmpty) {
+              hd1.sampleIds.iterator.zipAll(hd.sampleIds.iterator, None, None)
+                .zipWithIndex.foreach { case ((s1, s2), i) =>
+                  if (s1 != s2) {
+                    fatal(
+                      s"""invalid sample IDs: expected sample ids to be identical for all inputs. Found different sample IDs at position $i.
+                         |    ${files(0)}: $s1
+                         |    $file: $s2""".stripMargin
+                    )
+                  }
                 }
-              }
+            }
+
+            if (!hd.formatCompatible(hd1))
+              fatal(
+                s"""invalid genotype signature: expected signatures to be identical for all inputs.
+                   |   ${files(0)}: ${hd1.genotypeSignature.toString}
+                   |   $file: ${hd.genotypeSignature.toString}""".stripMargin
+              )
+
+            if (!hd.infoCompatible(hd1))
+              fatal(
+                s"""invalid variant annotation signature: expected signatures to be identical for all inputs. Check that all files have same INFO fields.
+                   |   ${files(0)}: ${hd1.infoSignature.toString}
+                   |   $file: ${hd.infoSignature.toString}""".stripMargin
+              )
+
+            bytes
           }
-
-          if (!hd.formatCompatible(hd1))
-            fatal(
-              s"""invalid genotype signature: expected signatures to be identical for all inputs.
-                 |   ${files(0)}: ${hd1.genotypeSignature.toString}
-                 |   $file: ${hd.genotypeSignature.toString}""".stripMargin
-            )
-
-          if (!hd.infoCompatible(hd1))
-            fatal(
-              s"""invalid variant annotation signature: expected signatures to be identical for all inputs. Check that all files have same INFO fields.
-                 |   ${files(0)}: ${hd1.infoSignature.toString}
-                 |   $file: ${hd.infoSignature.toString}""".stripMargin
-            )
-
-          bytes
-        }
-
-        failureOpt.foreach(throw _)
+          ._1
+          .foreach(throw _)
       }
     }
 
@@ -1968,7 +1964,7 @@ class MatrixVCFReader(
 
   val columnCount: Option[Int] = Some(nCols)
 
-  val partitionCounts: Option[IndexedSeq[Long]] = None
+  def partitionCounts: Option[IndexedSeq[Long]] = None
 
   def partitioner(sm: HailStateManager): Option[RVDPartitioner] =
     params.partitionsJSON.map { partitionsJSON =>
@@ -2213,11 +2209,23 @@ case class GVCFPartitionReader(
     context.toI(cb).map(cb) { case ctxValue: SBaseStructValue =>
       val fileNum = cb.memoizeField(ctxValue.loadField(cb, "fileNum").getOrAssert(cb).asInt32.value)
       val filePath =
-        cb.memoizeField(ctxValue.loadField(cb, "path").getOrAssert(cb).asString.loadString(cb))
+        cb.memoizeField(ctxValue.loadField(cb, "path").getOrFatal(
+          cb,
+          "expected present gvcf path",
+        ).asString.loadString(cb))
       val contig =
-        cb.memoizeField(ctxValue.loadField(cb, "contig").getOrAssert(cb).asString.loadString(cb))
-      val start = cb.memoizeField(ctxValue.loadField(cb, "start").getOrAssert(cb).asInt32.value)
-      val end = cb.memoizeField(ctxValue.loadField(cb, "end").getOrAssert(cb).asInt32.value)
+        cb.memoizeField(ctxValue.loadField(cb, "contig").getOrFatal(
+          cb,
+          "expected present interval contig",
+        ).asString.loadString(cb))
+      val start = cb.memoizeField(ctxValue.loadField(cb, "start").getOrFatal(
+        cb,
+        "expected present interval start position",
+      ).asInt32.value)
+      val end = cb.memoizeField(ctxValue.loadField(cb, "end").getOrFatal(
+        cb,
+        "expected present interval end position",
+      ).asInt32.value)
 
       val requestedPType = fullRowPType.subsetTo(requestedType).asInstanceOf[PStruct]
       val eltRegion = mb.genFieldThisRef[Region]("gvcf_elt_region")

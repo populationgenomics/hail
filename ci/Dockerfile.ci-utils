@@ -1,19 +1,14 @@
 ARG BASE_IMAGE={{ base_image.image }}
 FROM $BASE_IMAGE AS base
 
-# https://bugs.mysql.com/bug.php?id=105288&thanks=sub
-RUN hail-apt-get-install xz-utils libncurses5 git google-cloud-cli kubectl && \
-    curl --remote-name https://downloads.mysql.com/archives/get/p/23/file/mysql-8.0.26-linux-glibc2.17-x86_64-minimal-rebuild.tar.xz && \
-    mkdir -p /opt && \
-    tar -vx -C /opt -f mysql-8.0.26-linux-glibc2.17-x86_64-minimal-rebuild.tar.xz && \
-    ln -s /opt/mysql-8.0.26-linux-glibc2.17-x86_64-minimal-rebuild/bin/* /usr/bin/
+RUN hail-apt-get-install git google-cloud-cli kubectl mysql-client
 
 COPY hail/python/hailtop/pinned-requirements.txt hailtop-requirements.txt
 COPY gear/pinned-requirements.txt gear-requirements.txt
 RUN hail-pip-install \
       -r hailtop-requirements.txt \
       -r gear-requirements.txt \
-      twine==1.11.0 \
+      'twine>=6.2.0,<7' \
       'Jinja2>3,<4'
 
 FROM golang:1.18 AS skopeo-build
@@ -34,7 +29,7 @@ COPY hail/python/setup-hailtop.py /hailtop/setup.py
 COPY hail/python/MANIFEST.in /hailtop/MANIFEST.in
 COPY hail/python/hailtop /hailtop/hailtop/
 
-COPY gear/setup.py /gear/setup.py
+COPY gear/pyproject.toml /gear/pyproject.toml
 COPY gear/gear /gear/gear/
 
 RUN hail-pip-install /hailtop /gear

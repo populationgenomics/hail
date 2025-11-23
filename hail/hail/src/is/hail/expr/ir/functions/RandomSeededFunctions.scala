@@ -389,6 +389,75 @@ object RandomSeededFunctions extends RegistryFunctions {
         primitive(cb.memoize(rng.invoke[Double, Double, Double]("rgamma", a.value, scale.value)))
     }
 
+    registerSCode4(
+      "rand_hyper",
+      TRNGState,
+      TInt32,
+      TInt32,
+      TInt32,
+      TInt32,
+      {
+        case (_: Type, _: SType, _: SType, _: SType, _: SType) => SInt32
+      },
+    ) {
+      case (
+            _,
+            cb,
+            _,
+            rngState: SRNGStateValue,
+            popSize: SInt32Value,
+            nGood: SInt32Value,
+            nSample: SInt32Value,
+            _,
+          ) =>
+        val rng = cb.emb.getThreefryRNG()
+        rngState.copyIntoEngine(cb, rng)
+        val nBad = popSize.value - nGood.value
+        primitive(cb.memoize(rng.invoke[Double, Double, Double, Double](
+          "rhyper",
+          nGood.value.toD,
+          nBad.toD,
+          nSample.value.toD,
+        ).toI))
+    }
+
+    registerSCode3(
+      "rand_multi_hyper",
+      TRNGState,
+      TArray(TInt32),
+      TInt32,
+      TArray(TInt32),
+      {
+        case (_: Type, _: SType, _: SType, _: SType) =>
+          SIndexablePointer(PCanonicalArray(PInt32(required = true)))
+      },
+    ) {
+      case (r, cb, _, rngState: SRNGStateValue, colors: SIndexableValue, nSample: SInt32Value, _) =>
+        val rng = cb.emb.getThreefryRNG()
+        rngState.copyIntoEngine(cb, rng)
+        val (push, finish) = PCanonicalArray(PInt32(required = true))
+          .constructFromFunctions(cb, r.region, colors.loadLength, deepCopy = false)
+        cb.if_(
+          colors.hasMissingValues(cb),
+          cb._fatal("rand_multi_hyper: colors may not contain missing values"),
+        )
+        val remaining = cb.newLocal[Int]("rand_multi_hyper_N", 0)
+        val toSample = cb.newLocal[Int]("rand_multi_hyper_toSample", nSample.value)
+        colors.forEachDefined(cb)((cb, _, n) => cb.assign(remaining, remaining + n.asInt.value))
+        colors.forEachDefined(cb) { (cb, _, n) =>
+          cb.assign(remaining, remaining - n.asInt.value)
+          val drawn = cb.memoize(rng.invoke[Double, Double, Double, Double](
+            "rhyper",
+            n.asInt.value.toD,
+            remaining.toD,
+            toSample.toD,
+          ).toI)
+          cb.assign(toSample, toSample - drawn)
+          push(cb, IEmitCode.present(cb, primitive(drawn)))
+        }
+        finish(cb)
+    }
+
     registerSCode2(
       "rand_cat",
       TRNGState,
@@ -398,7 +467,7 @@ object RandomSeededFunctions extends RegistryFunctions {
         case (_: Type, _: SType, _: SType) => SInt32
       },
     ) { case (_, cb, _, rngState: SRNGStateValue, weights: SIndexableValue, _) =>
-      val len = weights.loadLength()
+      val len = weights.loadLength
       val i = cb.newLocal[Int]("i", 0)
       val s = cb.newLocal[Double]("sum", 0.0)
       cb.while_(
@@ -456,7 +525,7 @@ object RandomSeededFunctions extends RegistryFunctions {
         rngState.copyIntoEngine(cb, rng)
 
         val totalNumberOfRecords = cb.newLocal[Int]("scnspp_total_number_of_records", 0)
-        val resultSize: Value[Int] = partitionCounts.loadLength()
+        val resultSize: Value[Int] = partitionCounts.loadLength
         val i = cb.newLocal[Int]("scnspp_index", 0)
         cb.for_(
           cb.assign(i, 0),

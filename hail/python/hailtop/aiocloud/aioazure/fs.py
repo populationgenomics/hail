@@ -12,8 +12,7 @@ import aiohttp
 import azure.core.exceptions
 from azure.mgmt.storage.aio import StorageManagementClient
 from azure.storage.blob import BlobProperties, ResourceTypes, generate_account_sas
-from azure.storage.blob.aio import BlobClient, BlobServiceClient, ContainerClient, StorageStreamDownloader
-from azure.storage.blob.aio._list_blobs_helper import BlobPrefix
+from azure.storage.blob.aio import BlobClient, BlobPrefix, BlobServiceClient, ContainerClient, StorageStreamDownloader
 
 from hailtop.aiotools import WriteBuffer
 from hailtop.aiotools.fs import (
@@ -205,7 +204,7 @@ class AzureReadableStream(ReadableStream):
 
         while len(self._buffer) < n:
             try:
-                chunk = await self._chunk_it.__anext__()
+                chunk = await anext(self._chunk_it)
                 self._buffer.extend(chunk)
             except StopAsyncIteration:
                 break
@@ -602,9 +601,9 @@ class AzureAsyncFS(AsyncFS):
         else:
             it = AzureAsyncFS._listfiles_flat(client, fs_url, name)
 
-        it = it.__aiter__()
+        it = aiter(it)
         try:
-            first_entry = await it.__anext__()
+            first_entry = await anext(it)
         except StopAsyncIteration:
             raise FileNotFoundError(url)  # pylint: disable=raise-missing-from
 
@@ -625,7 +624,7 @@ class AzureAsyncFS(AsyncFS):
                 yield first_entry
             try:
                 while True:
-                    next_entry = await it.__anext__()
+                    next_entry = await anext(it)
                     if await should_yield(next_entry):
                         yield next_entry
             except StopAsyncIteration:

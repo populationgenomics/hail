@@ -1,10 +1,12 @@
 package is.hail.types.virtual
 
-import is.hail.annotations.{Annotation, ExtendedOrdering}
+import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 import is.hail.expr.ir.IRParser
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
+
+import scala.collection.compat._
 
 import org.json4s.CustomSerializer
 import org.json4s.JsonAST.JString
@@ -59,7 +61,7 @@ final case class TUnion(cases: IndexedSeq[Case]) extends Type {
   override def unify(concrete: Type): Boolean = concrete match {
     case TUnion(cfields) =>
       cases.length == cfields.length &&
-      (cases, cfields).zipped.forall { case (f, cf) =>
+      cases.lazyZip(cfields).forall { case (f, cf) =>
         f.unify(cf)
       }
     case _ => false
@@ -78,7 +80,7 @@ final case class TUnion(cases: IndexedSeq[Case]) extends Type {
   def fieldType(name: String): Type = types(caseIdx(name))
 
   def rename(m: Map[String, String]): TUnion = {
-    val newFieldsBuilder = new BoxedArrayBuilder[(String, Type)]()
+    val newFieldsBuilder = ArraySeq.newBuilder[(String, Type)]
     cases.foreach { fd =>
       val n = fd.name
       newFieldsBuilder += (m.getOrElse(n, n) -> fd.typ)
@@ -95,35 +97,29 @@ final case class TUnion(cases: IndexedSeq[Case]) extends Type {
   override def _typeCheck(a: Any): Boolean = ???
 
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("union{")
+    sb ++= "union{"
     cases.foreachBetween({ field =>
-      sb.append(prettyIdentifier(field.name))
-      sb.append(": ")
+      sb ++= prettyIdentifier(field.name) ++= ": ": Unit
       field.typ.pyString(sb)
-    })(sb.append(", "))
-    sb.append('}')
+    })(sb ++= ", ")
+    sb += '}'
   }
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
     if (compact) {
-      sb.append("Union{")
+      sb ++= "Union{"
       cases.foreachBetween(_.pretty(sb, indent, compact))(sb += ',')
       sb += '}'
     } else {
       if (size == 0)
-        sb.append("Union { }")
+        sb ++= "Union { }"
       else {
-        sb.append("Union {")
-        sb += '\n'
-        cases.foreachBetween(_.pretty(sb, indent + 4, compact))(sb.append(",\n"))
-        sb += '\n'
-        sb.append(" " * indent)
-        sb += '}'
+        sb ++= "Union {\n"
+        cases.foreachBetween(_.pretty(sb, indent + 4, compact))(sb ++= ",\n")
+        sb += '\n' ++= (" " * indent) += '}': Unit
       }
     }
   }
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] = ???
 
   override def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering = ???
 
@@ -131,7 +127,7 @@ final case class TUnion(cases: IndexedSeq[Case]) extends Type {
     t match {
       case u: TUnion =>
         size == u.size &&
-        (cases, u.cases).zipped.forall(_.typ isIsomorphicTo _.typ)
+        cases.lazyZip(u.cases).forall(_.typ isIsomorphicTo _.typ)
       case _ =>
         false
     }

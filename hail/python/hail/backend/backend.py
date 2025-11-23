@@ -1,9 +1,11 @@
 import abc
+import logging
+import os
 import warnings
 import zipfile
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from enum import Enum
-from typing import AbstractSet, Any, ClassVar, Dict, List, Mapping, Optional, Tuple, TypeVar, Union
+from typing import AbstractSet, Any, ClassVar, Dict, List, Mapping, Optional, Set, Tuple, TypeVar, Union
 
 import orjson
 
@@ -43,40 +45,71 @@ Error summary: {short_message}""",
     )
 
 
-class LocalJarInformation:
-    def __init__(self, development_mode: bool, local_jar_path: str, extra_classpath: List[str]):
-        self.development_mode = development_mode
-        self.path = local_jar_path
-        self.extra_classpath = extra_classpath
+@dataclass
+class LocalJarInfo:
+    dev: bool
+    hail_jar: str
+    extra_classpath: List[str]
+
+    def __iter__(self):
+        return iter(astuple(self))
 
 
-def local_jar_information() -> LocalJarInformation:
+def local_jar_information() -> LocalJarInfo:
+    if (hail_jar := os.getenv('HAIL_JAR')) is not None:
+        logging.info(f'picked up HAIL_JAR={hail_jar}')
+        return LocalJarInfo(True, hail_jar, [])
+
     if (hail_jar := __resource('backend/hail.jar')).is_file():
         warnings.warn('!!! THIS IS A DEVELOPMENT VERSION OF HAIL !!!')
-        return LocalJarInformation(
-            True,
-            str(hail_jar),
-            [__resource_str('backend/extra_classpath')],
+        return LocalJarInfo(True, str(hail_jar), [__resource_str('backend/extra_classpath')])
+
+    if (hail_all_spark_jar := __resource('backend/hail-all-spark.jar')).is_file():
+        return LocalJarInfo(False, str(hail_all_spark_jar), [])
+
+    raise RuntimeError('Hail requires either the environment variable HAIL_JAR, hail.jar or hail-all-spark.jar.')
+
+
+class IRFunction:
+    def __init__(
+        self,
+        name: str,
+        type_parameters: Union[Tuple[HailType, ...], List[HailType]],
+        value_parameter_names: Union[Tuple[str, ...], List[str]],
+        value_parameter_types: Union[Tuple[HailType, ...], List[HailType]],
+        return_type: HailType,
+        body: Expression,
+    ):
+        assert len(value_parameter_names) == len(value_parameter_types)
+        render = CSERenderer()
+        self._name = name
+        self._type_parameters = type_parameters
+        self._value_parameter_names = value_parameter_names
+        self._value_parameter_types = value_parameter_types
+        self._return_type = return_type
+        self._rendered_body = render(finalize_randomness(body._ir))
+
+    def to_dataclass(self):
+        return SerializedIRFunction(
+            name=self._name,
+            type_parameters=[tp._parsable_string() for tp in self._type_parameters],
+            value_parameter_names=list(self._value_parameter_names),
+            value_parameter_types=[vpt._parsable_string() for vpt in self._value_parameter_types],
+            return_type=self._return_type._parsable_string(),
+            rendered_body=self._rendered_body,
         )
-    elif (hail_all_spark_jar := __resource('backend/hail-all-spark.jar')).is_file():
-        return LocalJarInformation(
-            False,
-            str(hail_all_spark_jar),
-            [],
-        )
-    else:
-        raise ValueError(f'Hail requires either {hail_jar} or {hail_all_spark_jar}.')
 
 
 class ActionTag(Enum):
-    LOAD_REFERENCES_FROM_DATASET = 1
-    VALUE_TYPE = 2
-    TABLE_TYPE = 3
-    MATRIX_TABLE_TYPE = 4
-    BLOCK_MATRIX_TYPE = 5
-    EXECUTE = 6
-    PARSE_VCF_METADATA = 7
-    IMPORT_FAM = 8
+    # is.hail.backend.service.ServiceBackendSocketAPI2 protocol
+    VALUE_TYPE = 1
+    TABLE_TYPE = 2
+    MATRIX_TABLE_TYPE = 3
+    BLOCK_MATRIX_TYPE = 4
+    EXECUTE = 5
+    PARSE_VCF_METADATA = 6
+    IMPORT_FAM = 7
+    LOAD_REFERENCES_FROM_DATASET = 8
     FROM_FASTA_FILE = 9
 
 
@@ -91,10 +124,20 @@ class IRTypePayload(ActionPayload):
 
 
 @dataclass
+class SerializedIRFunction:
+    name: str
+    type_parameters: List[str]
+    value_parameter_names: List[str]
+    value_parameter_types: List[str]
+    return_type: str
+    rendered_body: str
+
+
+@dataclass
 class ExecutePayload(ActionPayload):
     ir: str
+    fns: List[SerializedIRFunction]
     stream_codec: str
-    timed: bool
 
 
 @dataclass
@@ -129,6 +172,7 @@ class FromFASTAFilePayload(ActionPayload):
 class Backend(abc.ABC):
     # Must match knownFlags in HailFeatureFlags.scala
     _flags_env_vars_and_defaults: ClassVar[Dict[str, Tuple[str, Optional[str]]]] = {
+        "branching_factor": ("HAIL_BRANCHING_FACTOR", None),
         "cachedir": ("HAIL_CACHE_DIR", None),
         "distributed_scan_comb_op": ("HAIL_DEV_DISTRIBUTED_SCAN_COMB_OP", None),
         "gcs_requester_pays_buckets": ("HAIL_GCS_REQUESTER_PAYS_BUCKETS", None),
@@ -140,9 +184,11 @@ class Backend(abc.ABC):
         "lower_bm": ("HAIL_DEV_LOWER_BM", None),
         "lower_only": ("HAIL_DEV_LOWER_ONLY", None),
         "max_leader_scans": ("HAIL_DEV_MAX_LEADER_SCANS", "1000"),
+        "max_optimizer_iterations": ("HAIL_OPTIMIZER_ITERATIONS", None),
         "method_split_ir_limit": ("HAIL_DEV_METHOD_SPLIT_LIMIT", "16"),
         "no_ir_logging": ("HAIL_DEV_NO_IR_LOG", None),
         "no_whole_stage_codegen": ("HAIL_DEV_NO_WHOLE_STAGE_CODEGEN", None),
+        "optimize": ("HAIL_QUERY_OPTIMIZE", "1"),
         "print_inputs_on_worker": ("HAIL_DEV_PRINT_INPUTS_ON_WORKER", None),
         "print_ir_on_worker": ("HAIL_DEV_PRINT_IR_ON_WORKER", None),
         "profile": ("HAIL_PROFILE", None),
@@ -164,6 +210,8 @@ class Backend(abc.ABC):
     def __init__(self):
         self._persisted_locations = dict()
         self._references = {}
+        self.functions: List[IRFunction] = []
+        self._registered_ir_function_names: Set[str] = set()
 
     @abc.abstractmethod
     def validate_file(self, uri: str):
@@ -171,10 +219,15 @@ class Backend(abc.ABC):
 
     @abc.abstractmethod
     def stop(self):
-        pass
+        self.functions = []
+        self._registered_ir_function_names = set()
 
     def execute(self, ir: BaseIR, timed: bool = False) -> Any:
-        payload = ExecutePayload(self._render_ir(ir), '{"name":"StreamBufferSpec"}', timed)
+        payload = ExecutePayload(
+            self._render_ir(ir),
+            fns=[fn.to_dataclass() for fn in self.functions],
+            stream_codec='{"name":"StreamBufferSpec"}',
+        )
         try:
             result, timings = self._rpc(ActionTag.EXECUTE, payload)
         except FatalError as e:
@@ -236,7 +289,7 @@ class Backend(abc.ABC):
     def initialize_references(self):
         from hail.genetics.reference_genome import ReferenceGenome
 
-        jar_path = local_jar_information().path
+        _, jar_path, *_ = local_jar_information()
         for path_in_jar in BUILTIN_REFERENCE_RESOURCE_PATHS.values():
             rg_config = orjson.loads(zipfile.ZipFile(jar_path).open(path_in_jar).read())
             rg = ReferenceGenome._from_config(rg_config, _builtin=True)
@@ -300,7 +353,6 @@ class Backend(abc.ABC):
         tempfile.__exit__(None, None, None)
         return unpersisted
 
-    @abc.abstractmethod
     def register_ir_function(
         self,
         name: str,
@@ -310,11 +362,13 @@ class Backend(abc.ABC):
         return_type: HailType,
         body: Expression,
     ):
-        pass
+        self._registered_ir_function_names.add(name)
+        self.functions.append(
+            IRFunction(name, type_parameters, value_parameter_names, value_parameter_types, return_type, body)
+        )
 
-    @abc.abstractmethod
     def _is_registered_ir_function_name(self, name: str) -> bool:
-        pass
+        return name in self._registered_ir_function_names
 
     @abc.abstractmethod
     def persist_expression(self, expr: Expression) -> Expression:
@@ -343,4 +397,24 @@ class Backend(abc.ABC):
     @property
     @abc.abstractmethod
     def requires_lowering(self):
+        pass
+
+    @property
+    @abc.abstractmethod
+    def local_tmpdir(self) -> str:
+        pass
+
+    @local_tmpdir.setter
+    @abc.abstractmethod
+    def local_tmpdir(self, dir: str) -> None:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def remote_tmpdir(self) -> str:
+        pass
+
+    @remote_tmpdir.setter
+    @abc.abstractmethod
+    def remote_tmpdir(self, dir: str) -> None:
         pass

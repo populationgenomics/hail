@@ -1,10 +1,10 @@
 package is.hail.expr.ir
 
 import is.hail.HailSuite
-import is.hail.backend.ExecuteContext
 import is.hail.expr.Nat
 import is.hail.expr.ir.agg.CallStatsState
 import is.hail.expr.ir.defs._
+import is.hail.expr.ir.lowering.LoweringPipeline
 import is.hail.io.{BufferSpec, TypedCodecSpec}
 import is.hail.stats.fetStruct
 import is.hail.types._
@@ -13,9 +13,13 @@ import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.interfaces.SStream
 import is.hail.types.physical.stypes.primitives.SInt32
 import is.hail.types.virtual._
-import is.hail.utils.{BoxedArrayBuilder, FastSeq}
+import is.hail.utils.FastSeq
+
+import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.sql.Row
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.{DataProvider, Test}
 
 class RequirednessSuite extends HailSuite {
@@ -104,8 +108,9 @@ class RequirednessSuite extends HailSuite {
   def pinterval(point: PType, r: Boolean): PInterval = PCanonicalInterval(point, r)
 
   @DataProvider(name = "valueIR")
-  def valueIR(): Array[Array[Any]] = ExecuteContext.scoped { ctx =>
-    val nodes = new BoxedArrayBuilder[Array[Any]](50)
+  def valueIR(): Array[Array[Any]] = {
+    val nodes = Array.newBuilder[Array[Any]]
+    nodes.sizeHint(50)
 
     val allRequired = Array(
       I32(5),
@@ -348,7 +353,8 @@ class RequirednessSuite extends HailSuite {
 
   @DataProvider(name = "tableIR")
   def tableIR(): Array[Array[Any]] = {
-    val nodes = new BoxedArrayBuilder[Array[Any]](50)
+    val nodes = Array.newBuilder[Array[Any]]
+    nodes.sizeHint(50)
 
     nodes += Array[Any](
       TableRange(1, 1),
@@ -629,7 +635,7 @@ class RequirednessSuite extends HailSuite {
 
   @Test
   def testDataProviders(): Unit = {
-    val s = new BoxedArrayBuilder[String]()
+    val s = ArrayBuffer.empty[String]
     valueIR().map(v => v(0) -> v(1)).foreach {
       case (n: IR, t: PType) =>
         if (n.typ != t.virtualType)
@@ -646,7 +652,7 @@ class RequirednessSuite extends HailSuite {
              |${Pretty(ctx, n)}"
              |""".stripMargin
     }
-    assert(s.size == 0, s.result().mkString("\n\n"))
+    assert(s.isEmpty, s.mkString("\n\n"))
   }
 
   def /**/ dump(m: Memo[BaseTypeWithRequiredness]): String =
@@ -715,19 +721,21 @@ class RequirednessSuite extends HailSuite {
     )
 
     val path = ctx.createTmpPath("test-table-requiredness", "ht")
-    CompileAndEvaluate[Unit](
-      ctx,
-      TableWrite(table, TableNativeWriter(path, overwrite = true)),
-      false,
-    )
+    unoptimized { ctx =>
+      CompileAndEvaluate[Unit](
+        ctx,
+        TableWrite(table, TableNativeWriter(path)),
+        LoweringPipeline.relationalLowerer,
+      )
+    }
 
     val reader = TableNativeReader(fs, TableNativeReaderParameters(path, None))
-    for (
-      rType <- Array(
+    forAll(
+      Array(
         table.typ,
         TableType(TStruct("a" -> tnestedarray), FastSeq(), TStruct("z" -> tstruct)),
       )
-    ) {
+    ) { rType =>
       val row = reader.rowRequiredness(ctx, rType)
       val global = reader.globalRequiredness(ctx, rType)
       val node = TableRead(rType, dropRows = false, reader)

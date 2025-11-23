@@ -2,10 +2,10 @@ package is.hail.expr.ir
 
 import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
-import is.hail.TestUtils._
 import is.hail.annotations.{BroadcastRow, ExtendedOrdering, SafeNDArray}
 import is.hail.backend.ExecuteContext
 import is.hail.expr.Nat
+import is.hail.expr.ir.TestUtils._
 import is.hail.expr.ir.agg._
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.defs.ArrayZipBehavior.ArrayZipBehavior
@@ -24,15 +24,17 @@ import is.hail.types.virtual.TIterable.elementType
 import is.hail.utils.{FastSeq, _}
 import is.hail.variant.{Call2, Locus}
 
+import scala.collection.compat._
 import scala.collection.mutable
-import scala.language.implicitConversions
 
 import org.apache.spark.sql.Row
 import org.json4s.jackson.{JsonMethods, Serialization}
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.{DataProvider, Test}
 
 class IRSuite extends HailSuite {
-  implicit val execStrats = ExecStrategy.nonLowering
+  implicit val execStrats: Set[ExecStrategy] = ExecStrategy.nonLowering
 
   @Test def testRandDifferentLengthUIDStrings(): Unit = {
     implicit val execStrats = ExecStrategy.lowering
@@ -469,7 +471,7 @@ class IRSuite extends HailSuite {
 
   @Test def testApplyComparisonOpGT(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
-      assertEvalsTo(ApplyComparisonOp(GT(t), In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
+      assertEvalsTo(ApplyComparisonOp(GT, In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
 
     assertComparesTo(TInt32, 1, 1, false)
     assertComparesTo(TInt32, 0, 1, false)
@@ -492,7 +494,7 @@ class IRSuite extends HailSuite {
   @Test def testApplyComparisonOpGTEQ(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
       assertEvalsTo(
-        ApplyComparisonOp(GTEQ(t), In(0, t), In(1, t)),
+        ApplyComparisonOp(GTEQ, In(0, t), In(1, t)),
         FastSeq(x -> t, y -> t),
         expected,
       )
@@ -516,7 +518,7 @@ class IRSuite extends HailSuite {
 
   @Test def testApplyComparisonOpLT(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
-      assertEvalsTo(ApplyComparisonOp(LT(t), In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
+      assertEvalsTo(ApplyComparisonOp(LT, In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
 
     assertComparesTo(TInt32, 1, 1, false)
     assertComparesTo(TInt32, 0, 1, true)
@@ -539,7 +541,7 @@ class IRSuite extends HailSuite {
   @Test def testApplyComparisonOpLTEQ(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
       assertEvalsTo(
-        ApplyComparisonOp(LTEQ(t), In(0, t), In(1, t)),
+        ApplyComparisonOp(LTEQ, In(0, t), In(1, t)),
         FastSeq(x -> t, y -> t),
         expected,
       )
@@ -564,7 +566,7 @@ class IRSuite extends HailSuite {
 
   @Test def testApplyComparisonOpEQ(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
-      assertEvalsTo(ApplyComparisonOp(EQ(t), In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
+      assertEvalsTo(ApplyComparisonOp(EQ, In(0, t), In(1, t)), FastSeq(x -> t, y -> t), expected)
 
     assertComparesTo(TInt32, 1, 1, expected = true)
     assertComparesTo(TInt32, 0, 1, expected = false)
@@ -586,7 +588,7 @@ class IRSuite extends HailSuite {
   @Test def testApplyComparisonOpNE(): Unit = {
     def assertComparesTo(t: Type, x: Any, y: Any, expected: Boolean): Unit =
       assertEvalsTo(
-        ApplyComparisonOp(NEQ(t), In(0, t), In(1, t)),
+        ApplyComparisonOp(NEQ, In(0, t), In(1, t)),
         FastSeq(x -> t, y -> t),
         expected,
       )
@@ -1403,11 +1405,11 @@ class IRSuite extends HailSuite {
     assertEvalsTo(StreamLen(zip(ArrayZipBehavior.AssumeSameLength, range8, range8)), 8)
 
     // https://github.com/hail-is/hail/issues/8359
-    is.hail.TestUtils.assertThrows[HailException](
+    assertThrows[HailException](
       zipToTuple(ArrayZipBehavior.AssertSameLength, range6, range8): IR,
       "zip: length mismatch": String,
     )
-    is.hail.TestUtils.assertThrows[HailException](
+    assertThrows[HailException](
       zipToTuple(ArrayZipBehavior.AssertSameLength, range12, lit6): IR,
       "zip: length mismatch": String,
     )
@@ -1562,7 +1564,7 @@ class IRSuite extends HailSuite {
     val na = NA(TDict(TInt32, TString))
     assertEvalsTo(LowerBoundOnOrderedCollection(na, I32(0), onKey = true), null)
 
-    val dwna = TestUtils.IRDict((1, 3), (3, null), (null, 5))
+    val dwna = IRDict((1, 3), (3, null), (null, 5))
     assertEvalsTo(LowerBoundOnOrderedCollection(dwna, I32(-1), onKey = true), 0)
     assertEvalsTo(LowerBoundOnOrderedCollection(dwna, I32(1), onKey = true), 0)
     assertEvalsTo(LowerBoundOnOrderedCollection(dwna, I32(2), onKey = true), 1)
@@ -1570,7 +1572,7 @@ class IRSuite extends HailSuite {
     assertEvalsTo(LowerBoundOnOrderedCollection(dwna, I32(5), onKey = true), 2)
     assertEvalsTo(LowerBoundOnOrderedCollection(dwna, NA(TInt32), onKey = true), 2)
 
-    val dwoutna = TestUtils.IRDict((1, 3), (3, null))
+    val dwoutna = IRDict((1, 3), (3, null))
     assertEvalsTo(LowerBoundOnOrderedCollection(dwoutna, I32(-1), onKey = true), 0)
     assertEvalsTo(LowerBoundOnOrderedCollection(dwoutna, I32(4), onKey = true), 2)
     assertEvalsTo(LowerBoundOnOrderedCollection(dwoutna, NA(TInt32), onKey = true), 2)
@@ -1801,18 +1803,18 @@ class IRSuite extends HailSuite {
 
   @Test def testStreamFold(): Unit = {
     assertEvalsTo(foldIR(StreamRange(1, 2, 1), NA(TBoolean))((accum, elt) => IsNA(accum)), true)
-    assertEvalsTo(foldIR(TestUtils.IRStream(1, 2, 3), 0)((accum, elt) => accum + elt), 6)
+    assertEvalsTo(foldIR(IRStream(1, 2, 3), 0)((accum, elt) => accum + elt), 6)
     assertEvalsTo(
-      foldIR(TestUtils.IRStream(1, 2, 3), NA(TInt32))((accum, elt) => accum + elt),
+      foldIR(IRStream(1, 2, 3), NA(TInt32))((accum, elt) => accum + elt),
       null,
     )
     assertEvalsTo(
-      foldIR(TestUtils.IRStream(1, null, 3), NA(TInt32))((accum, elt) => accum + elt),
+      foldIR(IRStream(1, null, 3), NA(TInt32))((accum, elt) => accum + elt),
       null,
     )
-    assertEvalsTo(foldIR(TestUtils.IRStream(1, null, 3), 0)((accum, elt) => accum + elt), null)
+    assertEvalsTo(foldIR(IRStream(1, null, 3), 0)((accum, elt) => accum + elt), null)
     assertEvalsTo(
-      foldIR(TestUtils.IRStream(1, null, 3), NA(TInt32))((accum, elt) => I32(5) + I32(5)),
+      foldIR(IRStream(1, null, 3), NA(TInt32))((accum, elt) => I32(5) + I32(5)),
       10,
     )
   }
@@ -1846,15 +1848,15 @@ class IRSuite extends HailSuite {
       FastSeq(null, true, false, false),
     )
     assertEvalsTo(
-      ToArray(streamScanIR(TestUtils.IRStream(1, 2, 3), 0)((accum, elt) => accum + elt)),
+      ToArray(streamScanIR(IRStream(1, 2, 3), 0)((accum, elt) => accum + elt)),
       FastSeq(0, 1, 3, 6),
     )
     assertEvalsTo(
-      ToArray(streamScanIR(TestUtils.IRStream(1, 2, 3), NA(TInt32))((accum, elt) => accum + elt)),
+      ToArray(streamScanIR(IRStream(1, 2, 3), NA(TInt32))((accum, elt) => accum + elt)),
       FastSeq(null, null, null, null),
     )
     assertEvalsTo(
-      ToArray(streamScanIR(TestUtils.IRStream(1, null, 3), NA(TInt32))((accum, elt) =>
+      ToArray(streamScanIR(IRStream(1, null, 3), NA(TInt32))((accum, elt) =>
         accum + elt
       )),
       FastSeq(null, null, null, null),
@@ -2309,7 +2311,7 @@ class IRSuite extends HailSuite {
     ) { (l: IR, r: IR) =>
       bindIRs(l, r) { case Seq(l, r) =>
         MakeStruct(
-          (lKeys, rKeys).zipped.map { (lk, rk) =>
+          lKeys.lazyZip(rKeys).map { (lk, rk) =>
             lk -> Coalesce(IndexedSeq(GetField(l, lk), GetField(r, rk)))
           }
             ++ tcoerce[TStruct](l.typ).fields.filter(f => !lKeys.contains(f.name)).map { f =>
@@ -2487,7 +2489,7 @@ class IRSuite extends HailSuite {
             MakeStruct(FastSeq(
               "lk1" -> (if (n == null) NA(TInt32) else I32(n)),
               "lk2" -> Str("x"),
-              "a" -> I64(idx),
+              "a" -> I64(idx.toLong),
             ))
           },
         ),
@@ -2846,11 +2848,13 @@ class IRSuite extends HailSuite {
 
     assertFatal(ToArray(StreamRange(I32(0), I32(5), I32(0))), "step size")
 
-    for {
-      start <- -2 to 2
-      stop <- -2 to 8
-      step <- 1 to 3
-    } {
+    forAll(
+      for {
+        start <- -2 to 2
+        stop <- -2 to 8
+        step <- 1 to 3
+      } yield (start, stop, step)
+    ) { case (start, stop, step) =>
       assertEquals(start, stop, step, expected = Array.range(start, stop, step).toFastSeq)
       assertEquals(start, stop, -step, expected = Array.range(start, stop, -step).toFastSeq)
     }
@@ -2862,11 +2866,8 @@ class IRSuite extends HailSuite {
   @Test def testArrayAgg(): Unit = {
     implicit val execStrats = ExecStrategy.compileOnly
 
-    val sumSig = AggSignature(Sum(), IndexedSeq(), IndexedSeq(TInt64))
     assertEvalsTo(
-      streamAggIR(mapIR(rangeIR(4))(x => Cast(x, TInt64))) { x =>
-        ApplyAggOp(FastSeq.empty, FastSeq(x), sumSig)
-      },
+      streamAggIR(mapIR(rangeIR(4))(x => Cast(x, TInt64)))(x => ApplyAggOp(Sum())(x)),
       6L,
     )
   }
@@ -2880,20 +2881,16 @@ class IRSuite extends HailSuite {
           invoke(
             "append",
             TArray(TArray(TInt32)),
-            ApplyAggOp(
-              FastSeq(),
-              FastSeq(
-                MakeArray(
-                  FastSeq(
-                    x,
-                    elt,
-                    Cast(y, TInt32),
-                    Cast(y, TInt32),
-                  ), // reference y twice to prevent forwarding
-                  TArray(TInt32),
-                )
-              ),
-              AggSignature(Collect(), FastSeq(), FastSeq(TArray(TInt32))),
+            ApplyAggOp(Collect())(
+              MakeArray(
+                FastSeq(
+                  x,
+                  elt,
+                  Cast(y, TInt32),
+                  Cast(y, TInt32),
+                ), // reference y twice to prevent forwarding
+                TArray(TInt32),
+              )
             ),
             MakeArray(FastSeq(x), TArray(TInt32)),
           )
@@ -2916,11 +2913,7 @@ class IRSuite extends HailSuite {
     val ir = streamAggScanIR(ToStream(In(0, TArray(eltType)))) { foo =>
       GetField(foo, "y") +
         GetField(
-          ApplyScanOp(
-            FastSeq(I32(2)),
-            FastSeq(GetField(foo, "x")),
-            AggSignature(CallStats(), FastSeq(TInt32), FastSeq(TCall)),
-          ),
+          ApplyScanOp(CallStats(), I32(2))(GetField(foo, "x")),
           "AN",
         )
     }
@@ -3105,7 +3098,7 @@ class IRSuite extends HailSuite {
   @Test def testSameLiteralsWithDifferentTypes(): Unit = {
     assertEvalsTo(
       ApplyComparisonOp(
-        EQ(TArray(TInt32)),
+        EQ,
         ToArray(
           mapIR(ToStream(Literal(TArray(TFloat64), FastSeq(1.0, 2.0))))(Cast(_, TInt32))
         ),
@@ -3133,17 +3126,15 @@ class IRSuite extends HailSuite {
     implicit val execStrats = ExecStrategy.allRelational
 
     val table = TableRange(3, 2)
-    val countSig = AggSignature(Count(), IndexedSeq(), IndexedSeq())
-    val count = ApplyAggOp(FastSeq.empty, FastSeq.empty, countSig)
+    val count = ApplyAggOp(Count())()
     assertEvalsTo(TableAggregate(table, MakeStruct(IndexedSeq("foo" -> count))), Row(3L))
   }
 
   @Test def testMatrixAggregate(): Unit = {
     implicit val execStrats = ExecStrategy.interpretOnly
 
-    val matrix = MatrixIR.range(5, 5, None)
-    val countSig = AggSignature(Count(), IndexedSeq(), IndexedSeq())
-    val count = ApplyAggOp(FastSeq.empty, FastSeq.empty, countSig)
+    val matrix = MatrixIR.range(ctx, 5, 5, None)
+    val count = ApplyAggOp(Count())()
     assertEvalsTo(MatrixAggregate(matrix, MakeStruct(IndexedSeq("foo" -> count))), Row(25L))
   }
 
@@ -3204,47 +3195,47 @@ class IRSuite extends HailSuite {
     implicit val execStrats = ExecStrategy.javaOnly
 
     assertEvalsTo(
-      ApplyComparisonOp(EQ(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(EQ, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       true,
     )
     assertEvalsTo(
-      ApplyComparisonOp(LT(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(LT, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       false,
     )
     assertEvalsTo(
-      ApplyComparisonOp(GT(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(GT, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       false,
     )
     assertEvalsTo(
-      ApplyComparisonOp(LTEQ(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(LTEQ, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       true,
     )
     assertEvalsTo(
-      ApplyComparisonOp(GTEQ(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(GTEQ, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       true,
     )
     assertEvalsTo(
-      ApplyComparisonOp(NEQ(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(NEQ, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       false,
     )
     assertEvalsTo(
-      ApplyComparisonOp(EQWithNA(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(EQWithNA, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       true,
     )
     assertEvalsTo(
-      ApplyComparisonOp(NEQWithNA(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(NEQWithNA, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       false,
     )
     assertEvalsTo(
-      ApplyComparisonOp(Compare(t1, t2), In(0, t1), In(1, t2)),
+      ApplyComparisonOp(Compare, In(0, t1), In(1, t2)),
       FastSeq(a -> t1, a -> t2),
       0,
     )
@@ -3252,12 +3243,12 @@ class IRSuite extends HailSuite {
 
   @DataProvider(name = "valueIRs")
   def valueIRs(): Array[Array[Object]] =
-    ExecuteContext.scoped(ctx => valueIRs(ctx))
+    valueIRs(ctx)
 
   def valueIRs(ctx: ExecuteContext): Array[Array[Object]] = {
     val fs = ctx.fs
 
-    CompileAndEvaluate(
+    CompileAndEvaluate[Unit](
       ctx,
       invoke(
         "index_bgen",
@@ -3295,27 +3286,20 @@ class IRSuite extends HailSuite {
 
     val call = Ref(freshName(), TCall)
 
-    val collectSig = AggSignature(Collect(), IndexedSeq(), IndexedSeq(TInt32))
     val pCollectSig = PhysicalAggSig(Collect(), CollectStateSig(VirtualTypeWithReq(PInt32())))
 
-    val sumSig = AggSignature(Sum(), IndexedSeq(), IndexedSeq(TInt64))
     val pSumSig = PhysicalAggSig(Sum(), TypedStateSig(VirtualTypeWithReq(PInt64(true))))
 
-    val callStatsSig = AggSignature(CallStats(), IndexedSeq(TInt32), IndexedSeq(TCall))
     val pCallStatsSig = PhysicalAggSig(CallStats(), CallStatsStateSig())
 
-    val takeBySig = AggSignature(TakeBy(), IndexedSeq(TInt32), IndexedSeq(TFloat64, TInt32))
-
-    val countSig = AggSignature(Count(), IndexedSeq(), IndexedSeq())
-    val count = ApplyAggOp(FastSeq.empty, FastSeq.empty, countSig)
+    val count = ApplyAggOp(Count())()
 
     val groupSignature = GroupedAggSig(VirtualTypeWithReq(PInt32(true)), FastSeq(pSumSig))
 
     val table = TableRange(100, 10)
 
-    val mt = MatrixIR.range(20, 2, Some(3))
-    val vcf = is.hail.TestUtils.importVCF(ctx, getTestResource("sample.vcf"))
-
+    val mt = MatrixIR.range(ctx, 20, 2, Some(3))
+    val vcf = importVCF(ctx, getTestResource("sample.vcf"))
     val bgenReader = MatrixBGENReader(
       ctx,
       FastSeq(getTestResource("example.8bits.bgen")),
@@ -3339,8 +3323,7 @@ class IRSuite extends HailSuite {
     )
     val rngState = RNGStateLiteral()
 
-    def collect(ir: IR): IR =
-      ApplyAggOp(FastSeq.empty, FastSeq(ir), collectSig)
+    def collect(ir: IR): IR = ApplyAggOp(Collect())(ir)
 
     implicit def addEnv(ir: IR): (IR, BindingEnv[Type] => BindingEnv[Type]) =
       (ir, env => env)
@@ -3371,7 +3354,7 @@ class IRSuite extends HailSuite {
       },
       ApplyBinaryPrimOp(Add(), i, j),
       ApplyUnaryPrimOp(Negate, i),
-      ApplyComparisonOp(EQ(TInt32), i, j),
+      ApplyComparisonOp(EQ, i, j),
       MakeArray(FastSeq(i, NA(TInt32), I32(-3)), TArray(TInt32)),
       MakeStream(FastSeq(i, NA(TInt32), I32(-3)), TStream(TInt32)),
       nd,
@@ -3445,10 +3428,8 @@ class IRSuite extends HailSuite {
         )
       },
       forIR(st)(_ => Void()) -> Array(st),
-      streamAggIR(st)(x => ApplyAggOp(FastSeq.empty, FastSeq(Cast(x, TInt64)), sumSig)) ->
-        Array(st),
-      streamAggScanIR(st)(x => ApplyScanOp(FastSeq.empty, FastSeq(Cast(x, TInt64)), sumSig)) ->
-        Array(st),
+      streamAggIR(st)(x => ApplyAggOp(Sum())(Cast(x, TInt64))) -> Array(st),
+      streamAggScanIR(st)(x => ApplyScanOp(Sum())(Cast(x, TInt64))) -> Array(st),
       RunAgg(
         Begin(FastSeq(
           InitOp(0, FastSeq(Begin(FastSeq(InitOp(0, FastSeq(), pSumSig)))), groupSignature),
@@ -3470,12 +3451,12 @@ class IRSuite extends HailSuite {
       AggFilter(True(), I32(0), false) -> (_.createAgg),
       aggExplodeIR(NA(TStream(TInt32)))(_ => I32(0)) -> (_.createAgg),
       AggGroupBy(True(), I32(0), false) -> (_.createAgg),
-      ApplyAggOp(FastSeq.empty, FastSeq(I32(0)), collectSig) -> (_.createAgg),
-      ApplyAggOp(FastSeq(I32(2)), FastSeq(call), callStatsSig) -> (_.createAgg.bindAgg(
+      ApplyAggOp(Collect())(I32(0)) -> (_.createAgg),
+      ApplyAggOp(CallStats(), I32(2))(call) -> (_.createAgg.bindAgg(
         call.name,
         call.typ,
       )),
-      ApplyAggOp(FastSeq(I32(10)), FastSeq(F64(-2.11), I32(4)), takeBySig) -> (_.createAgg),
+      ApplyAggOp(TakeBy(), I32(10))(F64(-2.11), I32(4)) -> (_.createAgg),
       AggFold(I32(0), l + I32(1), l + r, l.name, r.name, false) -> (_.createAgg),
       InitOp(0, FastSeq(I32(2)), pCallStatsSig),
       SeqOp(0, FastSeq(i), pCollectSig),
@@ -3597,7 +3578,7 @@ class IRSuite extends HailSuite {
 
   @DataProvider(name = "tableIRs")
   def tableIRs(): Array[Array[TableIR]] =
-    ExecuteContext.scoped(ctx => tableIRs(ctx))
+    tableIRs(ctx)
 
   def tableIRs(ctx: ExecuteContext): Array[Array[TableIR]] = {
     try {
@@ -3706,13 +3687,13 @@ class IRSuite extends HailSuite {
 
   @DataProvider(name = "matrixIRs")
   def matrixIRs(): Array[Array[MatrixIR]] =
-    ExecuteContext.scoped(ctx => matrixIRs(ctx))
+    matrixIRs(ctx)
 
   def matrixIRs(ctx: ExecuteContext): Array[Array[MatrixIR]] = {
     try {
       val fs = ctx.fs
 
-      CompileAndEvaluate(
+      CompileAndEvaluate[Unit](
         ctx,
         invoke(
           "index_bgen",
@@ -3729,8 +3710,8 @@ class IRSuite extends HailSuite {
       val tableRead = TableIR.read(fs, getTestResource("backward_compatability/1.1.0/table/0.ht"))
       val read =
         MatrixIR.read(fs, getTestResource("backward_compatability/1.0.0/matrix_table/0.hmt"))
-      val range = MatrixIR.range(3, 7, None)
-      val vcf = is.hail.TestUtils.importVCF(ctx, getTestResource("sample.vcf"))
+      val range = MatrixIR.range(ctx, 3, 7, None)
+      val vcf = importVCF(ctx, getTestResource("sample.vcf"))
 
       val bgenReader = MatrixBGENReader(
         ctx,
@@ -3743,8 +3724,8 @@ class IRSuite extends HailSuite {
       )
       val bgen = MatrixRead(bgenReader.fullMatrixType, false, false, bgenReader)
 
-      val range1 = MatrixIR.range(20, 2, Some(3))
-      val range2 = MatrixIR.range(20, 2, Some(4))
+      val range1 = MatrixIR.range(ctx, 20, 2, Some(3))
+      val range2 = MatrixIR.range(ctx, 20, 2, Some(4))
 
       val b = True()
 
@@ -3765,8 +3746,7 @@ class IRSuite extends HailSuite {
         ),
       ))
 
-      val collectSig = AggSignature(Collect(), IndexedSeq(), IndexedSeq(TInt32))
-      val collect = ApplyAggOp(FastSeq.empty, FastSeq(I32(0)), collectSig)
+      val collect = ApplyAggOp(Collect())(I32(0))
 
       val newRowAnn = MakeStruct(FastSeq("count_row" -> collect))
       val newColAnn = MakeStruct(FastSeq("count_col" -> collect))
@@ -3862,7 +3842,6 @@ class IRSuite extends HailSuite {
       sparsify2,
       sparsify3,
       densify,
-      RelationalLetBlockMatrix(freshName(), I32(0), read),
       slice,
     )
 
@@ -3870,10 +3849,10 @@ class IRSuite extends HailSuite {
   }
 
   @Test def testIRConstruction(): Unit = {
-    matrixIRs()
-    tableIRs()
-    valueIRs()
-    blockMatrixIRs()
+    matrixIRs(): Unit
+    tableIRs(): Unit
+    valueIRs(): Unit
+    blockMatrixIRs(): Unit
   }
 
   @Test(dataProvider = "valueIRs")
@@ -3908,19 +3887,18 @@ class IRSuite extends HailSuite {
     val cache = mutable.Map.empty[String, BlockMatrix]
     val bm = BlockMatrixRandom(0, gaussian = true, shape = Array(5L, 6L), blockSize = 3)
     try {
-      backend.withExecuteContext { ctx =>
-        ctx.local(blockMatrixCache = cache) { ctx =>
-          backend.execute(ctx, BlockMatrixWrite(bm, BlockMatrixPersistWriter("x", "MEMORY_ONLY")))
-        }
+      ctx.local(blockMatrixCache = cache) { ctx =>
+        backend.execute(
+          ctx,
+          BlockMatrixWrite(bm, BlockMatrixPersistWriter("x", "MEMORY_ONLY")),
+        ): Unit
       }
-      backend.withExecuteContext { ctx =>
-        ctx.local(blockMatrixCache = cache) { ctx =>
-          val persist = BlockMatrixRead(BlockMatrixPersistReader("x", bm.typ))
 
-          val s = Pretty.sexprStyle(persist, elideLiterals = false)
-          val x2 = IRParser.parse_blockmatrix_ir(ctx, s)
-          assert(x2 == persist)
-        }
+      ctx.local(blockMatrixCache = cache) { ctx =>
+        val persist = BlockMatrixRead(BlockMatrixPersistReader("x", bm.typ))
+        val s = Pretty.sexprStyle(persist, elideLiterals = false)
+        val x2 = IRParser.parse_blockmatrix_ir(ctx, s)
+        assert(x2 == persist)
       }
     } finally
       cache.values.foreach(_.unpersist())
@@ -3929,18 +3907,16 @@ class IRSuite extends HailSuite {
   @Test def testCachedIR(): Unit = {
     val cached = Literal(TSet(TInt32), Set(1))
     val s = s"(JavaIR 1)"
-    val x2 = ExecuteContext.scoped { ctx =>
+    val x2 =
       ctx.local(persistedIrCache = mutable.Map(1 -> cached))(ctx => IRParser.parse_value_ir(ctx, s))
-    }
     assert(x2 eq cached)
   }
 
   @Test def testCachedTableIR(): Unit = {
     val cached = TableRange(1, 1)
     val s = s"(JavaTable 1)"
-    val x2 = ExecuteContext.scoped { ctx =>
+    val x2 =
       ctx.local(persistedIrCache = mutable.Map(1 -> cached))(ctx => IRParser.parse_table_ir(ctx, s))
-    }
     assert(x2 eq cached)
   }
 
@@ -4025,7 +4001,7 @@ class IRSuite extends HailSuite {
           "global" -> MakeStruct(FastSeq()),
         ))),
       ),
-      ApplyAggOp(FastSeq(), FastSeq(), AggSignature(Count(), FastSeq(), FastSeq())),
+      ApplyAggOp(Count())(),
     )
     assertEvalsTo(ir, 1L)
   }
@@ -4055,7 +4031,7 @@ class IRSuite extends HailSuite {
     )
     val ir = MatrixAggregate(
       RelationalLetMatrixTable(x.name, Literal(t, FastSeq(Row(1))), m),
-      ApplyAggOp(FastSeq(), FastSeq(), AggSignature(Count(), FastSeq(), FastSeq())),
+      ApplyAggOp(Count())(),
     )
     assertEvalsTo(ir, 1L)
   }
@@ -4102,8 +4078,7 @@ class IRSuite extends HailSuite {
     Array(GetElement(FastSeq(1, 2))),
   )
 
-  @Test def relationalFunctionsRun(): Unit =
-    relationalFunctionsData()
+  @Test def relationalFunctionsRun(): Unit = relationalFunctionsData(): Unit
 
   @Test(dataProvider = "relationalFunctions")
   def testRelationalFunctionsSerialize(x: Any): Unit = {
@@ -4222,17 +4197,17 @@ class IRSuite extends HailSuite {
 
     val startingArg = SafeNDArray(IndexedSeq[Long](4L, 4L), (0 until 16).toFastSeq)
 
-    var memUsed = 0L
+    val (_, memUsed) =
+      measuringHighestTotalMemoryUsage { ctx =>
+        eval(ndSum, Env.empty, FastSeq(2 -> TInt32, startingArg -> ndType), None, None, ctx)
+      }
 
-    ExecuteContext.scoped { ctx =>
-      eval(ndSum, Env.empty, FastSeq(2 -> TInt32, startingArg -> ndType), None, None, true, ctx)
-      memUsed = ctx.r.pool.getHighestTotalUsage
-    }
+    val (_, memUsed2) =
+      measuringHighestTotalMemoryUsage { ctx =>
+        eval(ndSum, Env.empty, FastSeq(100 -> TInt32, startingArg -> ndType), None, None, ctx)
+      }
 
-    ExecuteContext.scoped { ctx =>
-      eval(ndSum, Env.empty, FastSeq(100 -> TInt32, startingArg -> ndType), None, None, true, ctx)
-      assert(memUsed == ctx.r.pool.getHighestTotalUsage)
-    }
+    assert(memUsed == memUsed2)
   }
 
   @Test def testHasIRSharing(): Unit = {
@@ -4244,12 +4219,9 @@ class IRSuite extends HailSuite {
 
   @Test def freeVariables(): Unit = {
     val stream = rangeIR(5)
-    val sumSig = AggSignature(Sum(), IndexedSeq(), IndexedSeq(TInt32))
     val y = Ref(freshName(), TInt32)
     val z = Ref(freshName(), TInt32)
-    val explodeIR = aggExplodeIR(stream) { x =>
-      z + ApplyAggOp(FastSeq.empty, FastSeq(x + y), sumSig)
-    }
+    val explodeIR = aggExplodeIR(stream)(x => z + ApplyAggOp(Sum())(x + y))
 
     assert(FreeVariables(explodeIR, true, true) == BindingEnv[Unit](
       Env((z.name, ())),
@@ -4258,7 +4230,7 @@ class IRSuite extends HailSuite {
     ))
     assert(FreeVariables(explodeIR, false, false) == BindingEnv[Unit](Env((z.name, ()))))
 
-    val aggIR = streamAggIR(stream)(x => z + ApplyAggOp(FastSeq.empty, FastSeq(x + y), sumSig))
+    val aggIR = streamAggIR(stream)(x => z + ApplyAggOp(Sum())(x + y))
     assert(
       FreeVariables(aggIR, true, true) == BindingEnv[Unit](
         Env((z.name, ()), (y.name, ())),
@@ -4314,8 +4286,9 @@ class IRSuite extends HailSuite {
     val reader = ETypeValueReader(spec)
     val prefix = ctx.createTmpPath("test-read-write-values")
     val filename = WriteValue(node, Str(prefix) + UUID4(), writer)
-    for (v <- Array(value, null))
+    forAll(Array(value, null)) { v =>
       assertEvalsTo(ReadValue(filename, reader, pt.virtualType), FastSeq(v -> pt.virtualType), v)
+    }
   }
 
   @Test(dataProvider = "nonNullTypesAndValues")
@@ -4334,8 +4307,10 @@ class IRSuite extends HailSuite {
         NA(TString),
       )((ctx, _) => WriteValue(ctx, Str(prefix) + UUID4(), writer))
     )(files => mapIR(ToStream(files))(ReadValue(_, reader, pt.virtualType)))
-    for (v <- Array(value, null))
+
+    forAll(Array(value, null)) { v =>
       assertEvalsTo(ToArray(readArray), FastSeq(v -> pt.virtualType), Array.fill(10)(v).toFastSeq)
+    }
   }
 
   @Test def testUUID4(): Unit = {
@@ -4366,15 +4341,15 @@ class IRSuite extends HailSuite {
     assertNumDistinct(bindIR(ToArray(stream))(a => selfZip(ToStream(a), 2)), 5)
   }
 
-  @Test def testZipDoesntPruneLengthInfo(): Unit = {
-    for (
-      behavior <- Array(
+  @Test def testZipDoesntPruneLengthInfo(): Unit =
+    forAll {
+      Array(
         ArrayZipBehavior.AssumeSameLength,
         ArrayZipBehavior.AssertSameLength,
         ArrayZipBehavior.TakeMinLength,
         ArrayZipBehavior.ExtendNA,
       )
-    ) {
+    } { behavior =>
       val zip = zipIR(
         FastSeq(StreamRange(0, 10, 1), StreamRange(0, 10, 1)),
         behavior,
@@ -4382,7 +4357,6 @@ class IRSuite extends HailSuite {
 
       assertEvalsTo(ToArray(zip), Array.fill(10)(Row("foo", "bar")).toFastSeq)
     }
-  }
 
   @Test def testStreamDistribute(): Unit = {
     val data1 = IndexedSeq(0, 1, 1, 2, 4, 7, 7, 7, 9, 11, 15, 20, 22, 28, 50, 100)
@@ -4417,13 +4391,7 @@ class IRSuite extends HailSuite {
       PCanonicalStruct(("rowIdx", PInt32Required), ("extraInfo", PInt32Required)),
       BufferSpec.default,
     )
-    val dist = StreamDistribute(
-      child,
-      pivots,
-      Str(ctx.localTmpdir),
-      Compare(pivots.typ.asInstanceOf[TArray].elementType),
-      spec,
-    )
+    val dist = StreamDistribute(child, pivots, Str(ctx.localTmpdir), Compare, spec)
     val result = eval(dist).asInstanceOf[IndexedSeq[Row]].map(row =>
       (
         row(0).asInstanceOf[Interval],
@@ -4470,7 +4438,7 @@ class IRSuite extends HailSuite {
     }
     val expectedStartsAndEnds = intBuilder.result().sliding(2).toIndexedSeq
 
-    result.map(_._1).zip(expectedStartsAndEnds).foreach { case (interval, splitterPair) =>
+    forAll(result.map(_._1).zip(expectedStartsAndEnds)) { case (interval, splitterPair) =>
       assert(interval.start.asInstanceOf[Row](0) == splitterPair(0))
       assert(interval.end.asInstanceOf[Row](0) == splitterPair(1))
     }

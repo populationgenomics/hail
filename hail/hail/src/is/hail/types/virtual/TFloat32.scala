@@ -2,15 +2,13 @@ package is.hail.types.virtual
 
 import is.hail.annotations._
 import is.hail.backend.HailStateManager
-import is.hail.check.Arbitrary._
-import is.hail.check.Gen
 import is.hail.utils._
 
 case object TFloat32 extends TNumeric {
   def _toPretty = "Float32"
 
   override def pyString(sb: StringBuilder): Unit =
-    sb.append("float32")
+    sb ++= "float32"
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[Float]
 
@@ -18,9 +16,6 @@ case object TFloat32 extends TNumeric {
 
   override def str(a: Annotation): String =
     if (a == null) "NA" else "%.5e".format(a.asInstanceOf[Float])
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] =
-    arbitrary[Double].map(_.toFloat)
 
   override def valuesSimilar(a1: Annotation, a2: Annotation, tolerance: Double, absolute: Boolean)
     : Boolean =
@@ -32,7 +27,7 @@ case object TFloat32 extends TNumeric {
         if (absolute)
           math.abs(f1 - f2) <= tolerance
         else
-          D_==(f1, f2, tolerance)
+          D_==(f1.toDouble, f2.toDouble, tolerance)
 
       f1 == f2 || withinTol || (f1.isNaN && f2.isNaN)
     })

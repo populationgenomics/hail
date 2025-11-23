@@ -14,14 +14,17 @@ import is.hail.types.physical.{PArray, PStruct}
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable.ArrayBuffer
+import scala.reflect.ClassTag
 
 import org.apache.spark.sql.Row
 import org.json4s.JValue
 import org.json4s.JsonAST.JString
 
-object LowerDistributedSort {
+object LowerDistributedSort extends Logging {
   def localSort(
     ctx: ExecuteContext,
     inputStage: TableStage,
@@ -40,7 +43,6 @@ object LowerDistributedSort {
         LongInfo,
         collected,
         print = None,
-        optimize = true,
       )
 
     val rowsAndGlobal = ctx.scopedExecution { (hcl, fs, htc, r) =>
@@ -193,7 +195,7 @@ object LowerDistributedSort {
       trackTotalBytes = true,
     )
 
-    log.info("DISTRIBUTED SORT: PHASE 1: WRITE DATA")
+    logger.info("DISTRIBUTED SORT: PHASE 1: WRITE DATA")
     val initialStageDataRow = CompileAndEvaluate[Annotation](
       ctx,
       inputStage.mapCollectWithGlobals("shuffle_initial_write") { part =>
@@ -258,7 +260,7 @@ object LowerDistributedSort {
       val numSamplesPerPartitionPerSegment = partitionDataPerSegment.map { partData =>
         val partitionCountsForOneSegment = partData.map(_.currentPartSize)
         val recordsInSegment = partitionCountsForOneSegment.sum
-        val branchingFactor = math.min(recordsInSegment, defaultBranchingFactor)
+        val branchingFactor = math.min(recordsInSegment, defaultBranchingFactor.toLong)
         howManySamplesPerPartition(
           rand,
           recordsInSegment,
@@ -373,7 +375,7 @@ object LowerDistributedSort {
             val sortedOversampling = sortIR(flatMapIR(ToStream(GetField(aggResults, "samples"))) {
               onePartCollectedArray => ToStream(onePartCollectedArray)
             }) { case (left, right) =>
-              ApplyComparisonOp(StructLT(keyToSortBy, sortFields), left, right)
+              ApplyComparisonOp(StructLT(sortFields), left, right)
             }
             val minArray = MakeArray(GetField(aggResults, "min"))
             val maxArray = MakeArray(GetField(aggResults, "max"))
@@ -387,7 +389,9 @@ object LowerDistributedSort {
                     I32(2),
                     UtilFunctions.intMin(
                       UtilFunctions.intMin(numSamples, I32(defaultBranchingFactor)),
-                      (I64(2L) * (GetField(aggResults, "byteSize").floorDiv(I64(sizeCutoff)))).toI,
+                      (I64(2L) * GetField(aggResults, "byteSize").floorDiv(
+                        I64(sizeCutoff.toLong)
+                      )).toI,
                     ),
                   )
                 ) { branchingFactor =>
@@ -440,7 +444,7 @@ object LowerDistributedSort {
         }
       })
 
-      log.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: STAGE 1: SAMPLE VALUES FROM PARTITIONS")
+      logger.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: STAGE 1: SAMPLE VALUES FROM PARTITIONS")
       // Going to check now if it's fully sorted, as well as collect and sort all the samples.
       val pivotsWithEndpointsAndInfoGroupedBySegmentNumber = CompileAndEvaluate[Annotation](
         ctx,
@@ -464,7 +468,7 @@ object LowerDistributedSort {
         .sortBy(_._1)
         .map { case (nPivots, nSegments) => s"$nPivots pivots: $nSegments" }
 
-      log.info(
+      logger.info(
         s"DISTRIBUTED SORT: PHASE ${i + 1}: pivot counts:\n  ${pivotCounts.mkString("\n  ")}"
       )
 
@@ -561,13 +565,13 @@ object LowerDistributedSort {
                     partitionStream,
                     ArrayRef(pivotsWithEndpointsGroupedBySegmentIdx, indexIntoPivotsArray),
                     path,
-                    StructCompare(keyToSortBy, keyToSortBy, sortFields.toArray),
+                    StructCompare(sortFields),
                     spec,
                   ),
                 ))
             }
 
-          log.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: STAGE 2: DISTRIBUTE")
+          logger.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: STAGE 2: DISTRIBUTE")
           val distributeResult = CompileAndEvaluate[Annotation](ctx, distribute)
             .asInstanceOf[IndexedSeq[Row]].map(row =>
               (
@@ -607,7 +611,7 @@ object LowerDistributedSort {
             case ((chunksWithSameInterval, priorIndices), newIndex) =>
               val interval = chunksWithSameInterval.head._1
               val chunks = chunksWithSameInterval.map { case (_, filename, numRows, numBytes) =>
-                Chunk(filename, numRows, numBytes)
+                Chunk(filename, numRows.toLong, numBytes)
               }
               val newSegmentIndices = priorIndices :+ newIndex
               SegmentResult(newSegmentIndices, interval, chunks)
@@ -623,7 +627,7 @@ object LowerDistributedSort {
           }
         } else { (IndexedSeq.empty[SegmentResult], IndexedSeq.empty[SegmentResult]) }
 
-      log.info(
+      logger.info(
         s"DISTRIBUTED SORT: PHASE ${i + 1}: ${newSmallSegments.length}/${newSmallSegments.length + newBigUnsortedSegments.length} segments can be locally sorted"
       )
 
@@ -652,7 +656,7 @@ object LowerDistributedSort {
           val newKeyFieldNames = keyToSortBy.fields.map(_.name)
           val sortedStream = ToStream(sortIR(partitionInputStream) { (refLeft, refRight) =>
             ApplyComparisonOp(
-              StructLT(keyToSortBy, sortFields),
+              StructLT(sortFields),
               SelectFields(refLeft, newKeyFieldNames),
               SelectFields(refRight, newKeyFieldNames),
             )
@@ -660,8 +664,8 @@ object LowerDistributedSort {
           WritePartition(sortedStream, UUID4(), writer)
       }
 
-    log.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: LOCALLY SORT FILES")
-    log.info(s"DISTRIBUTED_SORT: ${needSortingFilenames.length} segments to sort")
+    logger.info(s"DISTRIBUTED SORT: PHASE ${i + 1}: LOCALLY SORT FILES")
+    logger.info(s"DISTRIBUTED_SORT: ${needSortingFilenames.length} segments to sort")
     val sortedFilenames =
       CompileAndEvaluate[Annotation](ctx, sortedFilenamesIR).asInstanceOf[IndexedSeq[Row]].map(
         _(0).asInstanceOf[String]
@@ -688,8 +692,10 @@ object LowerDistributedSort {
     )
   }
 
-  def orderedGroupBy[T, U](is: IndexedSeq[T], func: T => U): IndexedSeq[(U, IndexedSeq[T])] = {
-    val result = new ArrayBuffer[(U, IndexedSeq[T])](is.size)
+  def orderedGroupBy[T: ClassTag, U](is: IndexedSeq[T], func: T => U)
+    : IndexedSeq[(U, IndexedSeq[T])] = {
+    val result = ArraySeq.newBuilder[(U, IndexedSeq[T])]
+    result.sizeHint(is)
     val currentGroup = new ArrayBuffer[T]()
     var lastKeySeen: Option[U] = None
     is.foreach { element =>
@@ -697,19 +703,19 @@ object LowerDistributedSort {
       if (currentGroup.isEmpty) {
         currentGroup.append(element)
         lastKeySeen = Some(key)
-      } else if (lastKeySeen.map(lastKey => lastKey == key).getOrElse(false)) {
+      } else if (lastKeySeen.contains(key)) {
         currentGroup.append(element)
       } else {
-        result.append((lastKeySeen.get, currentGroup.result().toIndexedSeq))
+        result += lastKeySeen.get -> currentGroup.to(ArraySeq)
         currentGroup.clear()
         currentGroup.append(element)
         lastKeySeen = Some(key)
       }
     }
-    if (!currentGroup.isEmpty) {
-      result.append((lastKeySeen.get, currentGroup))
+    if (currentGroup.nonEmpty) {
+      result += lastKeySeen.get -> currentGroup.to(ArraySeq)
     }
-    result.result().toIndexedSeq
+    result.result()
   }
 
   def lessThanForSegmentIndices(i1: IndexedSeq[Int], i2: IndexedSeq[Int]): Boolean = {
@@ -743,33 +749,34 @@ object LowerDistributedSort {
         coerceToInt((segmentSize + idealNumberOfRowsPerPart - 1) / idealNumberOfRowsPerPart)
       var currentPartSize = 0L
       var currentPartByteSize = 0L
-      val groupedIntoParts = new ArrayBuffer[PartitionInfo](numParts)
+      val groupedIntoParts = ArraySeq.newBuilder[PartitionInfo]
+      groupedIntoParts.sizeHint(numParts)
       val currentFiles = new ArrayBuffer[String]()
       sr.chunks.foreach { chunk =>
         if (chunk.size > 0) {
-          currentFiles.append(chunk.filename)
+          currentFiles += chunk.filename
           currentPartSize += chunk.size
           currentPartByteSize += chunk.byteSize
           if (currentPartSize >= idealNumberOfRowsPerPart) {
-            groupedIntoParts.append(PartitionInfo(
+            groupedIntoParts += PartitionInfo(
               sr.indices,
-              currentFiles.result().toIndexedSeq,
+              currentFiles.to(ArraySeq),
               currentPartSize,
               currentPartByteSize,
-            ))
+            )
             currentFiles.clear()
             currentPartSize = 0
             currentPartByteSize = 0L
           }
         }
       }
-      if (!currentFiles.isEmpty) {
-        groupedIntoParts.append(PartitionInfo(
+      if (currentFiles.nonEmpty) {
+        groupedIntoParts += PartitionInfo(
           sr.indices,
-          currentFiles.result().toIndexedSeq,
+          currentFiles.to(ArraySeq),
           currentPartSize,
           currentPartByteSize,
-        ))
+        )
       }
       groupedIntoParts.result()
     }
@@ -781,15 +788,18 @@ object LowerDistributedSort {
     initialNumSamplesToSelect: Int,
     partitionCounts: IndexedSeq[Long],
   ): IndexedSeq[Int] = {
-    var successStatesRemaining = initialNumSamplesToSelect
-    var failureStatesRemaining = totalNumberOfRecords - successStatesRemaining
+    var successStatesRemaining = initialNumSamplesToSelect.toDouble
+    var failureStatesRemaining = totalNumberOfRecords.toDouble - successStatesRemaining
 
     val ans = new Array[Int](partitionCounts.size)
 
     var i = 0
     while (i < partitionCounts.size) {
-      val numSuccesses =
-        rand.rhyper(successStatesRemaining, failureStatesRemaining, partitionCounts(i)).toInt
+      val numSuccesses = rand.rhyper(
+        successStatesRemaining,
+        failureStatesRemaining,
+        partitionCounts(i).toDouble,
+      ).toInt
       successStatesRemaining -= numSuccesses
       failureStatesRemaining -= (partitionCounts(i) - numSuccesses)
       ans(i) = numSuccesses
@@ -857,7 +867,7 @@ object LowerDistributedSort {
             "haveSeenAny" -> true,
           )),
           If(
-            ApplyComparisonOp(StructLTEQ(eltType, sortFields), lastKeySeenRef, eltRef),
+            ApplyComparisonOp(StructLTEQ(sortFields), lastKeySeenRef, eltRef),
             MakeStruct(FastSeq(
               "lastKeySeen" -> eltRef,
               "sortedSoFar" -> GetField(aggFoldSortedAccumRef1, "sortedSoFar"),
@@ -909,13 +919,10 @@ object LowerDistributedSort {
   /* Given an IR of type TArray(TTuple(minKey, maxKey)), determine if there's any overlap between
    * these closed intervals. */
   def tuplesAreSorted(arrayOfTuples: IR, sortFields: IndexedSeq[SortField]): IR = {
-    val intervalElementType =
-      arrayOfTuples.typ.asInstanceOf[TArray].elementType.asInstanceOf[TTuple].types(0)
-
     foldIR(
       mapIR(rangeIR(1, ArrayLen(arrayOfTuples))) { idxOfTuple =>
         ApplyComparisonOp(
-          StructLTEQ(intervalElementType, sortFields),
+          StructLTEQ(sortFields),
           GetTupleElement(ArrayRef(arrayOfTuples, idxOfTuple - 1), 1),
           GetTupleElement(ArrayRef(arrayOfTuples, idxOfTuple), 0),
         )

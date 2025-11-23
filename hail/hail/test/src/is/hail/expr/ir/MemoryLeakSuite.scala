@@ -1,8 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.HailSuite
-import is.hail.TestUtils.eval
-import is.hail.backend.ExecuteContext
+import is.hail.expr.ir
 import is.hail.expr.ir.defs.{Literal, ToArray, ToStream}
 import is.hail.types.virtual.{TArray, TBoolean, TSet, TString}
 import is.hail.utils._
@@ -17,20 +16,24 @@ class MemoryLeakSuite extends HailSuite {
     def run(size: Int): Long = {
       val lit = Literal(TSet(TString), (0 until litSize).map(_.toString).toSet)
       val queries = Literal(TArray(TString), (0 until size).map(_.toString).toFastSeq)
-      ExecuteContext.scoped { ctx =>
-        eval(
-          ToArray(
-            mapIR(ToStream(queries))(r => invoke("contains", TBoolean, lit, r))
-          ),
-          Env.empty,
-          FastSeq(),
-          None,
-          None,
-          false,
-          ctx,
-        )
-        ctx.r.pool.getHighestTotalUsage
-      }
+
+      val (_, memUsed) =
+        measuringHighestTotalMemoryUsage { ctx =>
+          unoptimized(ctx) { ctx =>
+            eval(
+              ToArray(
+                mapIR(ToStream(queries))(r => ir.invoke("contains", TBoolean, lit, r))
+              ),
+              Env.empty,
+              FastSeq(),
+              None,
+              None,
+              ctx,
+            )
+          }
+        }
+
+      memUsed
     }
 
     val size1 = 10

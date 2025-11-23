@@ -2,8 +2,8 @@ import importlib.resources
 from pathlib import Path
 from sys import version_info
 
-if version_info < (3, 9):
-    raise EnvironmentError(f'Hail requires Python 3.9 or later, found {version_info.major}.{version_info.minor}')
+if version_info < (3, 10):
+    raise EnvironmentError(f'Hail requires Python 3.10 or later, found {version_info.major}.{version_info.minor}')
 
 
 def __resource(name: str) -> Path:
@@ -36,6 +36,7 @@ To report a bug, please open an issue: https://github.com/hail-is/hail/issues
 # E402 module level import not at top of file
 
 # ruff: noqa: E402
+# ruff: noqa: F403
 from hail.utils import (
     ANY_REGION,
     Interval,
@@ -69,7 +70,6 @@ from . import (
 from .context import (
     TemporaryDirectory,
     TemporaryFilename,
-    _async_current_backend,
     _get_flags,
     _set_flags,
     _with_flags,
@@ -90,11 +90,11 @@ from .context import (
     stop,
     tmp_dir,
 )
-from .expr import *  # noqa: F403
+from .expr import *
 from .expr import aggregators
-from .genetics import *  # noqa: F403
+from .genetics import *
 from .matrixtable import GroupedMatrixTable, MatrixTable
-from .methods import *  # noqa: F403
+from .methods import *
 from .table import GroupedTable, Table, asc, desc
 from .version import __pip_version__, __revision__, __version__
 
@@ -107,64 +107,63 @@ def version() -> str:
 
 
 __all__ = [
+    'ANY_REGION',
+    'GroupedMatrixTable',
+    'GroupedTable',
+    'Interval',
+    'MatrixTable',
+    'Struct',
+    'Table',
+    'TemporaryDirectory',
+    'TemporaryFilename',
     '__pip_version__',
     '__revision__',
     '__version__',
-    'init',
-    'init_local',
-    'init_batch',
-    'init_spark',
-    'stop',
-    'spark_context',
-    'tmp_dir',
-    'TemporaryFilename',
-    'TemporaryDirectory',
-    'default_reference',
-    'get_reference',
-    'set_global_seed',
-    'reset_global_randomness',
-    '_set_flags',
     '_get_flags',
+    '_set_flags',
     '_with_flags',
-    'Table',
-    'GroupedTable',
-    'MatrixTable',
-    'GroupedMatrixTable',
-    'asc',
-    'desc',
-    'hadoop_open',
-    'hadoop_copy',
-    'hadoop_is_dir',
-    'hadoop_is_file',
-    'hadoop_stat',
-    'hadoop_exists',
-    'hadoop_ls',
-    'hadoop_scheme_supported',
-    'copy_log',
-    'Struct',
-    'Interval',
     'agg',
-    'scan',
-    'genetics',
-    'methods',
-    'stats',
-    'linalg',
-    'nd',
-    'plot',
-    'ggplot',
-    'experimental',
-    'ir',
-    'vds',
+    'asc',
     'backend',
-    '_async_current_backend',
-    'current_backend',
-    'debug_info',
     'citation',
     'cite_hail',
     'cite_hail_bibtex',
+    'copy_log',
+    'current_backend',
+    'debug_info',
+    'default_reference',
+    'desc',
+    'experimental',
+    'genetics',
+    'get_reference',
+    'ggplot',
+    'hadoop_copy',
+    'hadoop_exists',
+    'hadoop_is_dir',
+    'hadoop_is_file',
+    'hadoop_ls',
+    'hadoop_open',
+    'hadoop_scheme_supported',
+    'hadoop_stat',
+    'init',
+    'init_batch',
+    'init_local',
+    'init_spark',
+    'ir',
+    'linalg',
+    'methods',
+    'nd',
+    'plot',
+    'reset_global_randomness',
+    'scan',
+    'set_global_seed',
+    'spark_context',
+    'stats',
+    'stop',
+    'tmp_dir',
     'utils',
+    'vds',
     'version',
-    'ANY_REGION',
 ]
 
 __all__.extend(genetics.__all__)

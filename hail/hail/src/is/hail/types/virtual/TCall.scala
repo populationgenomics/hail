@@ -2,20 +2,17 @@ package is.hail.types.virtual
 
 import is.hail.annotations._
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 import is.hail.variant.Call
 
 case object TCall extends Type {
   def _toPretty = "Call"
 
   override def pyString(sb: StringBuilder): Unit =
-    sb.append("call")
+    sb ++= "call"
 
   val representation: Type = TInt32
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[Int]
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] = Call.genNonmissingValue
 
   override def str(a: Annotation): String =
     if (a == null) "NA" else Call.toString(a.asInstanceOf[Call])

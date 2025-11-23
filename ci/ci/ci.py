@@ -31,19 +31,19 @@ from gear import (
     setup_aiohttp_session,
 )
 from gear.profiling import install_profiler_if_requested
-from hailtop import aiotools, httpx, uvloopx
+from hailtop import __version__, aiotools, httpx, uvloopx
 from hailtop.auth import hail_credentials
 from hailtop.batch_client.aioclient import Batch, BatchClient
 from hailtop.config import get_deploy_config
 from hailtop.hail_logging import AccessLogger
 from hailtop.utils import collect_aiter, humanize_timedelta_msecs, periodically_call, retry_transient_errors
 from web_common import (
-    api_security_headers,
     render_template,
     set_message,
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
+    web_security_headers_swagger,
 )
 
 from .constants import AUTHORIZED_USERS, TEAMS
@@ -217,7 +217,7 @@ async def get_pr(request: web.Request, userdata: UserData) -> web.Response:
 
     batch_client = request.app[AppKeys.BATCH_CLIENT]
     target_branch = wb.branch.short_str()
-    batches = batch_client.list_batches(f'test=1 ' f'pr={pr.number} ' f'target_branch={target_branch} ' f'user:ci')
+    batches = batch_client.list_batches(f'test=1 pr={pr.number} target_branch={target_branch} user:ci')
     batches = sorted([b async for b in batches], key=lambda b: b.id, reverse=True)
     page_context['history'] = [await b.last_known_status() for b in batches]
 
@@ -378,9 +378,24 @@ async def post_authorized_source_sha(request: web.Request, _) -> NoReturn:
 
 
 @routes.get('/healthcheck')
-@web_security_headers
 async def healthcheck(_) -> web.Response:
     return web.Response(status=200)
+
+
+@routes.get('/swagger')
+@web_security_headers_swagger
+async def swagger(request):
+    """UI for exploring the API documentation."""
+    page_context = {'service': 'ci', 'base_path': deploy_config.base_path('ci')}
+    return await render_template('ci', request, None, 'swagger/index.html', page_context)
+
+
+@routes.get('/openapi.yaml')
+@web_security_headers
+async def openapi(request):
+    """OpenAPI specification for the CI service."""
+    page_context = {'base_path': deploy_config.base_path('ci'), 'spec_version': __version__}
+    return await render_template('ci', request, None, 'openapi.yaml', page_context)
 
 
 gh_router = gh_routing.Router()
@@ -433,7 +448,6 @@ async def github_callback_handler(request: web.Request):
 
 
 @routes.post('/github_callback')
-@api_security_headers
 async def github_callback(request: web.Request):
     await asyncio.shield(github_callback_handler(request))
     return web.Response(status=200)
@@ -473,7 +487,6 @@ async def batch_callback_handler(request: web.Request):
 
 
 @routes.get('/api/v1alpha/deploy_status')
-@api_security_headers
 @auth.authenticated_developers_only()
 async def deploy_status(request: web.Request, _) -> web.Response:
     batch_client = request.app[AppKeys.BATCH_CLIENT]
@@ -509,7 +522,6 @@ async def deploy_status(request: web.Request, _) -> web.Response:
 
 
 @routes.post('/api/v1alpha/update')
-@api_security_headers
 @auth.authenticated_developers_only()
 async def post_update(request: web.Request, _) -> web.Response:
     log.info('developer triggered update')
@@ -527,7 +539,6 @@ async def post_update(request: web.Request, _) -> web.Response:
 
 
 @routes.post('/api/v1alpha/dev_deploy_branch')
-@api_security_headers
 @auth.authenticated_developers_only()
 async def dev_deploy_branch(request: web.Request, userdata: UserData) -> web.Response:
     app = request.app
@@ -581,7 +592,6 @@ async def dev_deploy_branch(request: web.Request, userdata: UserData) -> web.Res
 
 # This is CPG-specific, as the Hail team redeploys by watching the main branch.
 @routes.post('/api/v1alpha/prod_deploy')
-@api_security_headers
 @auth.authenticated_users_only()
 async def prod_deploy(request, userdata):
     """Deploys the main branch to the production namespace ("default")."""
@@ -636,7 +646,6 @@ async def prod_deploy(request, userdata):
 
 
 @routes.post('/api/v1alpha/batch_callback')
-@api_security_headers
 async def batch_callback(request: web.Request):
     await asyncio.shield(batch_callback_handler(request))
     return web.Response(status=200)
@@ -852,9 +861,9 @@ ON active_namespaces.namespace = deployed_services.namespace
 
     assert DEFAULT_NAMESPACE in services_per_namespace
     default_services = services_per_namespace.pop(DEFAULT_NAMESPACE)
-    assert set(['batch', 'auth', 'batch-driver', 'ci']).issubset(
-        set(s.name for s in default_services)
-    ), default_services
+    assert set(['batch', 'auth', 'batch-driver', 'ci']).issubset(set(s.name for s in default_services)), (
+        default_services
+    )
 
     cds_config = create_cds_response(default_services, services_per_namespace, proxy)
     rds_config = create_rds_response(default_services, services_per_namespace, proxy, domain=DOMAIN)
@@ -949,7 +958,12 @@ def run():
 
     install_profiler_if_requested('ci')
 
-    app = web.Application(middlewares=[check_csrf_token, monitor_endpoints_middleware])
+    app = web.Application(
+        middlewares=[
+            check_csrf_token,
+            monitor_endpoints_middleware,
+        ]
+    )
     setup_aiohttp_jinja2(app, 'ci')
     setup_aiohttp_session(app)
 

@@ -2,7 +2,6 @@ package is.hail.types.virtual
 
 import is.hail.annotations.{Annotation, ExtendedOrdering}
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 
 import org.json4s.jackson.JsonMethods
 
@@ -10,9 +9,9 @@ final case class TSet(elementType: Type) extends TContainer {
   def _toPretty = s"Set[$elementType]"
 
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("set<")
+    sb ++= "set<"
     elementType.pyString(sb)
-    sb.append('>')
+    sb += '>'
   }
 
   override def canCompare(other: Type): Boolean = other match {
@@ -31,9 +30,9 @@ final case class TSet(elementType: Type) extends TContainer {
     a.isInstanceOf[Set[_]] && a.asInstanceOf[Set[_]].forall(elementType.typeCheck)
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("Set[")
+    sb ++= "Set["
     elementType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   override def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering =
@@ -45,9 +44,6 @@ final case class TSet(elementType: Type) extends TContainer {
       .mkString("{", ",", "}")
 
   override def str(a: Annotation): String = JsonMethods.compact(export(a))
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] =
-    Gen.buildableOf[Set](elementType.genValue(sm))
 
   override def valueSubsetter(subtype: Type): Any => Any = {
     assert(elementType == subtype.asInstanceOf[TSet].elementType)

@@ -1,8 +1,8 @@
 package is.hail.utils
 
 import is.hail.annotations._
-import is.hail.check._
 import is.hail.types.virtual.TBoolean
+import is.hail.utils.compat.immutable.ArraySeq
 
 import org.apache.spark.sql.Row
 import org.json4s.JValue
@@ -208,16 +208,6 @@ object Interval {
       IntervalEndpoint(end, if (includesEnd) 1 else -1),
     )
 
-  def gen[P](pord: ExtendedOrdering, pgen: Gen[P]): Gen[Interval] =
-    Gen.zip(pgen, pgen, Gen.coin(), Gen.coin())
-      .filter { case (x, y, s, e) => pord.compare(x, y) != 0 || (s && e) }
-      .map { case (x, y, s, e) =>
-        if (pord.compare(x, y) < 0)
-          Interval(x, y, s, e)
-        else
-          Interval(y, x, s, e)
-      }
-
   def ordering(pord: ExtendedOrdering, startPrimary: Boolean, _missingEqual: Boolean = true)
     : ExtendedOrdering = new ExtendedOrdering {
     val missingEqual = _missingEqual
@@ -236,11 +226,11 @@ object Interval {
     }
   }
 
-  def union(xs: IndexedSeq[Interval], ord: IntervalEndpointOrdering): Array[Interval] = {
+  def union(xs: IndexedSeq[Interval], ord: IntervalEndpointOrdering): IndexedSeq[Interval] = {
 
     val sorted = xs.sortBy(_.left: Any)(ord.toOrdering)
 
-    val ab = new BoxedArrayBuilder[Interval]()
+    val ab = ArraySeq.newBuilder[Interval]
     var i = 0
     while (i < sorted.length) {
       var interval = sorted(i)
@@ -260,11 +250,11 @@ object Interval {
     x1: IndexedSeq[Interval],
     x2: IndexedSeq[Interval],
     ord: IntervalEndpointOrdering,
-  ): Array[Interval] = {
+  ): IndexedSeq[Interval] = {
 
     var i = 0
     var j = 0
-    val ab = new BoxedArrayBuilder[Interval]()
+    val ab = ArraySeq.newBuilder[Interval]
 
     while (!(i >= x1.length || j >= x2.length)) {
       val l = x1(i)

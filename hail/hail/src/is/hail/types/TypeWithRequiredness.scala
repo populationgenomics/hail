@@ -11,6 +11,8 @@ import is.hail.types.physical.stypes.interfaces.{SBaseStruct, SInterval, SNDArra
 import is.hail.types.virtual._
 import is.hail.utils.{toMapFast, FastSeq, Interval}
 
+import scala.collection.compat._
+
 import org.apache.spark.sql.Row
 
 object BaseTypeWithRequiredness {
@@ -41,19 +43,19 @@ object BaseTypeWithRequiredness {
         check(r.endType, typ.asInstanceOf[TInterval].pointType)
       case r: RStruct =>
         val struct = typ.asInstanceOf[TStruct]
-        (r.fields, struct.fields).zipped.map { (rf, f) =>
+        r.fields.lazyZip(struct.fields).foreach { (rf, f) =>
           assert(rf.name == f.name)
           check(rf.typ, f.typ)
         }
       case r: RTuple =>
         val tuple = typ.asInstanceOf[TTuple]
-        (r.fields, tuple.fields).zipped.map { (rf, f) =>
+        r.fields.lazyZip(tuple.fields).foreach { (rf, f) =>
           assert(rf.index == f.index)
           check(rf.typ, f.typ)
         }
       case r: RUnion =>
         val union = typ.asInstanceOf[TUnion]
-        (r.cases, union.cases).zipped.map { (rc, c) =>
+        r.cases.lazyZip(union.cases).foreach { (rc, c) =>
           assert(rc._1 == c.name)
           check(rc._2, c.typ)
         }
@@ -67,7 +69,7 @@ object TypeWithRequiredness {
     case t: TArray => RIterable(apply(t.elementType))
     case t: TSet => RIterable(apply(t.elementType))
     case t: TStream => RIterable(apply(t.elementType))
-    case t: TDict => RDict(apply(t.keyType), apply(t.valueType))
+    case t: TDict => RIterable.dict(apply(t.keyType), apply(t.valueType))
     case t: TNDArray => RNDArray(apply(t.elementType))
     case t: TInterval => RInterval(apply(t.pointType), apply(t.pointType))
     case t: TStruct => RStruct.fromNamesAndTypes(t.fields.map(f => f.name -> apply(f.typ)))
@@ -201,8 +203,6 @@ object VirtualTypeWithReq {
           ))
         case (ti: TInterval, ri: RInterval) =>
           RInterval(subsetRT(ti.pointType, ri.startType), subsetRT(ti.pointType, ri.endType))
-        case (td: TDict, ri: RDict) =>
-          RDict(subsetRT(td.keyType, ri.keyType), subsetRT(td.valueType, ri.valueType))
         case (tit: TIterable, rit: RIterable) =>
           RIterable(subsetRT(tit.elementType, rit.elementType))
         case (tnd: TNDArray, rnd: RNDArray) => RNDArray(subsetRT(tnd.elementType, rnd.elementType))
@@ -320,30 +320,15 @@ final case class RPrimitive() extends TypeWithRequiredness {
   def _toString: String = "RPrimitive"
 }
 
-object RIterable {
-  def apply(elementType: TypeWithRequiredness): RIterable =
-    new RIterable(elementType, eltRequired = false)
+abstract class RContainer extends TypeWithRequiredness {
+  def elementType: TypeWithRequiredness
+  def eltRequired: Boolean
 
-  def unapply(r: RIterable): Option[TypeWithRequiredness] = Some(r.elementType)
-}
-
-sealed class RIterable(val elementType: TypeWithRequiredness, eltRequired: Boolean)
-    extends TypeWithRequiredness {
-  val children: IndexedSeq[TypeWithRequiredness] = FastSeq(elementType)
-
-  def _unionLiteral(a: Annotation): Unit =
-    a.asInstanceOf[Iterable[_]].foreach(elt => elementType.unionLiteral(elt))
-
-  def _matchesPType(pt: PType): Boolean =
-    elementType.matchesPType(tcoerce[PIterable](pt).elementType)
-
-  def _unionPType(pType: PType): Unit =
-    elementType.fromPType(pType.asInstanceOf[PIterable].elementType)
-
-  def _unionEmitType(emitType: EmitType): Unit =
-    elementType.fromEmitType(emitType.st.asInstanceOf[SIndexablePointer].elementEmitType)
-
-  def _toString: String = s"RIterable[${elementType.toString}]"
+  def unionElement(newElement: BaseTypeWithRequiredness): Unit =
+    if (eltRequired)
+      elementType.children.lazyZip(newElement.children).foreach((r1, r2) => r1.unionFrom(r2))
+    else
+      elementType.unionFrom(newElement)
 
   override def _maximizeChildren(): Unit =
     if (eltRequired)
@@ -367,12 +352,35 @@ sealed class RIterable(val elementType: TypeWithRequiredness, eltRequired: Boole
     } else
       elementType.unionWithIntersection(ts.map(t => tcoerce[RIterable](t).elementType))
   }
+}
 
-  def unionElement(newElement: BaseTypeWithRequiredness): Unit =
-    if (eltRequired)
-      (elementType.children, newElement.children).zipped.foreach((r1, r2) => r1.unionFrom(r2))
-    else
-      elementType.unionFrom(newElement)
+object RIterable {
+  def apply(elementType: TypeWithRequiredness): RIterable =
+    new RIterable(elementType, eltRequired = false)
+
+  def dict(keyType: TypeWithRequiredness, valueType: TypeWithRequiredness): RIterable =
+    new RIterable(
+      RStruct.fromNamesAndTypes(Array("key" -> keyType, "value" -> valueType)),
+      true,
+    )
+}
+
+case class RIterable(elementType: TypeWithRequiredness, eltRequired: Boolean) extends RContainer {
+  override val children: IndexedSeq[TypeWithRequiredness] = FastSeq(elementType)
+
+  def _unionLiteral(a: Annotation): Unit =
+    a.asInstanceOf[Iterable[_]].foreach(elt => elementType.unionLiteral(elt))
+
+  def _matchesPType(pt: PType): Boolean =
+    elementType.matchesPType(tcoerce[PIterable](pt).elementType)
+
+  def _unionPType(pType: PType): Unit =
+    elementType.fromPType(pType.asInstanceOf[PIterable].elementType)
+
+  def _unionEmitType(emitType: EmitType): Unit =
+    elementType.fromEmitType(emitType.st.asInstanceOf[SIndexablePointer].elementEmitType)
+
+  def _toString: String = s"RIterable[${elementType.toString}]"
 
   def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RIterable = {
     val IndexedSeq(newElt: TypeWithRequiredness) = newChildren
@@ -384,39 +392,23 @@ sealed class RIterable(val elementType: TypeWithRequiredness, eltRequired: Boole
     t match {
       case _: TArray => PCanonicalArray(elt, required = required)
       case _: TSet => PCanonicalSet(elt, required = required)
+      case t: TDict =>
+        val Seq(keyType, valueType) = elementType.asInstanceOf[RStruct].children
+        PCanonicalDict(
+          keyType.canonicalPType(t.keyType),
+          valueType.canonicalPType(t.valueType),
+          required = required,
+        )
     }
   }
 }
 
-case class RDict(keyType: TypeWithRequiredness, valueType: TypeWithRequiredness)
-    extends RIterable(
-      RStruct.fromNamesAndTypes(Array("key" -> keyType, "value" -> valueType)),
-      true,
-    ) {
-  override def _unionLiteral(a: Annotation): Unit =
-    a.asInstanceOf[Map[_, _]].foreach { case (k, v) =>
-      keyType.unionLiteral(k)
-      valueType.unionLiteral(v)
-    }
+case class RNDArray(elementType: TypeWithRequiredness) extends RContainer {
+  def eltRequired = true
 
-  override def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RDict = {
-    val IndexedSeq(newElt: RStruct) = newChildren
-    RDict(newElt.field("key"), newElt.field("value"))
-  }
+  override val children: IndexedSeq[TypeWithRequiredness] = FastSeq(elementType)
 
-  override def canonicalPType(t: Type): PType =
-    PCanonicalDict(
-      keyType.canonicalPType(tcoerce[TDict](t).keyType),
-      valueType.canonicalPType(tcoerce[TDict](t).valueType),
-      required = required,
-    )
-
-  override def _toString: String = s"RDict[${keyType.toString}, ${valueType.toString}]"
-}
-
-case class RNDArray(override val elementType: TypeWithRequiredness)
-    extends RIterable(elementType, true) {
-  override def _unionLiteral(a: Annotation): Unit = {
+  def _unionLiteral(a: Annotation): Unit = {
     val data = a.asInstanceOf[NDArray].getRowMajorElements()
     data.foreach { elt =>
       if (elt != null)
@@ -424,26 +416,26 @@ case class RNDArray(override val elementType: TypeWithRequiredness)
     }
   }
 
-  override def _matchesPType(pt: PType): Boolean =
+  def _matchesPType(pt: PType): Boolean =
     elementType.matchesPType(tcoerce[PNDArray](pt).elementType)
 
-  override def _unionPType(pType: PType): Unit =
+  def _unionPType(pType: PType): Unit =
     elementType.fromPType(pType.asInstanceOf[PNDArray].elementType)
 
-  override def _unionEmitType(emitType: EmitType): Unit =
+  def _unionEmitType(emitType: EmitType): Unit =
     elementType.fromEmitType(emitType.st.asInstanceOf[SNDArray].elementEmitType)
 
-  override def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RNDArray = {
+  def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RNDArray = {
     val IndexedSeq(newElt: TypeWithRequiredness) = newChildren
     RNDArray(newElt)
   }
 
-  override def canonicalPType(t: Type): PType = {
+  def canonicalPType(t: Type): PType = {
     val tnd = tcoerce[TNDArray](t)
     PCanonicalNDArray(elementType.canonicalPType(tnd.elementType), tnd.nDims, required = required)
   }
 
-  override def _toString: String = s"RNDArray[${elementType.toString}]"
+  def _toString: String = s"RNDArray[${elementType.toString}]"
 }
 
 case class RInterval(startType: TypeWithRequiredness, endType: TypeWithRequiredness)
@@ -492,8 +484,14 @@ sealed abstract class RBaseStruct extends TypeWithRequiredness {
   def size: Int = fields.length
   val children: IndexedSeq[TypeWithRequiredness] = fields.map(_.typ)
 
-  def _unionLiteral(a: Annotation): Unit =
-    (children, a.asInstanceOf[Row].toSeq).zipped.foreach((r, f) => r.unionLiteral(f))
+  def _unionLiteral(a: Annotation): Unit = a match {
+    case a: Row => children.lazyZip(a.toSeq).foreach((r, f) => r.unionLiteral(f))
+    case (k, v) =>
+      // needed to handle the elements of a Map/Dict
+      assert(size == 2)
+      children(0).unionLiteral(k)
+      children(1).unionLiteral(v)
+  }
 
   def _matchesPType(pt: PType): Boolean =
     tcoerce[PBaseStruct](pt).fields.forall(f => children(f.index).matchesPType(f.typ))
@@ -508,7 +506,7 @@ sealed abstract class RBaseStruct extends TypeWithRequiredness {
 
   def unionFields(other: RStruct): Unit = {
     assert(fields.length == other.fields.length)
-    (fields, other.fields).zipped.foreach((fd1, fd2) => fd1.typ.unionFrom(fd2.typ))
+    fields.lazyZip(other.fields).foreach((fd1, fd2) => fd1.typ.unionFrom(fd2.typ))
   }
 
   def canonicalPType(t: Type): PType = t match {
@@ -519,7 +517,7 @@ sealed abstract class RBaseStruct extends TypeWithRequiredness {
       )
     case ts: TTuple =>
       PCanonicalTuple(
-        (fields, ts._types).zipped.map { case (fr, ft) =>
+        fields.lazyZip(ts._types).map { case (fr, ft) =>
           PTupleField(ft.index, fr.typ.canonicalPType(ft.typ))
         },
         required = required,
@@ -563,7 +561,7 @@ case class RTuple(fields: IndexedSeq[RField]) extends RBaseStruct {
 
   def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RTuple = {
     assert(newChildren.length == fields.length)
-    RTuple((fields, newChildren).zipped.map { (f, c) =>
+    RTuple(fields.lazyZip(newChildren).map { (f, c) =>
       RField(f.name, tcoerce[TypeWithRequiredness](c), f.index)
     })
   }
@@ -676,7 +674,7 @@ case class RTable(
 
   def unionKeys(req: RTable): Unit = {
     assert(key.length <= req.key.length)
-    (key, req.key).zipped.foreach((k, rk) => field(k).unionFrom(req.field(rk)))
+    key.lazyZip(req.key).foreach((k, rk) => field(k).unionFrom(req.field(rk)))
   }
 
   def unionValues(req: RStruct): Unit = valueFields.foreach { n =>
@@ -689,10 +687,10 @@ case class RTable(
 
   def copy(newChildren: IndexedSeq[BaseTypeWithRequiredness]): RTable = {
     assert(newChildren.length == rowFields.length + globalFields.length)
-    val newRowFields = (rowFields, newChildren.take(rowFields.length)).zipped.map {
+    val newRowFields = rowFields.lazyZip(newChildren.take(rowFields.length)).map {
       case ((n, _), r: TypeWithRequiredness) => n -> r
     }
-    val newGlobalFields = (globalFields, newChildren.drop(rowFields.length)).zipped.map {
+    val newGlobalFields = globalFields.lazyZip(newChildren.drop(rowFields.length)).map {
       case ((n, _), r: TypeWithRequiredness) => n -> r
     }
     RTable(newRowFields, newGlobalFields, key)

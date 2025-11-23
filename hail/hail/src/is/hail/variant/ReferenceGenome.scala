@@ -2,7 +2,6 @@ package is.hail.variant
 
 import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.ExecuteContext
-import is.hail.check.Gen
 import is.hail.expr.{
   JSONExtractContig, JSONExtractIntervalLocus, JSONExtractReferenceGenome, Parser,
 }
@@ -14,9 +13,10 @@ import is.hail.io.reference.{
 import is.hail.types._
 import is.hail.types.virtual.{TLocus, Type}
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 import java.io.{FileNotFoundException, InputStream}
 
@@ -25,12 +25,12 @@ import org.json4s.jackson.{JsonMethods, Serialization}
 
 case class ReferenceGenome(
   name: String,
-  contigs: Array[String],
+  contigs: IndexedSeq[String],
   lengths: Map[String, Int],
   xContigs: Set[String] = Set.empty[String],
   yContigs: Set[String] = Set.empty[String],
   mtContigs: Set[String] = Set.empty[String],
-  parInput: Array[(Locus, Locus)] = Array.empty[(Locus, Locus)],
+  parInput: IndexedSeq[(Locus, Locus)] = IndexedSeq.empty[(Locus, Locus)],
 ) extends Serializable {
 
   val nContigs = contigs.length
@@ -75,7 +75,7 @@ case class ReferenceGenome(
   private val jLengths: java.util.HashMap[String, java.lang.Integer] =
     makeJavaMap(lengths.iterator.map { case (c, i) => (c, box(i)) })
 
-  val lengthsByIndex: Array[Int] = contigs.map(lengths)
+  val lengthsByIndex: IndexedSeq[Int] = contigs.map(lengths)
 
   lengths.foreach { case (n, l) =>
     if (l <= 0)
@@ -160,9 +160,10 @@ case class ReferenceGenome(
 
   val nBases = lengths.map(_._2.toLong).sum
 
-  @transient private var globalContigEnds: Array[Long] = _
+  @transient private var globalContigEnds: IndexedSeq[Long] = _
 
-  def getGlobalContigEnds: Array[Long] = contigs.map(contigLength(_).toLong).scan(0L)(_ + _).tail
+  def getGlobalContigEnds: IndexedSeq[Long] =
+    contigs.map(contigLength(_).toLong).scan(0L)(_ + _).tail
 
   def locusToGlobalPos(contig: String, pos: Int): Long =
     globalPosContigStarts(contig) + (pos - 1)
@@ -172,7 +173,7 @@ case class ReferenceGenome(
   def globalPosToContig(idx: Long): String = {
     if (globalContigEnds == null)
       globalContigEnds = getGlobalContigEnds
-    contigs(globalContigEnds.view.partitionPoint(_ > idx))
+    contigs(globalContigEnds.partitionPoint(_ > idx))
   }
 
   def globalPosToLocus(idx: Long): Locus = {
@@ -531,8 +532,8 @@ object ReferenceGenome {
     if (!fs.isFile(fastaFile))
       fatal(s"FASTA file '$fastaFile' does not exist, is not a file, or you do not have access.")
 
-    val contigs = new BoxedArrayBuilder[String]
-    val lengths = new BoxedArrayBuilder[(String, Int)]
+    val contigs = ArraySeq.newBuilder[String]
+    val lengths = ArraySeq.newBuilder[(String, Int)]
 
     FastaSequenceIndex(fs, indexFile).foreach { entry =>
       val contig = entry.getContig
@@ -575,7 +576,7 @@ object ReferenceGenome {
   def writeReference(fs: FS, path: String, rg: ReferenceGenome): Unit = {
     val rgPath = path + "/" + rg.name + ".json.gz"
     if (!hailReferences.contains(rg.name) && !fs.isFile(rgPath))
-      rg.asInstanceOf[ReferenceGenome].write(fs, rgPath)
+      rg.write(fs, rgPath)
   }
 
   def getReferences(t: Type): Set[String] = {
@@ -607,47 +608,20 @@ object ReferenceGenome {
     Integer.compare(l1.position, l2.position)
   }
 
-  def gen: Gen[ReferenceGenome] =
-    for {
-      name <- Gen.identifier.filter(!ReferenceGenome.hailReferences.contains(_))
-      nContigs <- Gen.choose(3, 10)
-      contigs <- Gen.distinctBuildableOfN[Array](nContigs, Gen.identifier)
-      lengths <- Gen.buildableOfN[Array](nContigs, Gen.choose(1000000, 500000000))
-      contigsIndex = contigs.zip(lengths).toMap
-      xContig <- Gen.oneOfSeq(contigs)
-      parXA <- Gen.choose(0, contigsIndex(xContig))
-      parXB <- Gen.choose(0, contigsIndex(xContig))
-      yContig <- Gen.oneOfSeq(contigs) if yContig != xContig
-      parYA <- Gen.choose(0, contigsIndex(yContig))
-      parYB <- Gen.choose(0, contigsIndex(yContig))
-      mtContig <- Gen.oneOfSeq(contigs) if mtContig != xContig && mtContig != yContig
-    } yield ReferenceGenome(
-      name,
-      contigs,
-      contigs.zip(lengths).toMap,
-      Set(xContig),
-      Set(yContig),
-      Set(mtContig),
-      Array(
-        (Locus(xContig, math.min(parXA, parXB)), Locus(xContig, math.max(parXA, parXB))),
-        (Locus(yContig, math.min(parYA, parYB)), Locus(yContig, math.max(parYA, parYB))),
-      ),
-    )
-
   def apply(
     name: String,
-    contigs: Array[String],
+    contigs: IndexedSeq[String],
     lengths: Map[String, Int],
-    xContigs: Array[String],
-    yContigs: Array[String],
-    mtContigs: Array[String],
-    parInput: Array[String],
+    xContigs: IndexedSeq[String],
+    yContigs: IndexedSeq[String],
+    mtContigs: IndexedSeq[String],
+    parInput: IndexedSeq[String],
   ): ReferenceGenome = {
     val parRegex = """(\w+):(\d+)-(\d+)""".r
 
     val par = parInput.map {
       case parRegex(contig, start, end) =>
-        (Locus(contig.toString, start.toInt), Locus(contig.toString, end.toInt))
+        (Locus(contig, start.toInt), Locus(contig, end.toInt))
       case _ => fatal("expected PAR input of form contig:start-end")
     }
 
@@ -678,7 +652,7 @@ object ReferenceGenome {
 
   def addFatalOnCollision(
     existing: mutable.Map[String, ReferenceGenome],
-    newReferences: IndexedSeq[ReferenceGenome],
+    newReferences: Iterable[ReferenceGenome],
   ): Unit =
     for (rg <- newReferences) {
       if (existing.get(rg.name).exists(_ != rg))
@@ -690,4 +664,14 @@ object ReferenceGenome {
 
       existing += (rg.name -> rg)
     }
+
+  def addFatalOnCollision(
+    existing: Map[String, ReferenceGenome],
+    newReferences: Iterable[ReferenceGenome],
+  ): Map[String, ReferenceGenome] = {
+    val mut = mutable.Map(existing.toSeq: _*)
+    addFatalOnCollision(mut, newReferences)
+    mut.toMap
+  }
+
 }

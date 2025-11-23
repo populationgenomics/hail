@@ -9,16 +9,16 @@ import java.io.FileNotFoundException
 
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.fs.FileAlreadyExistsException
-import org.scalatestplus.testng.TestNGSuite
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
+import org.scalatestplus.testng.TestNGSuiteLike
+import org.testng.SkipException
 import org.testng.annotations.Test
 
-trait FSSuite extends TestNGSuite {
+trait FSSuite extends TestNGSuiteLike with TestUtils {
   val root: String = System.getenv("HAIL_TEST_STORAGE_URI")
-
   def fsResourcesRoot: String = System.getenv("HAIL_FS_TEST_CLOUD_RESOURCES_URI")
-
   def tmpdir: String = System.getenv("HAIL_TEST_STORAGE_URI")
-
   def fs: FS
 
   /* Structure of src/test/resources/fs:
@@ -73,7 +73,7 @@ trait FSSuite extends TestNGSuite {
 
   @Test def testFileStatusOnDirIsFailure(): Unit = {
     val f = r("/dir")
-    TestUtils.interceptException[FileNotFoundException](f)(
+    interceptException[FileNotFoundException](f)(
       fs.fileStatus(f)
     )
   }
@@ -96,15 +96,10 @@ trait FSSuite extends TestNGSuite {
     assert(s.isDirectory)
   }
 
-  @Test def testFileListEntryOnMissingFile(): Unit = {
-    try
+  @Test def testFileListEntryOnMissingFile(): Unit =
+    assertThrows[FileNotFoundException] {
       fs.fileListEntry(r("/does_not_exist"))
-    catch {
-      case _: FileNotFoundException =>
-        return
     }
-    assert(false)
-  }
 
   @Test def testFileListEntryRoot(): Unit = {
     val s = fs.fileListEntry(root)
@@ -112,9 +107,7 @@ trait FSSuite extends TestNGSuite {
   }
 
   @Test def testFileListEntryRootWithSlash(): Unit = {
-    if (root.endsWith("/"))
-      return
-
+    if (root.endsWith("/")) throw new SkipException("skipped")
     val s = fs.fileListEntry(s"$root/")
     assert(s.getPath == root)
   }
@@ -228,9 +221,7 @@ trait FSSuite extends TestNGSuite {
   }
 
   @Test def testGlobRootWithSlash(): Unit = {
-    if (root.endsWith("/"))
-      return
-
+    if (root.endsWith("/")) throw new SkipException("skipped")
     val statuses = fs.glob(s"$root/")
     assert(pathsRelRoot(root, statuses) == Set(""))
   }
@@ -299,9 +290,6 @@ trait FSSuite extends TestNGSuite {
 
   @Test def testGetCodecExtension(): Unit =
     assert(fs.getCodecExtension("foo.vcf.bgz") == ".bgz")
-
-  @Test def testStripCodecExtension(): Unit =
-    assert(fs.stripCodecExtension("foo.vcf.bgz") == "foo.vcf")
 
   @Test def testReadWriteBytes(): Unit = {
     val f = t()
@@ -423,7 +411,7 @@ trait FSSuite extends TestNGSuite {
       val toRead = new Array[Byte](512)
       is.readFully(toRead)
 
-      (0 until toRead.length).foreach(i => assert(toRead(i) == ((seekPos + i) % 251).toByte))
+      forAll(toRead.indices)(i => assert(toRead(i) == ((seekPos + i) % 251).toByte))
     }
   }
 
@@ -437,26 +425,19 @@ trait FSSuite extends TestNGSuite {
 
     assert(fs.exists(prefix))
     fs.delete(prefix, recursive = true)
-    if (fs.exists(prefix)) {
-      /* NB: TestNGSuite.assert does not have a lazy message argument so we must use an if to
-       * protect this list */
-      //
-      // see: https://www.scalatest.org/scaladoc/1.7.2/org/scalatest/testng/TestNGSuite.html
-      assert(
-        false,
-        s"files not deleted:\n${fs.listDirectory(prefix).map(_.getPath).mkString("\n")}",
-      )
-    }
+
+    if (fs.exists(prefix))
+      fail(s"files not deleted:\n${fs.listDirectory(prefix).map(_.getPath).mkString("\n")}")
   }
 
   @Test def testSeekAfterEOF(): Unit = {
     val prefix = s"$tmpdir/fs-suite/delete-many-files/${java.util.UUID.randomUUID()}"
     val p = s"$prefix/seek_file"
-    using(fs.createCachedNoCompression(p)) { os =>
-      os.write(1.toByte)
-      os.write(2.toByte)
-      os.write(3.toByte)
-      os.write(4.toByte)
+    using(fs.createNoCompression(p)) { os =>
+      os.write(1)
+      os.write(2)
+      os.write(3)
+      os.write(4)
     }
 
     using(fs.openNoCompression(p)) { is =>
@@ -473,16 +454,17 @@ trait FSSuite extends TestNGSuite {
     val d = t()
     fs.mkDir(d)
     fs.touch(s"$d/x/file")
-    try {
+
+    intercept[Exception] {
       fs.touch(s"$d/x")
       fs.fileListEntry(s"$d/x")
-      assert(false)
-    } catch {
+    } match {
       /* Hadoop, in particular, errors when you touch an object whose name is a prefix of another
        * object. */
       case exc: FileAndDirectoryException
           if exc.getMessage() == s"$d/x appears as both file $d/x and directory $d/x/." =>
       case exc: FileNotFoundException if exc.getMessage() == s"$d/x (Is a directory)" =>
+      case other => fail(other)
     }
   }
 
@@ -532,17 +514,17 @@ trait FSSuite extends TestNGSuite {
     fs.touch(s"$d/x,")
     fs.touch(s"$d/x-")
     // fs.touch(s"$d/x.") // https://github.com/Azure/azure-sdk-for-java/issues/36674
-    try {
+    intercept[Exception] {
       fs.touch(s"$d/x/file")
       fs.fileListEntry(s"$d/x")
-      assert(false)
-    } catch {
+    } match {
       /* Hadoop, in particular, errors when you touch an object whose name is a prefix of another
        * object. */
       case exc: FileAndDirectoryException
           if exc.getMessage() == s"$d/x appears as both file $d/x and directory $d/x/." =>
       case exc: FileAlreadyExistsException
           if exc.getMessage() == s"Destination exists and is not a directory: $d/x" =>
+      case other => fail(other)
     }
   }
 

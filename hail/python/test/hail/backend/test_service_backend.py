@@ -8,7 +8,10 @@ import pytest
 
 import hail as hl
 from hail.backend.service_backend import ServiceBackend
-from hailtop.batch_client.client import Batch, Job, JobGroup
+from hail.utils import ANY_REGION
+from hailtop.batch_client.client import Batch, BatchClient, Job, JobGroup
+from hailtop.config import ConfigVariable, configuration_of
+from hailtop.utils import async_to_blocking
 
 
 @dataclass
@@ -35,6 +38,16 @@ def run_on_batch_mocks(mocker):
 
     outfile = type('Settable', (object,), {'value': None})
 
+    async def write_output(*args, **kwargs):
+        async with await backend._async_fs.create(outfile.value) as f:
+            payload = hl.ttuple(hl.tint64)._to_encoding([0])
+            await f.write(struct.pack('<b', 1))
+            await f.write(struct.pack('<i', len(payload)))
+            await f.write(payload)
+
+    mjob_group = mocker.patch(classname(JobGroup))
+    mjob_group.wait = write_output
+
     def set_outdir(*args, **kwargs):
         outfile.value = kwargs['argv'][3]
         with backend.fs.open(kwargs['argv'][2]) as f:
@@ -46,20 +59,10 @@ def run_on_batch_mocks(mocker):
     m.create_jvm_job.side_effect = set_outdir
 
     m.create_job_group = mocker.patch.object(batch, 'create_job_group')
-    m.create_job_group.return_value = mocker.patch(classname(JobGroup))
+    m.create_job_group.return_value = mjob_group
 
     m.submit = mocker.patch.object(batch, 'submit')
     m.submit.return_value = None
-
-    async def write_output(*args, **kwargs):
-        async with await backend._async_fs.create(outfile.value) as f:
-            payload = hl.ttuple(hl.tint64)._to_encoding([0])
-            await f.write(struct.pack('<b', 1))
-            await f.write(struct.pack('<i', len(payload)))
-            await f.write(payload)
-
-    m.wait = mocker.patch.object(batch, 'wait')
-    m.wait.side_effect = write_output
     return m
 
 
@@ -73,7 +76,7 @@ def test_big_worker_has_big_memory(run_on_batch_mocks):
 
     hl.utils.range_table(10)._force_count()
 
-    config = run_on_batch_mocks.driver_config['config']
+    config = run_on_batch_mocks.driver_config['job_config']
     assert config['worker_cores'] == '8'
     assert config['worker_memory'] == 'highmem'
 
@@ -128,4 +131,55 @@ def test_driver_and_worker_job_groups():
     worker_jobs = list(worker_stage.jobs())
     assert len(worker_jobs) == n_partitions
     for i, partition in enumerate(worker_jobs):
-        assert partition['name'] == f'execute(...)_stage0_table_force_count_job{i}'
+        assert partition['name'] == f'execute(...)_stage0_table_force_count_partition{i}'
+
+
+@pytest.mark.backend('batch')
+@pytest.mark.uninitialized
+def test_attach_to_existing_batch(request):
+    billing_project = configuration_of(ConfigVariable.BATCH_BILLING_PROJECT, None, None)
+    assert billing_project is not None
+
+    client = BatchClient(billing_project)
+    batch = client.create_batch(attributes={'name': request.node.nodeid})
+    batch.submit()
+
+    hl.init(backend='batch', batch_id=batch.id)
+    hl.utils.range_table(2)._force_count()
+
+    backend = hl.current_backend()
+    assert isinstance(backend, ServiceBackend)
+    assert backend._batch.id == batch.id
+
+    status = batch.status()
+    assert status['n_jobs'] > 0, repr(batch.debug_info())
+
+
+@pytest.mark.backend('batch')
+@pytest.mark.uninitialized
+def test_explicit_regions():
+    hl.init(backend='batch', regions=['us-central1'])
+
+    backend = hl.current_backend()
+    assert isinstance(backend, ServiceBackend)
+    assert backend.regions == ['us-central1']
+
+
+@pytest.mark.backend('batch')
+@pytest.mark.uninitialized
+def test_any_region():
+    hl.init(backend='batch', regions=ANY_REGION)
+
+    backend = hl.current_backend()
+    assert isinstance(backend, ServiceBackend)
+    assert backend.regions == async_to_blocking(backend._batch_client.supported_regions())
+
+
+@pytest.mark.backend('batch')
+@pytest.mark.uninitialized
+def test_default_region():
+    hl.init(backend='batch')
+
+    backend = hl.current_backend()
+    assert isinstance(backend, ServiceBackend)
+    assert backend.regions == [async_to_blocking(backend._batch_client.default_region())]

@@ -1,7 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.{ExecStrategy, HailSuite}
-import is.hail.TestUtils._
+import is.hail.ExecStrategy.ExecStrategy
 import is.hail.expr.ir.defs.{
   ErrorIDs, False, GetTupleElement, I32, If, Literal, MakeTuple, NA, True,
 }
@@ -10,12 +10,13 @@ import is.hail.types.virtual._
 import is.hail.utils._
 
 import org.apache.spark.sql.Row
+import org.scalatest.Inspectors.forAll
 import org.testng.ITestContext
 import org.testng.annotations.{BeforeMethod, Test}
 
 class IntervalSuite extends HailSuite {
 
-  implicit val execStrats = ExecStrategy.javaOnly
+  implicit val execStrats: Set[ExecStrategy] = ExecStrategy.javaOnly
 
   val tpoint1 = TTuple(TInt32)
   val tinterval1 = TInterval(tpoint1)
@@ -104,37 +105,28 @@ class IntervalSuite extends HailSuite {
       i.includesEnd,
     )
 
-  @Test def contains(): Unit = {
-    for {
-      setInterval <- testIntervals
-      p <- points
-    } {
+  @Test def contains(): Unit =
+    forAll(cartesian(testIntervals, points)) { case (setInterval, p) =>
       val interval = toIRInterval(setInterval)
       assert(eval(invoke("contains", TBoolean, interval, p)) == setInterval.contains(p))
     }
-  }
 
-  @Test def isEmpty(): Unit = {
-    for (setInterval <- testIntervals) {
+  @Test def isEmpty(): Unit =
+    forAll(testIntervals) { setInterval =>
       val interval = toIRInterval(setInterval)
       assert(eval(
         invoke("isEmpty", TBoolean, ErrorIDs.NO_ERROR, interval)
       ) == setInterval.definitelyEmpty())
     }
-  }
 
-  @Test def overlaps(): Unit = {
-    for {
-      setInterval1 <- testIntervals
-      setInterval2 <- testIntervals
-    } {
+  @Test def overlaps(): Unit =
+    forAll(cartesian(testIntervals, testIntervals)) { case (setInterval1, setInterval2) =>
       val interval1 = toIRInterval(setInterval1)
       val interval2 = toIRInterval(setInterval2)
       assert(eval(
         invoke("overlaps", TBoolean, interval1, interval2)
       ) == setInterval1.probablyOverlaps(setInterval2))
     }
-  }
 
   def intInterval(start: Int, end: Int, includesStart: Boolean = true, includesEnd: Boolean = false)
     : Interval =

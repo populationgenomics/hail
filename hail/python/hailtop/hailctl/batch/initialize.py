@@ -4,7 +4,7 @@ import typer
 from rich.prompt import Confirm, IntPrompt, Prompt
 from typer import Abort, Exit
 
-from hailtop.config import ConfigVariable
+from hailtop.config import ConfigVariable, configuration_of
 
 
 async def setup_existing_remote_tmpdir(service_account: str, verbose: bool) -> Tuple[Optional[str], str, bool]:
@@ -87,21 +87,21 @@ async def setup_new_remote_tmpdir(
     )
 
     token = secret_alnum_string(5).lower()
-    maybe_bucket_name = f'hail-batch-{username}-{token}'
-    bucket_name = Prompt.ask(f'What is the name of the new bucket (Example: {maybe_bucket_name})')
 
     default_project = await get_gcp_default_project(verbose=verbose)
-    bucket_prompt = f'Which google project should {bucket_name} be created in? This project will incur costs for storing your Hail generated data.'
+
+    bucket_prompt = 'Which google project should the bucket be created in? This project will incur costs for storing your Hail generated data.'
     if default_project is not None:
-        bucket_prompt += f' (Example: {default_project})'
-    project = Prompt.ask(bucket_prompt)
+        project = Prompt.ask(bucket_prompt, default=default_project)
+    else:
+        project = Prompt.ask(bucket_prompt)
 
     if 'us-central1' in supported_regions:
         default_compute_region = 'us-central1'
     else:
         default_compute_region = supported_regions[0]
 
-    bucket_region = Prompt.ask(f'Which region does your data reside in? (Example: {default_compute_region})')
+    bucket_region = Prompt.ask('Which region does your data reside in?', default=default_compute_region)
     if bucket_region not in supported_regions:
         typer.secho(
             f'The region where your data lives ({bucket_region}) is not in one of the supported regions of the Batch Service ({supported_regions}). '
@@ -109,26 +109,31 @@ async def setup_new_remote_tmpdir(
             fg=typer.colors.YELLOW,
         )
         continue_w_region_error = Confirm.ask(
-            f'Do you wish to continue setting up the new bucket {bucket_name} in region {bucket_region}?'
+            f'Do you wish to continue setting up the new bucket in region {bucket_region}?'
         )
         if not continue_w_region_error:
             raise Abort()
 
-    remote_tmpdir = f'gs://{bucket_name}/batch/tmp'
-    warnings = False
-
     set_lifecycle = Confirm.ask(
-        f'Do you want to set a lifecycle policy (automatically delete files after a time period) on the bucket {bucket_name}?'
+        'Do you want to set a lifecycle policy (automatically delete files after a time period) on the bucket?'
     )
     if set_lifecycle:
         lifecycle_days = IntPrompt.ask(
-            f'After how many days should files be automatically deleted from bucket {bucket_name}?', default=30
+            'After how many days should files be automatically deleted from bucket?', default=7
         )
         if lifecycle_days <= 0:
             typer.secho(f'Invalid value for lifecycle rule in days {lifecycle_days}', fg=typer.colors.RED)
             raise Abort()
     else:
         lifecycle_days = None
+
+    lifecycle_days_str = f'-{lifecycle_days}day' if lifecycle_days is not None else ''
+
+    maybe_bucket_name = f'hail-batch-{username}-{project}-{token}{lifecycle_days_str}'
+    bucket_name = Prompt.ask('What is the name of the new bucket?', default=maybe_bucket_name)
+
+    remote_tmpdir = f'gs://{bucket_name}/batch/tmp'
+    warnings = False
 
     labels = {
         'bucket': bucket_name,
@@ -182,6 +187,9 @@ async def setup_new_remote_tmpdir(
         await grant_service_account_bucket_access_with_role(
             bucket_name, service_account, 'roles/storage.objectAdmin', verbose=verbose
         )
+        await grant_service_account_bucket_access_with_role(
+            bucket_name, service_account, 'roles/storage.legacyBucketOwner', verbose=verbose
+        )
     except InsufficientPermissions as e:
         typer.secho(e.message, fg=typer.colors.RED)
         raise Abort() from e
@@ -229,9 +237,7 @@ async def async_basic_initialize(verbose: bool = False):
     from hailtop.auth import async_get_userinfo  # pylint: disable=import-outside-toplevel
     from hailtop.batch_client.aioclient import BatchClient  # pylint: disable=import-outside-toplevel
     from hailtop.config.deploy_config import get_deploy_config  # pylint: disable=import-outside-toplevel
-    from hailtop.hailctl.config.cli import (  # pylint: disable=import-outside-toplevel
-        list as list_config,
-    )
+    from hailtop.hailctl.config.cli import list_config  # pylint: disable=import-outside-toplevel
     from hailtop.hailctl.config.cli import (  # pylint: disable=import-outside-toplevel
         set as set_config,
     )
@@ -286,8 +292,9 @@ async def async_basic_initialize(verbose: bool = False):
         )
         warnings = True
 
-    if trial_bp_name:
-        set_config(ConfigVariable.BATCH_BILLING_PROJECT, trial_bp_name)
+    billing_project = configuration_of(ConfigVariable.BATCH_BILLING_PROJECT, trial_bp_name, None)
+    if billing_project:
+        set_config(ConfigVariable.BATCH_BILLING_PROJECT, billing_project)
 
     if remote_tmpdir:
         set_config(ConfigVariable.BATCH_REMOTE_TMPDIR, remote_tmpdir)

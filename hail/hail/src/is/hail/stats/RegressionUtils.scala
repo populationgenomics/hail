@@ -6,10 +6,12 @@ import is.hail.types.physical.{PArray, PStruct}
 import is.hail.types.virtual.TFloat64
 import is.hail.utils._
 
+import scala.collection.compat._
+
 import breeze.linalg._
 import org.apache.spark.sql.Row
 
-object RegressionUtils {
+object RegressionUtils extends Logging {
   def setMeanImputedDoubles(
     data: Array[Double],
     offset: Int,
@@ -99,9 +101,12 @@ object RegressionUtils {
 
     val nCols = mv.nCols
     val (yForCompleteSamples, covForCompleteSamples, completeSamples) =
-      (yIS, covIS, 0 until nCols)
-        .zipped
-        .filter((y, c, s) => y.forall(_.isDefined) && c.forall(_.isDefined))
+      (for {
+        s <- 0 until nCols
+        y = yIS(s)
+        c = covIS(s)
+        if (y.forall(_.isDefined) && c.forall(_.isDefined))
+      } yield (y, c, s)).unzip3
 
     val n = completeSamples.size
     if (n == 0)
@@ -116,7 +121,7 @@ object RegressionUtils {
       majorStride = nCovs, isTranspose = true)
 
     if (n < nCols)
-      warn(s"${nCols - n} of $nCols samples have a missing phenotype or covariate.")
+      logger.warn(s"${nCols - n} of $nCols samples have a missing phenotype or covariate.")
 
     (y, cov, completeSamples.toArray)
   }

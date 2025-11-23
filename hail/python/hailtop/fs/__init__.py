@@ -1,4 +1,5 @@
 from .fs_utils import (
+    FileListEntry,
     copy,
     exists,
     is_dir,
@@ -12,14 +13,15 @@ from .fs_utils import (
 )
 
 __all__ = [
-    'open',
+    'FileListEntry',
     'copy',
     'exists',
-    'is_file',
     'is_dir',
-    'stat',
+    'is_file',
     'ls',
     'mkdir',
+    'open',
     'remove',
     'rmtree',
+    'stat',
 ]

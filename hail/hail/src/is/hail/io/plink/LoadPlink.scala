@@ -15,12 +15,15 @@ import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.utils.StringEscapeUtils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant._
+
+import java.io.{ObjectInputStream, ObjectOutputStream}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.Row
 import org.json4s.{DefaultFormats, Formats, JValue}
-import org.json4s.jackson.JsonMethods
 
 case class FamFileConfig(
   isQuantPheno: Boolean = false,
@@ -28,8 +31,9 @@ case class FamFileConfig(
   missingValue: String = "NA",
 )
 
-object LoadPlink {
-  def expectedBedSize(nSamples: Int, nVariants: Long): Long = 3 + nVariants * ((nSamples + 3) / 4)
+object LoadPlink extends Logging {
+  def expectedBedSize(nSamples: Int, nVariants: Int): Long =
+    3 + nVariants.toLong * ((nSamples + 3) / 4)
 
   def parseBim(
     ctx: ExecuteContext,
@@ -41,7 +45,7 @@ object LoadPlink {
     locusAllelesType: TStruct,
     skipInvalidLoci: Boolean,
   ): (Int, Array[PlinkVariant]) = {
-    val vs = new BoxedArrayBuilder[PlinkVariant]()
+    val vs = Array.newBuilder[PlinkVariant]
     var n = 0
     fs.readLines(bimPath) { lines =>
       lines.foreach { cline =>
@@ -70,8 +74,10 @@ object LoadPlink {
         n += 1
       }
     }
-    val variants = vs.result()
-    (n, variants.sortBy(_.locusAlleles)(locusAllelesType.ordering(ctx.stateManager).toOrdering))
+    val variants = vs.result().sortInPlaceBy(_.locusAlleles)(
+      locusAllelesType.ordering(ctx.stateManager).toOrdering
+    ).array
+    (n, variants)
   }
 
   val numericRegex =
@@ -83,14 +89,13 @@ object LoadPlink {
     isQuantPheno: Boolean,
     delimiter: String,
     missingValue: String,
-  ): String = {
+  ): JValue = {
     val ffConfig = FamFileConfig(isQuantPheno, delimiter, missingValue)
     val (data, ptyp) = LoadPlink.parseFam(fs, path, ffConfig)
-    val jv = JSONAnnotationImpex.exportAnnotation(
+    JSONAnnotationImpex.exportAnnotation(
       Row(ptyp.virtualType.toString, data),
       TStruct("type" -> TString, "data" -> TArray(ptyp.virtualType)),
     )
-    JsonMethods.compact(jv)
   }
 
   def parseFam(fs: FS, filename: String, ffConfig: FamFileConfig)
@@ -110,8 +115,8 @@ object LoadPlink {
       phenoSig,
     )
 
-    val idBuilder = new BoxedArrayBuilder[String]
-    val structBuilder = new BoxedArrayBuilder[Row]
+    val idBuilder = ArraySeq.newBuilder[String]
+    val structBuilder = ArraySeq.newBuilder[Row]
 
     fs.readLines(filename) {
       _.foreachLine { line =>
@@ -140,7 +145,7 @@ object LoadPlink {
               case ffConfig.missingValue => null
               case "-9" =>
                 if (!warnedAbout9) {
-                  warn(
+                  logger.warn(
                     s"""Interpreting value '-9' as a valid quantitative phenotype, which differs from default PLINK behavior.
                        |  Use missing='-9' to interpret '-9' as a missing value.""".stripMargin
                   )
@@ -180,7 +185,7 @@ object LoadPlink {
   }
 }
 
-object MatrixPLINKReader {
+object MatrixPLINKReader extends Logging {
   def fromJValue(ctx: ExecuteContext, jv: JValue): MatrixPLINKReader = {
     val fs = ctx.fs
 
@@ -223,8 +228,8 @@ object MatrixPLINKReader {
     if (nTotalVariants <= 0)
       fatal("BIM file does not contain any variants")
 
-    info(s"Found $nSamples samples in fam file.")
-    info(s"Found $nTotalVariants variants in bim file.")
+    logger.info(s"Found $nSamples samples in fam file.")
+    logger.info(s"Found $nTotalVariants variants in bim file.")
 
     using(fs.open(params.bed)) { dis =>
       val b1 = dis.read()
@@ -263,8 +268,8 @@ object MatrixPLINKReader {
     val partSize = partition(nVariants, nPartitions)
     val partScan = partSize.scanLeft(0)(_ + _)
 
-    val cb = new BoxedArrayBuilder[Row]()
-    val ib = new BoxedArrayBuilder[Interval]()
+    val cb = ArraySeq.newBuilder[Row]
+    val ib = ArraySeq.newBuilder[Interval]
 
     var p = 0
     var prevEnd = 0
@@ -283,7 +288,7 @@ object MatrixPLINKReader {
         )
           end += 1
 
-        cb += Row(params.bed, start, end)
+        cb += Row(start, end, variants.slice(start, end))
 
         ib += Interval(
           variants(start).locusAlleles,
@@ -299,8 +304,7 @@ object MatrixPLINKReader {
     }
     assert(prevEnd == nVariants)
 
-    val contexts = cb.result().map(r => r: Any)
-
+    val contexts = cb.result()
     val partitioner = new RVDPartitioner(ctx.stateManager, locusAllelesType, ib.result(), 0)
 
     val fullMatrixType: MatrixType = MatrixType(
@@ -318,8 +322,15 @@ object MatrixPLINKReader {
     )
     assert(locusAllelesType == fullMatrixType.rowKeyStruct)
 
-    new MatrixPLINKReader(params, referenceGenome, fullMatrixType, sampleInfo, variants, contexts,
-      partitioner)
+    new MatrixPLINKReader(
+      params,
+      referenceGenome,
+      fullMatrixType,
+      nVariants.toLong,
+      sampleInfo,
+      contexts,
+      partitioner,
+    )
   }
 }
 
@@ -350,9 +361,9 @@ class MatrixPLINKReader(
   val params: MatrixPLINKReaderParameters,
   referenceGenome: Option[ReferenceGenome],
   val fullMatrixTypeWithoutUIDs: MatrixType,
+  val nVariants: Long,
   sampleInfo: IndexedSeq[Row],
-  variants: Array[PlinkVariant],
-  contexts: Array[Any],
+  contexts: IndexedSeq[Row],
   partitioner: RVDPartitioner,
 ) extends MatrixHybridReader {
 
@@ -363,11 +374,9 @@ class MatrixPLINKReader(
 
   def nSamples: Int = sampleInfo.length
 
-  def nVariants: Long = variants.length
-
   val columnCount: Option[Int] = Some(nSamples)
 
-  val partitionCounts: Option[IndexedSeq[Long]] = None
+  def partitionCounts: Option[IndexedSeq[Long]] = None
 
   val globals = Row(sampleInfo.zipWithIndex.map { case (s, idx) =>
     Row((0 until s.length).map(s.apply) :+ idx.toLong: _*)
@@ -386,7 +395,6 @@ class MatrixPLINKReader(
 
   def executeGeneric(ctx: ExecuteContext): GenericTableValue = {
     val localA2Reference = params.a2Reference
-    val variantsBc = ctx.backend.broadcast(variants)
     val localNSamples = nSamples
     val sm = ctx.stateManager
 
@@ -394,13 +402,16 @@ class MatrixPLINKReader(
 
     val contextType = TStruct(
       "bed" -> TString,
+      "variants" -> TString,
       "start" -> TInt32,
       "end" -> TInt32,
       "partitionIndex" -> TInt32,
     )
 
-    val contextsWithPartIdx = contexts.zipWithIndex.map { case (row: Row, partIdx: Int) =>
-      Row(row(0), row(1), row(2), partIdx)
+    val fullContexts = contexts.zipWithIndex.map { case (Row(start, end, vars), idx) =>
+      val path = ctx.createTmpPath(s"load_plink_variants_$idx")
+      ctx.fs.writePDOS(path)(os => using(new ObjectOutputStream(os))(oos => oos.writeObject(vars)))
+      Row(params.bed, path, start, end, idx)
     }
 
     val fullRowPType = PCanonicalStruct(
@@ -436,17 +447,25 @@ class MatrixPLINKReader(
       { (region: Region, theHailClassLoader: HailClassLoader, fs: FS, context: Any) =>
         val c = context.asInstanceOf[Row]
         val bed = c.getString(0)
-        val start = c.getInt(1)
-        val end = c.getInt(2)
+        val varFile = c.getString(1)
+        val start = c.getInt(2)
+        val end = c.getInt(3)
 
         val blockLength = (localNSamples + 3) / 4
 
         val rvb = new RegionValueBuilder(sm, region)
 
+        val variants =
+          using(new ObjectInputStream(fs.open(varFile)))(_.readObject()).asInstanceOf[Array[
+            PlinkVariant
+          ]]
+
         val is = fs.open(bed)
-        if (TaskContext.get != null) {
+        if (TaskContext.get() != null) {
           // FIXME: need to close InputStream for other backends too
-          TaskContext.get.addTaskCompletionListener[Unit]((context: TaskContext) => is.close())
+          TaskContext.get().addTaskCompletionListener[Unit]((context: TaskContext) =>
+            is.close()
+          ): Unit
         }
         var offset: Long = 0
 
@@ -460,75 +479,74 @@ class MatrixPLINKReader(
         table(3) = if (localA2Reference) Call2.fromUnphasedDiploidGtIndex(0)
         else Call2.fromUnphasedDiploidGtIndex(2)
 
-        Iterator.range(start, end).flatMap { i =>
-          val variant = variantsBc.value(i)
-
-          val newOffset: Long = 3L + variant.index.toLong * blockLength
-          if (newOffset != offset) {
-            is match {
-              case base: Seekable =>
-                base.seek(newOffset)
-              case base: org.apache.hadoop.fs.Seekable =>
-                base.seek(newOffset)
-            }
-            offset = newOffset
-          }
-
-          is.readFully(input, 0, input.length)
-
-          rvb.start(requestedPType)
-          rvb.startStruct()
-
-          val locusAlleles = variant.locusAlleles.asInstanceOf[Row]
-
-          if (hasLocus)
-            rvb.addAnnotation(localLocusType, locusAlleles.get(0))
-
-          if (hasAlleles) {
-            val alleles = locusAlleles.getAs[IndexedSeq[String]](1)
-            rvb.startArray(2)
-            rvb.addString(alleles(0))
-            rvb.addString(alleles(1))
-            rvb.endArray()
-          }
-
-          if (hasRsid)
-            rvb.addString(variant.rsid)
-          if (hasCmPos)
-            rvb.addDouble(variant.cmPos)
-
-          if (hasEntries) {
-            rvb.startArray(localNSamples)
-            if (hasGT) {
-              var i = 0
-              while (i < localNSamples) {
-                rvb.startStruct() // g
-                val x = (input(i >> 2) >> ((i & 3) << 1)) & 3
-                if (x == 1)
-                  rvb.setMissing()
-                else
-                  rvb.addCall(table(x))
-                rvb.endStruct() // g
-                i += 1
+        Iterator.range(start, end).zip(variants.iterator).map {
+          case (i: Int, variant: PlinkVariant) =>
+            val newOffset: Long = 3L + variant.index.toLong * blockLength
+            if (newOffset != offset) {
+              is match {
+                case base: Seekable =>
+                  base.seek(newOffset)
+                case base: org.apache.hadoop.fs.Seekable =>
+                  base.seek(newOffset)
               }
-            } else {
-              var i = 0
-              while (i < localNSamples) {
-                rvb.startStruct() // g
-                rvb.endStruct() // g
-                i += 1
-              }
+              offset = newOffset
             }
 
-            rvb.endArray()
-          }
+            is.readFully(input, 0, input.length)
 
-          if (hasRowUID)
-            rvb.addLong(i)
+            rvb.start(requestedPType)
+            rvb.startStruct()
 
-          rvb.endStruct()
+            val locusAlleles = variant.locusAlleles.asInstanceOf[Row]
 
-          Some(rvb.end())
+            if (hasLocus)
+              rvb.addAnnotation(localLocusType, locusAlleles.get(0))
+
+            if (hasAlleles) {
+              val alleles = locusAlleles.getAs[IndexedSeq[String]](1)
+              rvb.startArray(2)
+              rvb.addString(alleles(0))
+              rvb.addString(alleles(1))
+              rvb.endArray()
+            }
+
+            if (hasRsid)
+              rvb.addString(variant.rsid)
+            if (hasCmPos)
+              rvb.addDouble(variant.cmPos)
+
+            if (hasEntries) {
+              rvb.startArray(localNSamples)
+              if (hasGT) {
+                var i = 0
+                while (i < localNSamples) {
+                  rvb.startStruct() // g
+                  val x = (input(i >> 2) >> ((i & 3) << 1)) & 3
+                  if (x == 1)
+                    rvb.setMissing()
+                  else
+                    rvb.addCall(table(x))
+                  rvb.endStruct() // g
+                  i += 1
+                }
+              } else {
+                var i = 0
+                while (i < localNSamples) {
+                  rvb.startStruct() // g
+                  rvb.endStruct() // g
+                  i += 1
+                }
+              }
+
+              rvb.endArray()
+            }
+
+            if (hasRowUID)
+              rvb.addLong(i.toLong)
+
+            rvb.endStruct()
+
+            rvb.end()
         }
       }
     }
@@ -544,7 +562,7 @@ class MatrixPLINKReader(
         subset(globals).asInstanceOf[Row]
       },
       contextType,
-      contextsWithPartIdx,
+      fullContexts,
       bodyPType,
       body,
     )

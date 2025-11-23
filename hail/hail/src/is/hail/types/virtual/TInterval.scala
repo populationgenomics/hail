@@ -1,8 +1,7 @@
 package is.hail.types.virtual
 
-import is.hail.annotations.{Annotation, ExtendedOrdering}
+import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 import is.hail.utils.{FastSeq, Interval}
 
 case class TInterval(pointType: Type) extends Type {
@@ -12,24 +11,21 @@ case class TInterval(pointType: Type) extends Type {
   def _toPretty = s"""Interval[$pointType]"""
 
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("interval<")
+    sb ++= "interval<"
     pointType.pyString(sb)
-    sb.append('>')
+    sb += '>'
   }
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("Interval[")
+    sb ++= "Interval["
     pointType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[Interval] && {
     val i = a.asInstanceOf[Interval]
     pointType.typeCheck(i.start) && pointType.typeCheck(i.end)
   }
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[Annotation] =
-    Interval.gen(pointType.ordering(sm), pointType.genValue(sm))
 
   override def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering =
     Interval.ordering(pointType.ordering(sm), startPrimary = true, missingEqual)

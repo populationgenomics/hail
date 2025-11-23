@@ -21,7 +21,7 @@ from gear import (
     setup_aiohttp_session,
     transaction,
 )
-from hailtop import aiotools, httpx
+from hailtop import __version__, aiotools, httpx
 from hailtop.aiocloud import aiogoogle
 from hailtop.config import get_deploy_config
 from hailtop.hail_logging import AccessLogger
@@ -35,12 +35,12 @@ from hailtop.utils import (
     url_basename,
 )
 from web_common import (
-    api_security_headers,
     render_template,
     set_message,
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
+    web_security_headers_swagger,
 )
 
 from .configuration import HAIL_USE_FULL_QUERY
@@ -149,7 +149,6 @@ async def _billing(request: web.Request):
 
 
 @routes.get('/api/v1alpha/billing')
-@api_security_headers
 @auth.authenticated_developers_only()
 async def get_billing(request: web.Request, _) -> web.Response:
     cost_by_service, compute_cost_breakdown, cost_by_sku_label, time_period_query = await _billing(request)
@@ -388,6 +387,20 @@ async def on_startup(app):
 
 async def on_cleanup(app):
     await app[AppKeys.EXIT_STACK].aclose()
+
+
+@routes.get('/swagger')
+@web_security_headers_swagger
+async def swagger(request):
+    page_context = {'service': 'monitoring', 'base_path': deploy_config.base_path('monitoring')}
+    return await render_template('monitoring', request, None, 'swagger/index.html', page_context)
+
+
+@routes.get('/openapi.yaml')
+@web_security_headers
+async def openapi(request):
+    page_context = {'base_path': deploy_config.base_path('monitoring'), 'spec_version': __version__}
+    return await render_template('monitoring', request, None, 'openapi.yaml', page_context)
 
 
 def run():

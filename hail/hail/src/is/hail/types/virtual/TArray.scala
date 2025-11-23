@@ -2,15 +2,14 @@ package is.hail.types.virtual
 
 import is.hail.annotations.{Annotation, ExtendedOrdering}
 import is.hail.backend.HailStateManager
-import is.hail.check.Gen
 
 import org.json4s.jackson.JsonMethods
 
 final case class TArray(elementType: Type) extends TContainer {
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("array<")
+    sb ++= "array<"
     elementType.pyString(sb)
-    sb.append('>')
+    sb += '>'
   }
 
   def _toPretty = s"Array[$elementType]"
@@ -28,9 +27,9 @@ final case class TArray(elementType: Type) extends TContainer {
   override def subst() = TArray(elementType.subst())
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("Array[")
+    sb ++= "Array["
     elementType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[IndexedSeq[_]] &&
@@ -42,9 +41,6 @@ final case class TArray(elementType: Type) extends TContainer {
       .mkString("[", ",", "]")
 
   override def str(a: Annotation): String = JsonMethods.compact(export(a))
-
-  override def genNonmissingValue(sm: HailStateManager): Gen[IndexedSeq[Annotation]] =
-    Gen.buildableOf[Array](elementType.genValue(sm)).map(x => x: IndexedSeq[Annotation])
 
   def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering =
     ExtendedOrdering.iterableOrdering(elementType.ordering(sm), missingEqual)

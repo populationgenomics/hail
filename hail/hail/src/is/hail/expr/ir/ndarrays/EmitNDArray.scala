@@ -12,6 +12,7 @@ import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 abstract class NDArrayProducer {
   outer =>
@@ -369,7 +370,7 @@ object EmitNDArray {
 
           case x @ NDArrayConcat(nds, axis) =>
             emitI(nds, cb).flatMap(cb) { case ndsArraySValue: SIndexableValue =>
-              val arrLength = ndsArraySValue.loadLength()
+              val arrLength = ndsArraySValue.loadLength
               cb.if_(arrLength ceq 0, cb._fatal("need at least one ndarray to concatenate"))
 
               IEmitCode(
@@ -485,7 +486,7 @@ object EmitNDArray {
                                 )
                                 cb.assign(currentNDArrayIdx, currentNDArrayIdx + 1)
                                 cb.if_(
-                                  currentNDArrayIdx < stagedArrayOfSizes.loadLength(),
+                                  currentNDArrayIdx < stagedArrayOfSizes.loadLength,
                                   cb.assign(
                                     shouldLoop,
                                     curIdxVar >= stagedArrayOfSizes.loadElement(
@@ -530,7 +531,7 @@ object EmitNDArray {
                     cb.newLocal("ndarray_slice_indexer", sCode.asInt64.value)
                   )
                   val slicingValueTriplesBuilder =
-                    new BoxedArrayBuilder[(Value[Long], Value[Long], Value[Long])]()
+                    ArraySeq.newBuilder[(Value[Long], Value[Long], Value[Long])]
                   val outputShape = {
                     IEmitCode.multiFlatMap[Int, SValue, IndexedSeq[Value[Long]]](
                       slicingIndices,
@@ -549,7 +550,7 @@ object EmitNDArray {
                                 val stop = stopC.asLong.value
                                 val step = stepC.asLong.value
 
-                                slicingValueTriplesBuilder.push((start, stop, step))
+                                slicingValueTriplesBuilder += ((start, stop, step))
 
                                 val newDimSize = cb.newLocal[Long]("new_dim_size")
                                 cb.if_(
@@ -583,7 +584,7 @@ object EmitNDArray {
                         childProducer.initAll(cb)
                         // Need to get the indexingIndices to the right starting points
                         indexingIndices.zipWithIndex.foreach { case (childIdx, ordinalIdx) =>
-                          childProducer.initAxis(childIdx)
+                          childProducer.initAxis(childIdx)(cb)
                           childProducer.stepAxis(childIdx)(cb, indexingValues(ordinalIdx))
                         }
                       }
@@ -635,7 +636,7 @@ object EmitNDArray {
                   {
                     case filtArrayPValue: SIndexableValue =>
                       filtPValues(i) = filtArrayPValue
-                      cb.assign(outputShape(i), filtArrayPValue.loadLength().toL)
+                      cb.assign(outputShape(i), filtArrayPValue.loadLength.toL)
                       cb.assign(filterWasMissing(i), false)
                   },
                 )

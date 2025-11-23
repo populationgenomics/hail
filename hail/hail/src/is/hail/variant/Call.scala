@@ -1,11 +1,10 @@
 package is.hail.variant
 
-import is.hail.check.Gen
 import is.hail.expr.Parser
 import is.hail.utils._
 
 import scala.annotation.switch
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 import java.io.Serializable
 
@@ -344,19 +343,17 @@ object Call extends Serializable {
         if (phased)
           throw new UnsupportedOperationException("VCF spec does not support phased haploid calls.")
         else
-          sb.append(alleleByIndex(c, 0))
+          sb ++= alleleByIndex(c, 0).toString
       case 2 =>
         val p = allelePair(c)
-        sb.append(AllelePair.j(p))
-        sb.append(sep)
-        sb.append(AllelePair.k(p))
+        sb ++= AllelePair.j(p).toString ++= sep ++= AllelePair.k(p).toString: Unit
       case _ =>
         var i = 0
         val nAlleles = ploidy(c)
         while (i < nAlleles) {
-          sb.append(alleleByIndex(c, i))
+          sb ++= alleleByIndex(c, i).toString
           if (i != nAlleles - 1)
-            sb.append(sep)
+            sb ++= sep
           i += 1
         }
     }
@@ -469,7 +466,7 @@ object Call extends Serializable {
     }
   }
 
-  def check(c: Call, nAlleles: Int): Unit = {
+  def check(c: Call, nAlleles: Int): Unit =
     (ploidy(c): @switch) match {
       case 0 =>
       case 1 =>
@@ -490,31 +487,4 @@ object Call extends Serializable {
       case _ =>
         alleles(c).foreach(a => assert(a >= 0 && a < nAlleles))
     }
-  }
-
-  def gen(
-    nAlleles: Int,
-    ploidyGen: Gen[Int] = Gen.choose(0, 2),
-    phasedGen: Gen[Boolean] = Gen.nextCoin(0.5),
-  ): Gen[Call] = for {
-    ploidy <- ploidyGen
-    phased <- phasedGen
-    alleles <- Gen.buildableOfN[Array](ploidy, Gen.choose(0, nAlleles - 1))
-  } yield {
-    val c = CallN(alleles, phased)
-    check(c, nAlleles)
-    c
-  }
-
-  def genUnphasedDiploid(nAlleles: Int): Gen[Call] = gen(nAlleles, Gen.const(2), Gen.const(false))
-
-  def genPhasedDiploid(nAlleles: Int): Gen[Call] = gen(nAlleles, Gen.const(2), Gen.const(true))
-
-  def genNonmissingValue: Gen[Call] = for {
-    nAlleles <- Gen.choose(2, 5)
-    c <- gen(nAlleles)
-  } yield {
-    check(c, nAlleles)
-    c
-  }
 }

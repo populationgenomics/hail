@@ -1,5 +1,7 @@
 import os
 import secrets
+import string
+import textwrap
 from configparser import ConfigParser
 from shlex import quote as shq
 from typing import Tuple
@@ -11,12 +13,14 @@ from hailtop.aiotools.validators import validate_file
 from hailtop.batch import Batch, ResourceGroup, ServiceBackend
 from hailtop.batch.exceptions import BatchException
 from hailtop.batch.globals import arg_max
+from hailtop.batch.job import Job
 from hailtop.config import get_user_config, user_config
 from hailtop.httpx import ClientResponseError
 from hailtop.test_utils import skip_in_azure
 from hailtop.utils import grouped
 
 from .utils import (
+    HAIL_GENETICS_HAIL_IMAGE,
     REQUESTER_PAYS_PROJECT,
     batch,
 )
@@ -507,6 +511,32 @@ def test_specify_job_region(service_backend: ServiceBackend):
     assert res_status['state'] == 'success', str((res_status, res.debug_info()))
 
 
+def test_use_default_region_when_not_specifying_any_regions():
+    service_backend = ServiceBackend()
+    default_region = service_backend.default_region()
+
+    try:
+        assert service_backend.regions == [default_region], str(service_backend.regions)
+
+        # test default works when service backend `regions` has no default set
+        service_backend.regions = None
+
+        b = batch(service_backend)
+        j = b.new_job('region')
+        j.command('true')
+
+        assert b._default_regions == [default_region], str(b._default_regions)
+        assert j._regions == [default_region], str(j._regions)
+
+        res = b.run()
+        assert res
+
+        job_status = res.get_job(1).status()
+        assert job_status['status']['region'] == default_region, str((job_status, res.debug_info()))
+    finally:
+        service_backend.close()
+
+
 def test_job_regions_controls_job_execution_region(service_backend: ServiceBackend):
     the_region = service_backend.supported_regions()[0]
 
@@ -702,15 +732,6 @@ def test_non_spot_batch(service_backend: ServiceBackend):
     assert res.get_job(3).status()['spec']['resources']['preemptible'] is True
 
 
-def test_local_file_paths_error(service_backend: ServiceBackend):
-    b = batch(service_backend)
-    b.new_job()
-    for input in ["hi.txt", "~/hello.csv", "./hey.tsv", "/sup.json", "file://yo.yaml"]:
-        with pytest.raises(ValueError) as e:
-            b.read_input(input)
-        assert str(e.value).startswith("Local filepath detected")
-
-
 @skip_in_azure
 async def test_validate_cloud_storage_policy(service_backend: ServiceBackend, monkeypatch):
     # buckets do not exist (bucket names can't contain the string "google" per
@@ -801,3 +822,79 @@ async def test_validate_cloud_storage_policy(service_backend: ServiceBackend, mo
     arg = [fake_bucket1]
     ServiceBackend(remote_tmpdir=fake_uri1, gcs_bucket_allow_list=arg)
     await _test_raises_no_bucket_error(fake_uri2, arg)
+
+
+def new_query_in_batch_job(b: Batch, name: str, env: dict[str, str] | None = None) -> Job:
+    # creates a query-on-batch job in the current batch
+    backend = b._backend
+    assert isinstance(backend, ServiceBackend)
+
+    run_query_pipeline = textwrap.dedent(
+        f"""
+        hailctl config set batch/backend service
+        hailctl config set batch/regions {' '.join(backend.regions or [])}
+        hailctl config set batch/remote_tmpdir {backend.remote_tmpdir}
+        hailctl config set batch/billing_project {backend._billing_project}
+
+        cat << EOF | python3
+        from os import getenv
+        import hail as hl
+
+        batch_id = int(getenv('HAIL_BATCH_ID'))
+        hl.init(backend='batch', batch_id=batch_id, app_name='{name}')
+        hl.utils.range_table(2356)._force_count()
+        EOF
+        """,
+    )
+
+    j = b.new_bash_job(name=name)
+    j.command(run_query_pipeline)
+    for k, v in (env or dict()).items():
+        j.env(k, v)
+    return j
+
+
+def test_submit_sequential_qob_pipelines(request, service_backend: ServiceBackend):
+    b = Batch(request.node.nodeid, service_backend, default_image=HAIL_GENETICS_HAIL_IMAGE)
+
+    ja = new_query_in_batch_job(b, 'Query Pipeline A')
+    jb = new_query_in_batch_job(b, 'Query Pipeline B')
+    jb.depends_on(ja)
+
+    r = b.run()
+    assert r is not None
+    status = r.status()
+    assert status['state'] == 'success', str((status, r.debug_info()))
+
+
+@pytest.mark.xfail(reason='Concurrent QoB pipelines are not supported', strict=False)
+def test_race_qob_pipelines(request, service_backend: ServiceBackend):
+    b = Batch(request.node.nodeid, service_backend, default_image=HAIL_GENETICS_HAIL_IMAGE)
+
+    for c in string.ascii_uppercase[:3]:
+        new_query_in_batch_job(b, f'Query Pipeline {c}')
+
+    r = b.run()
+    assert r is not None
+    status = r.status()
+    assert status['state'] == 'success', str((status, r.debug_info()))
+
+
+def test_race_local_qob_pipelines(request, service_backend: ServiceBackend):
+    b = Batch(request.node.nodeid, service_backend, default_image=HAIL_GENETICS_HAIL_IMAGE)
+
+    for c in string.ascii_uppercase[:3]:
+        j = new_query_in_batch_job(
+            b,
+            f'Query Pipeline {c}',
+            {
+                'HAIL_QUERY_USE_EXPERIMENTAL_BATCH_BACKEND': '1',
+                'HAIL_CLOUD': os.getenv('HAIL_CLOUD', 'gcp'),
+            },
+        )
+        j.spot(False)
+
+    r = b.run()
+    assert r is not None
+    status = r.status()
+    assert status['state'] == 'success', str((status, r.debug_info()))

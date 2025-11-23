@@ -5,6 +5,7 @@ import is.hail.backend.{ExecuteContext, HailStateManager}
 import is.hail.expr.ir.defs.Literal
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import org.apache.commons.lang3.builder.HashCodeBuilder
 import org.apache.spark.{Partitioner, SparkContext}
@@ -311,7 +312,7 @@ class RVDPartitioner(
     )
 }
 
-object RVDPartitioner {
+object RVDPartitioner extends Logging {
   def empty(ctx: ExecuteContext, typ: TStruct): RVDPartitioner =
     RVDPartitioner.empty(ctx.stateManager, typ)
 
@@ -361,7 +362,8 @@ object RVDPartitioner {
         intervals
       else {
         val unpruned = intervals.sorted(iord.toOrdering.asInstanceOf[Ordering[Interval]])
-        val ab = new BoxedArrayBuilder[Interval](intervals.length)
+        val ab = ArraySeq.newBuilder[Interval]
+        ab.sizeHint(intervals.length)
         var tmp = unpruned(0)
         for (i <- unpruned.tail) {
           if (eord.gteq(tmp.right.coarsenRight(pk), i.left.coarsenLeft(pk)))
@@ -425,7 +427,7 @@ object RVDPartitioner {
           right.left,
         )
       if (!r)
-        log.info(
+        logger.info(
           s"invalid partitioner: !lteqWithOverlap($allowedOverlap)($left.right, $right.left)"
         )
       r

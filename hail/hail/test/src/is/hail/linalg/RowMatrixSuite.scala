@@ -1,13 +1,15 @@
 package is.hail.linalg
 
 import is.hail.HailSuite
-import is.hail.check.Gen
+import is.hail.scalacheck._
 import is.hail.utils._
 
 import breeze.linalg.DenseMatrix
+import org.scalatest
+import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
-class RowMatrixSuite extends HailSuite {
+class RowMatrixSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
   private def rowArrayToRowMatrix(a: Array[Array[Double]], nPartitions: Int = sc.defaultParallelism)
     : RowMatrix = {
     require(a.length > 0)
@@ -17,7 +19,7 @@ class RowMatrixSuite extends HailSuite {
     RowMatrix(
       sc.parallelize(a.zipWithIndex.map { case (row, i) => (i.toLong, row) }, nPartitions),
       nCols,
-      nRows,
+      nRows.toLong,
     )
   }
 
@@ -41,7 +43,7 @@ class RowMatrixSuite extends HailSuite {
     val rowMatrix = rowArrayToRowMatrix(rowArrays)
     val localMatrix = rowArrayToLocalMatrix(rowArrays)
 
-    BlockMatrix.fromBreezeMatrix(localMatrix).write(ctx, fname)
+    BlockMatrix.fromBreezeMatrix(ctx, localMatrix).write(ctx, fname)
 
     assert(rowMatrix.toBreezeMatrix() === localMatrix)
   }
@@ -55,33 +57,33 @@ class RowMatrixSuite extends HailSuite {
       Array(4.0, 5.0, 6.0),
     )
 
-    BlockMatrix.fromBreezeMatrix(localMatrix).write(ctx, fname, forceRowMajor = true)
+    BlockMatrix.fromBreezeMatrix(ctx, localMatrix).write(ctx, fname, forceRowMajor = true)
 
-    val rowMatrixFromBlock = RowMatrix.readBlockMatrix(fs, fname, 1)
+    val rowMatrixFromBlock = RowMatrix.readBlockMatrix(ctx, fname, 1)
 
     assert(rowMatrixFromBlock.toBreezeMatrix() == localMatrix)
   }
 
   @Test
-  def readBlock(): Unit = {
-    val fname = ctx.createTmpPath("test")
-    val lm = Gen.denseMatrix[Double](9, 10).sample()
-
-    for {
-      blockSize <- Seq(1, 2, 3, 4, 6, 7, 9, 10)
-      partSize <- Seq(1, 2, 4, 9, 11)
-    } {
-      BlockMatrix.fromBreezeMatrix(lm, blockSize).write(
-        ctx,
-        fname,
-        overwrite = true,
-        forceRowMajor = true,
-      )
-      val rowMatrix = RowMatrix.readBlockMatrix(fs, fname, partSize)
-
-      assert(rowMatrix.toBreezeMatrix() === lm)
+  def readBlock(): Unit =
+    forAll(genDenseMatrix(9, 10)) { lm =>
+      val fname = ctx.createTmpPath("test")
+      scalatest.Inspectors.forAll {
+        cartesian(
+          Seq(1, 2, 3, 4, 6, 7, 9, 10),
+          Seq(1, 2, 4, 9, 11),
+        )
+      } { case (blockSize, partSize) =>
+        BlockMatrix.fromBreezeMatrix(ctx, lm, blockSize).write(
+          ctx,
+          fname,
+          overwrite = true,
+          forceRowMajor = true,
+        )
+        val rowMatrix = RowMatrix.readBlockMatrix(ctx, fname, partSize)
+        assert(rowMatrix.toBreezeMatrix() === lm)
+      }
     }
-  }
 
   private def readCSV(fname: String): Array[Array[Double]] =
     fs.readLines(fname)(it =>
@@ -90,9 +92,9 @@ class RowMatrixSuite extends HailSuite {
         .toArray[Array[Double]]
     )
 
-  private def exportImportAssert(export: (String) => Unit, expected: Array[Double]*): Unit = {
+  private def exportImportAssert(`export`: (String) => Unit, expected: Array[Double]*): Unit = {
     val fname = ctx.createTmpPath("test")
-    export(fname)
+    `export`(fname)
     assert(readCSV(fname) === expected.toArray[Array[Double]])
   }
 
@@ -349,7 +351,7 @@ class RowMatrixSuite extends HailSuite {
   @Test
   def exportBig(): Unit = {
     val rowArrays: Array[Array[Double]] =
-      Array.tabulate(20)(r => Array.tabulate(30)(c => 30 * c + r))
+      Array.tabulate(20)(r => Array.tabulate(30)(c => 30.0 * c + r))
     val rowMatrix = rowArrayToRowMatrix(rowArrays)
 
     exportImportAssert(

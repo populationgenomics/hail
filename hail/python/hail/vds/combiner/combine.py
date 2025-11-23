@@ -81,7 +81,7 @@ def make_var_entry_struct(e, info_to_keep, alleles_len, has_non_ref, row):
 
 
 def make_ref_entry_struct(e, entry_to_keep, row):
-    handled_fields = dict()
+    handled_fields = {}
     # we drop PL/PGT by default, but if `entry_to_keep` has them, we need to
     # convert them to local versions for consistency.
     handled_names = {'AD', 'GT', 'PGT', 'PL'}
@@ -99,7 +99,7 @@ def make_ref_entry_struct(e, entry_to_keep, row):
     return (
         hl.case()
         .when(
-            e.GT.is_hom_ref(),
+            hl.coalesce(e.GT.is_hom_ref(), True),
             hl.struct(**reference_fields, **handled_fields, LEN=row.info.END - row.locus.position + 1),
         )
         .or_error('found reference block with non reference-genotype at' + hl.str(row.locus))
@@ -638,7 +638,7 @@ def calculate_even_genome_partitioning(reference_genome, interval_size) -> List[
         contigs = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY', 'chrM']
     else:
         raise ValueError(
-            f"Unsupported reference genome '{reference_genome.name}', " "only 'GRCh37' and 'GRCh38' are supported"
+            f"Unsupported reference genome '{reference_genome.name}', only 'GRCh37' and 'GRCh38' are supported"
         )
 
     intervals = []
