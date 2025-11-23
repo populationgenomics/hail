@@ -66,7 +66,7 @@ case class StaticField[T] private (lf: lir.StaticField) extends AnyVal {
   }
 }
 
-class ClassesBytes(classesBytes: Array[(String, Array[Byte])]) extends Serializable {
+class ClassesBytes(classesBytes: Array[(String, Array[Byte])]) extends Serializable with Logging {
   @transient @volatile var loaded: Boolean = false
 
   def load(hcl: HailClassLoader): Unit = {
@@ -81,7 +81,7 @@ class ClassesBytes(classesBytes: Array[(String, Array[Byte])]) extends Serializa
                 val buffer = new ByteArrayOutputStream()
                 FunctionBuilder.bytesToBytecodeString(bytes, buffer)
                 val classJVMByteCodeAsEscapedStr = buffer.toString(StandardCharsets.UTF_8.name())
-                log.error(s"Failed to load bytecode $e:\n" + classJVMByteCodeAsEscapedStr)
+                logger.error(s"Failed to load bytecode $e:\n" + classJVMByteCodeAsEscapedStr)
                 throw e
             }
           }
@@ -189,7 +189,7 @@ class ModuleBuilder() {
   }
 
   var _objectsField: Settable[Array[AnyRef]] = _
-  var _objects: BoxedArrayBuilder[AnyRef] = _
+  var _objects: mutable.ArrayBuffer[AnyRef] = _
 
   def setObjects(cb: EmitCodeBuilder, objects: Code[Array[AnyRef]]): Unit =
     cb.assign(_objectsField, objects)
@@ -197,10 +197,10 @@ class ModuleBuilder() {
   def getObject[T <: AnyRef: TypeInfo](obj: T): Code[T] = {
     if (_objectsField == null) {
       _objectsField = genStaticField[Array[AnyRef]]()
-      _objects = new BoxedArrayBuilder[AnyRef]()
+      _objects = new mutable.ArrayBuffer()
     }
 
-    val i = _objects.size
+    val i = _objects.length
     _objects += obj
     Code.checkcast[T](toCodeArray(_objectsField).apply(i))
   }

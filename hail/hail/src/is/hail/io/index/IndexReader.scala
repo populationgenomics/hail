@@ -9,6 +9,7 @@ import is.hail.rvd.{AbstractIndexSpec, PartitionBoundOrdering}
 import is.hail.types.physical.PStruct
 import is.hail.types.virtual.{TStruct, Type, TypeSerializer}
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import java.io.InputStream
 import java.util
@@ -82,7 +83,7 @@ class IndexReader(
   val internalPType: PStruct,
   val pool: RegionPool,
   val sm: HailStateManager,
-) extends AutoCloseable {
+) extends AutoCloseable with Logging {
   private[io] val metadata = IndexReader.readMetadata(fs, path, keyType, annotationType)
   val branchingFactor = metadata.branchingFactor
   val height = metadata.height
@@ -200,11 +201,8 @@ class IndexReader(
   private def getLeafNode(index: Long): LeafNode =
     getLeafNode(index, height - 1, metadata.rootOffset)
 
-  def queryByKey(key: Annotation): Array[LeafChild] = {
-    val ab = new BoxedArrayBuilder[LeafChild]()
-    keyIterator(key).foreach(ab += _)
-    ab.result()
-  }
+  def queryByKey(key: Annotation): IndexedSeq[LeafChild] =
+    ArraySeq.from(keyIterator(key))
 
   def keyIterator(key: Annotation): Iterator[LeafChild] =
     iterateFrom(key).takeWhile(lc => ordering.equiv(lc.key, key))
@@ -286,8 +284,8 @@ class IndexReader(
   def close(): Unit = {
     leafDecoder.close()
     internalDecoder.close()
-    log.info(s"Index reader cache queries: ${cacheHits + cacheMisses}")
-    log.info(s"Index reader cache hit rate: ${cacheHits.toDouble / (cacheHits + cacheMisses)}")
+    logger.info(s"Index reader cache queries: ${cacheHits + cacheMisses}")
+    logger.info(s"Index reader cache hit rate: ${cacheHits.toDouble / (cacheHits + cacheMisses)}")
   }
 }
 

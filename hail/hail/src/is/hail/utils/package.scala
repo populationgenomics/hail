@@ -7,9 +7,8 @@ import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.compat._
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
-import scala.util.control.NonFatal
+import scala.util.control.ControlThrowable
 
 import java.io._
 import java.lang.reflect.Method
@@ -17,12 +16,8 @@ import java.net.{URI, URLClassLoader}
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.text.SimpleDateFormat
-import java.util
 import java.util.{Base64, Date}
-import java.util.concurrent._
-import java.util.concurrent.atomic.AtomicBoolean
 
-import com.google.common.util.concurrent.AbstractFuture
 import org.apache.commons.lang3.StringUtils
 import org.apache.hadoop.fs.PathIOException
 import org.apache.hadoop.mapred.FileSplit
@@ -107,8 +102,8 @@ package utils {
 }
 
 package object utils
-    extends Logging with richUtils.Implicits with NumericPairImplicits with utils.NumericImplicits
-    with Py4jUtils with ErrorHandling {
+    extends richUtils.Implicits with NumericPairImplicits with utils.NumericImplicits with Py4jUtils
+    with ErrorHandling {
 
   type UtilsType = this.type
 
@@ -161,7 +156,7 @@ package object utils
     else if (!gzAsBGZ) {
       val fileSize = fileListEntry.getLen
       if (fileSize > 1024 * 1024 * maxSizeMB)
-        warn(
+        logger.warn(
           s"""file '${fileListEntry.getPath}' is ${readableBytes(fileSize)}
              |  It will be loaded serially (on one core) due to usage of the 'force' argument.
              |  If it is actually block-gzipped, either rename to .bgz or use the 'force_bgz'
@@ -379,6 +374,8 @@ package object utils
 
   def uninitialized[T]: T = null.asInstanceOf[T]
 
+  def unreachable[A]: A = throw new AssertionError("unreachable")
+
   private object mapAccumulateInstance extends MapAccumulate[Nothing, Nothing]
 
   def mapAccumulate[C[_], U] =
@@ -567,30 +564,6 @@ package object utils
 
   def partFile(d: Int, i: Int, ctx: TaskContext): String = s"${partFile(d, i)}-${partSuffix(ctx)}"
 
-  def mangle(strs: Array[String], formatter: Int => String = "_%d".format(_))
-    : (Array[String], Array[(String, String)]) = {
-    val b = new BoxedArrayBuilder[String]
-
-    val uniques = new mutable.HashSet[String]()
-    val mapping = new BoxedArrayBuilder[(String, String)]
-
-    strs.foreach { s =>
-      var smod = s
-      var i = 0
-      while (uniques.contains(smod)) {
-        i += 1
-        smod = s + formatter(i)
-      }
-
-      if (smod != s)
-        mapping += s -> smod
-      uniques += smod
-      b += smod
-    }
-
-    b.result() -> mapping.result()
-  }
-
   def lift[T, S](pf: PartialFunction[T, S]): (T) => Option[S] = pf.lift
 
   def flatLift[T, S](pf: PartialFunction[T, Option[S]]): (T) => Option[S] = pf.flatLift
@@ -609,7 +582,7 @@ package object utils
         catch {
           case duringClose: Exception =>
             if (original == duringClose) {
-              log.info(
+              logger.info(
                 s"""The exact same exception object, $original, was thrown by both
                    |the consumer and the close method. I will throw the original.""".stripMargin
               )
@@ -958,64 +931,23 @@ package object utils
 
   def jsonToBytes(v: JValue): Array[Byte] =
     JsonMethods.compact(v).getBytes(StandardCharsets.UTF_8)
-}
 
-class CancellingExecutorService(delegate: ExecutorService) extends AbstractExecutorService {
+  private[this] object Retry extends ControlThrowable
 
-  private[this] val tasks = new ArrayBuffer[CancellingTask[_]]()
-  private[this] val isCancelled = new AtomicBoolean(false)
+  def retry[A]: A = throw Retry
 
-  final private class CancellingTask[A](f: () => A)
-      extends AbstractFuture[A] with RunnableFuture[A] {
-    @volatile private[this] var isFailed = false
+  def retryable[A](f: Int => A): A = {
+    var attempts: Int = 0
 
-    override def run(): Unit =
-      try set(f())
+    while (true)
+      try return f(attempts)
       catch {
-        case NonFatal(e) =>
-          isFailed = true
-          setException(e)
+        case Retry =>
+          attempts += 1
       }
 
-    override def afterDone(): Unit =
-      if (isFailed && CancellingExecutorService.this.isCancelled.compareAndSet(false, true)) {
-        tasks.foreach(_.cancel(true))
-      }
+    unreachable
   }
-
-  final private[this] class CancelledFuture[A] extends AbstractFuture[A] with RunnableFuture[A] {
-    override def run(): Unit =
-      setException(new CancellationException())
-  }
-
-  override def newTaskFor[T](runnable: Runnable, value: T): RunnableFuture[T] =
-    newTaskFor { () => runnable.run(); value }
-
-  override def newTaskFor[T](callable: Callable[T]): RunnableFuture[T] =
-    if (isCancelled.get()) new CancelledFuture[T]
-    else {
-      val task = new CancellingTask[T](callable.call)
-      tasks += task
-      task
-    }
-
-  override def shutdown(): Unit =
-    delegate.shutdown()
-
-  override def shutdownNow(): util.List[Runnable] =
-    delegate.shutdownNow()
-
-  override def isShutdown: Boolean =
-    delegate.isShutdown
-
-  override def isTerminated: Boolean =
-    delegate.isTerminated
-
-  override def awaitTermination(timeout: Long, unit: TimeUnit): Boolean =
-    delegate.awaitTermination(timeout, unit)
-
-  override def execute(command: Runnable): Unit =
-    delegate.execute(command)
 }
 
 // FIXME: probably resolved in 3.6 https://github.com/json4s/json4s/commit/fc96a92e1aa3e9e3f97e2e91f94907fdfff6010d

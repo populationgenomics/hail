@@ -14,7 +14,7 @@ import is.hail.io.gen.{BgenWriter, ExportGen}
 import is.hail.io.index.StagedIndexWriter
 import is.hail.io.plink.{BitPacker, ExportPlink}
 import is.hail.io.vcf.{ExportVCF, TabixVCF}
-import is.hail.linalg.BlockMatrix
+import is.hail.linalg.{BlockMatrix, MatrixSparsity}
 import is.hail.rvd.{IndexSpec, RVDPartitioner, RVDSpecMaker}
 import is.hail.types._
 import is.hail.types.encoded.{EBaseStruct, EBlockMatrixNDArray, EType}
@@ -650,7 +650,7 @@ class MatrixSpecHelper(
   refRelPath: String,
   typ: MatrixType,
   log: Boolean,
-) extends Serializable {
+) extends Logging with Serializable {
   def write(fs: FS, nCols: Long, partCounts: Array[Long]): Unit = {
     val spec = MatrixTableSpecParameters(
       FileFormat.version.rep,
@@ -669,7 +669,7 @@ class MatrixSpecHelper(
     spec.write(fs, path)
 
     val nRows = partCounts.sum
-    info(s"wrote matrix table with $nRows ${plural(nRows, "row")} " +
+    logger.info(s"wrote matrix table with $nRows ${plural(nRows, "row")} " +
       s"and $nCols ${plural(nCols, "column")} " +
       s"in ${partCounts.length} ${plural(partCounts.length, "partition")} " +
       s"to $path")
@@ -725,7 +725,7 @@ case class MatrixVCFWriter(
   exportType: String = ExportType.CONCATENATED,
   metadata: Option[VCFMetadata] = None,
   tabix: Boolean = false,
-) extends MatrixWriter {
+) extends MatrixWriter with Logging {
   override def lower(
     colsFieldName: String,
     entriesFieldName: String,
@@ -745,12 +745,12 @@ case class MatrixVCFWriter(
         case tinfo: TStruct =>
           ExportVCF.checkInfoSignature(tinfo)
         case t =>
-          warn(
+          logger.warn(
             s"export_vcf found row field 'info' of type $t, but expected type 'tstruct'. Emitting no INFO fields."
           )
       }
     } else {
-      warn(s"export_vcf found no row field 'info'. Emitting no INFO fields.")
+      logger.warn(s"export_vcf found no row field 'info'. Emitting no INFO fields.")
     }
 
     ExportVCF.checkFormatSignature(tm.entryType)
@@ -2340,7 +2340,7 @@ case class MatrixBlockMatrixWriter(
 
     val countColumnsIR = ArrayLen(GetField(ts.getGlobals(), colsFieldName))
     val numCols: Int = CompileAndEvaluate[Int](ctx, countColumnsIR)
-    val numBlockCols: Int = (numCols - 1) / blockSize + 1
+    val numBlockCols: Int = BlockMatrixType.numBlocks(numCols.toLong, blockSize)
     val lastBlockNumCols = (numCols - 1) % blockSize + 1
 
     val rowCountIR = ts.mapCollect("matrix_block_matrix_writer_partition_counts")(paritionIR =>
@@ -2353,7 +2353,7 @@ case class MatrixBlockMatrixWriter(
     val inputPartStops = inputPartStartsPlusLast.tail
 
     val numRows = inputPartStartsPlusLast.last
-    val numBlockRows: Int = (numRows.toInt - 1) / blockSize + 1
+    val numBlockRows: Int = BlockMatrixType.numBlocks(numRows, blockSize)
 
     // Zip contexts with partition starts and ends
     val zippedWithStarts = ts.mapContexts { oldContextsStream =>
@@ -2510,7 +2510,7 @@ case class MatrixBlockMatrixWriter(
       numRows,
       numCols.toLong,
       blockSize,
-      BlockMatrixSparsity.dense,
+      MatrixSparsity.dense(numBlockRows, numBlockCols),
     )
     RelationalWriter.scoped(path, overwrite, None)(WriteMetadata(
       flatPaths,

@@ -14,6 +14,7 @@ import is.hail.types.physical.{PCanonicalStruct, PInt64, PStruct}
 import is.hail.types.virtual.{MatrixType, TInterval, TStruct}
 import is.hail.utils._
 import is.hail.utils.PartitionCounts.{getPCSubsetOffset, incrementalPCSubsetOffset, PCSubsetOffset}
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.parallel.CollectionConverters._
 import scala.reflect.ClassTag
@@ -39,7 +40,7 @@ class RVD(
   val typ: RVDType,
   val partitioner: RVDPartitioner,
   val crdd: ContextRDD[Long],
-) {
+) extends Logging {
   self =>
   require(crdd.getNumPartitions == partitioner.numPartitions)
 
@@ -354,13 +355,13 @@ class RVD(
       )
 
       if (newPartitioner.numPartitions < maxPartitions)
-        warn(s"coalesced to ${newPartitioner.numPartitions} " +
+        logger.warn(s"coalesced to ${newPartitioner.numPartitions} " +
           s"${plural(newPartitioner.numPartitions, "partition")}, less than requested $maxPartitions")
 
       repartition(ctx, newPartitioner, shuffle)
     } else {
       val partSize = countPerPartition()
-      log.info(s"partSize = ${partSize.toSeq}")
+      logger.info(s"partSize = ${partSize.toSeq}")
 
       val partCumulativeSize =
         mapAccumulate[Array, Long](partSize, 0L)((s, acc) => (s + acc, s + acc))
@@ -391,7 +392,7 @@ class RVD(
 
       val newPartitioner = partitioner.coalesceRangeBounds(newPartEnd)
       if (newPartitioner.numPartitions < maxPartitions)
-        warn(s"coalesced to ${newPartitioner.numPartitions} " +
+        logger.warn(s"coalesced to ${newPartitioner.numPartitions} " +
           s"${plural(newPartitioner.numPartitions, "partition")}, less than requested $maxPartitions")
 
       if (newPartitioner == partitioner) {
@@ -681,7 +682,7 @@ class RVD(
       .filter(i => intervals.overlaps(partitioner.rangeBounds(i)))
       .toArray
 
-    info(s"reading ${newPartitionIndices.length} of $nPartitions data partitions")
+    logger.info(s"reading ${newPartitionIndices.length} of $nPartitions data partitions")
 
     if (newPartitionIndices.isEmpty)
       RVD.empty(intervals.sm, typ)
@@ -733,7 +734,7 @@ class RVD(
       while (reduced.getNumPartitions > scale) {
         val nParts = reduced.getNumPartitions
         val newNParts = nParts / scale
-        log.info(s"starting tree aggregate stage $i ($nParts => $newNParts partitions)")
+        logger.info(s"starting tree aggregate stage $i ($nParts => $newNParts partitions)")
         reduced = reduced
           .mapPartitionsWithIndex { (i, it) =>
             it.map(x => (itemPartition(i, nParts, newNParts), (i, x)))
@@ -1060,7 +1061,7 @@ class RVD(
     new KeyedRVD(this, key)
 }
 
-object RVD {
+object RVD extends Logging {
 
   var CheckRvdKeyOrderingForTesting: Boolean = false
 
@@ -1216,7 +1217,7 @@ object RVD {
       } else {
         assert(pids.isEmpty || pids.max < crdd.getNumPartitions)
         if (!pids.isSorted)
-          info("Coerced dataset with out-of-order partitions.")
+          logger.info("Coerced dataset with out-of-order partitions.")
         crdd.reorderPartitions(pids)
       }
     }
@@ -1230,7 +1231,7 @@ object RVD {
       && RVDPartitioner.isValid(execCtx.stateManager, fullType.kType.virtualType, bounds)
     ) {
 
-      info("Coerced sorted dataset")
+      logger.info("Coerced sorted dataset")
 
       new RVDCoercer(fullType) {
         val unfixedPartitioner =
@@ -1256,8 +1257,8 @@ object RVD {
       )
     ) {
 
-      info(s"Coerced almost-sorted dataset")
-      log.info(s"Unsorted keys: $contextStr")
+      logger.info(s"Coerced almost-sorted dataset")
+      logger.info(s"Unsorted keys: $contextStr")
 
       new RVDCoercer(fullType) {
         val unfixedPartitioner = new RVDPartitioner(
@@ -1284,8 +1285,8 @@ object RVD {
 
     } else {
 
-      info(s"Ordering unsorted dataset with network shuffle")
-      log.info(s"Unsorted keys: $contextStr")
+      logger.info(s"Ordering unsorted dataset with network shuffle")
+      logger.info(s"Unsorted keys: $contextStr")
 
       new RVDCoercer(fullType) {
         val newPartitioner =
@@ -1365,7 +1366,7 @@ object RVD {
     paths: IndexedSeq[String],
     bufferSpec: BufferSpec,
     stageLocally: Boolean,
-  ): Array[Array[FileWriteMetadata]] = {
+  ): IndexedSeq[IndexedSeq[FileWriteMetadata]] = {
     val first = rvds.head
     rvds.foreach { rvd =>
       if (rvd.typ != first.typ)
@@ -1438,8 +1439,7 @@ object RVD {
       new ContextRDD(rdd).collect()
     }
 
-    val fileDataByOrigin =
-      Array.fill[BoxedArrayBuilder[FileWriteMetadata]](nRVDs)(new BoxedArrayBuilder())
+    val fileDataByOrigin = ArraySeq.fill(nRVDs)(ArraySeq.newBuilder[FileWriteMetadata])
 
     for ((fd, oidx) <- partFilePartitionCounts)
       fileDataByOrigin(oidx) += fd

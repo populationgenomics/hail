@@ -4,6 +4,7 @@ import is.hail.services.requests.ClientResponseException
 import is.hail.shadedazure.com.azure.storage.common.implementation.Constants
 import is.hail.utils._
 
+import scala.annotation.tailrec
 import scala.util.Random
 
 import java.io._
@@ -15,10 +16,8 @@ import com.google.cloud.storage.StorageException
 import javax.net.ssl.SSLException
 import org.apache.http.{ConnectionClosedException, NoHttpResponseException}
 import org.apache.http.conn.HttpHostConnectException
-import org.apache.log4j.{LogManager, Logger}
 
-package object services {
-  private lazy val log: Logger = LogManager.getLogger("is.hail.services")
+package object services extends Logging {
 
   val RETRYABLE_HTTP_STATUS_CODES: Set[Int] = {
     val s = Set(408, 429, 500, 502, 503, 504)
@@ -37,24 +36,17 @@ package object services {
     tries: Int,
     baseDelayMs: Int = DEFAULT_BASE_DELAY_MS,
     maxDelayMs: Int = DEFAULT_MAX_DELAY_MS,
-  ): Int = {
+  ): Long = {
     // Based on AWS' recommendations:
     // - https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
     /* -
      * https://github.com/aws/aws-sdk-java/blob/master/aws-java-sdk-core/src/main/java/com/amazonaws/retry/PredefinedBackoffStrategies.java */
     val multiplier = 1L << math.min(tries, LOG_2_MAX_MULTIPLIER)
-    val ceilingForDelayMs = math.min(baseDelayMs * multiplier, maxDelayMs.toLong).toInt
-    val proposedDelayMs = ceilingForDelayMs / 2 + Random.nextInt(ceilingForDelayMs / 2 + 1)
-    return proposedDelayMs
+    val ceilingForDelayMs = math.min(baseDelayMs * multiplier, maxDelayMs.toLong)
+    ceilingForDelayMs / 2L + Random.nextInt(ceilingForDelayMs.toInt / 2 + 1)
   }
 
-  def sleepBeforTry(
-    tries: Int,
-    baseDelayMs: Int = DEFAULT_BASE_DELAY_MS,
-    maxDelayMs: Int = DEFAULT_MAX_DELAY_MS,
-  ) =
-    Thread.sleep(delayMsForTry(tries, baseDelayMs, maxDelayMs).toLong)
-
+  @tailrec
   def isLimitedRetriesError(_e: Throwable): Boolean = {
     // An exception is a "retry once error" if a rare, known bug in a dependency or in a cloud
     // provider can manifest as this exception *and* that manifestation is indistinguishable from a
@@ -94,6 +86,7 @@ package object services {
     }
   }
 
+  @tailrec
   def isTransientError(_e: Throwable): Boolean = {
     // ReactiveException is package private inside reactore.core.Exception so we cannot access
     // it directly for an isInstance check. AFAICT, this is the only way to check if we received
@@ -195,17 +188,15 @@ package object services {
     }
   }
 
-  def retryTransientErrors[T](f: => T, reset: Option[() => Unit] = None): T = {
-    var tries = 0
-    while (true) {
-      try
-        return f
+
+  def retryTransientErrors[T](f: => T, reset: Option[() => Unit] = None): T =
+    retryable { tries =>
+      try f
       catch {
         case e: Exception =>
-          tries += 1
           val delay = delayMsForTry(tries)
           if (tries <= 5 && isLimitedRetriesError(e)) {
-            log.warn(
+            logger.warn(
               s"A limited retry error has occured. We will automatically retry " +
                 s"${5 - tries} more times. Do not be alarmed. (next delay: " +
                 s"$delay). The most recent error was $e."
@@ -222,15 +213,13 @@ package object services {
           } else if (!isTransientError(e)) {
             throw e
           } else if (tries % 10 == 0) {
-            log.warn(s"Encountered $tries transient errors, most recent one was $e.")
+            logger.warn(s"Encountered $tries transient errors, most recent one was $e.")
           }
-          Thread.sleep(delay.toLong)
+          Thread.sleep(delay)
+          reset.foreach(_())
+          retry
       }
-      reset.foreach(_())
     }
-
-    throw new AssertionError("unreachable")
-  }
 
   def formatException(e: Throwable): String = {
     using(new StringWriter()) { sw =>

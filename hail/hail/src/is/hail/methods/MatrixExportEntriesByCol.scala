@@ -8,6 +8,7 @@ import is.hail.expr.ir.functions.MatrixToValueFunction
 import is.hail.types.{RTable, TypeWithRequiredness}
 import is.hail.types.virtual.{MatrixType, TVoid, Type}
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import java.io.{BufferedOutputStream, OutputStreamWriter}
 
@@ -20,7 +21,7 @@ case class MatrixExportEntriesByCol(
   bgzip: Boolean,
   headerJsonInFile: Boolean,
   useStringKeyAsFileName: Boolean,
-) extends MatrixToValueFunction {
+) extends MatrixToValueFunction with Logging {
   def typ(childType: MatrixType): Type = TVoid
 
   def unionRequiredness(childType: RTable, resultType: TypeWithRequiredness): Unit = ()
@@ -44,16 +45,16 @@ case class MatrixExportEntriesByCol(
     val allColValuesJSON =
       mv.colValues.javaValue.map(TableAnnotationImpex.exportAnnotation(_, mv.typ.colType)).toArray
 
-    val tempFolders = new BoxedArrayBuilder[String]
+    val tempFolders = ArraySeq.newBuilder[String]
 
-    info(s"exporting ${mv.nCols} files in batches of $parallelism...")
+    logger.info(s"exporting ${mv.nCols} files in batches of $parallelism...")
     val nBatches = (mv.nCols + parallelism - 1) / parallelism
     val resultFiles = (0 until nBatches).flatMap { batch =>
       val startIdx = parallelism * batch
       val nCols = mv.nCols
       val endIdx = math.min(nCols, parallelism * (batch + 1))
 
-      info(s"on batch ${batch + 1} of $nBatches, columns $startIdx to ${endIdx - 1}...")
+      logger.info(s"on batch ${batch + 1} of $nBatches, columns $startIdx to ${endIdx - 1}...")
 
       val d = digitsNeeded(mv.rvd.getNumPartitions)
 
@@ -191,7 +192,7 @@ case class MatrixExportEntriesByCol(
       },
     )
 
-    info("Export finished. Cleaning up temporary files...")
+    logger.info("Export finished. Cleaning up temporary files...")
 
     // clean up temporary files
     val temps = tempFolders.result()
@@ -201,6 +202,6 @@ case class MatrixExportEntriesByCol(
       (temps.length / 32).max(1),
     ).foreach(path => fsBc.value.delete(path, recursive = true))
 
-    info("Done cleaning up temporary files.")
+    logger.info("Done cleaning up temporary files.")
   }
 }

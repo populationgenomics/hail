@@ -15,6 +15,8 @@ import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.utils.StringEscapeUtils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant._
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
@@ -29,7 +31,7 @@ case class FamFileConfig(
   missingValue: String = "NA",
 )
 
-object LoadPlink {
+object LoadPlink extends Logging {
   def expectedBedSize(nSamples: Int, nVariants: Int): Long =
     3 + nVariants.toLong * ((nSamples + 3) / 4)
 
@@ -43,7 +45,7 @@ object LoadPlink {
     locusAllelesType: TStruct,
     skipInvalidLoci: Boolean,
   ): (Int, Array[PlinkVariant]) = {
-    val vs = new BoxedArrayBuilder[PlinkVariant]()
+    val vs = Array.newBuilder[PlinkVariant]
     var n = 0
     fs.readLines(bimPath) { lines =>
       lines.foreach { cline =>
@@ -72,8 +74,10 @@ object LoadPlink {
         n += 1
       }
     }
-    val variants = vs.result()
-    (n, variants.sortBy(_.locusAlleles)(locusAllelesType.ordering(ctx.stateManager).toOrdering))
+    val variants = vs.result().sortInPlaceBy(_.locusAlleles)(
+      locusAllelesType.ordering(ctx.stateManager).toOrdering
+    ).array
+    (n, variants)
   }
 
   val numericRegex =
@@ -111,8 +115,8 @@ object LoadPlink {
       phenoSig,
     )
 
-    val idBuilder = new BoxedArrayBuilder[String]
-    val structBuilder = new BoxedArrayBuilder[Row]
+    val idBuilder = ArraySeq.newBuilder[String]
+    val structBuilder = ArraySeq.newBuilder[Row]
 
     fs.readLines(filename) {
       _.foreachLine { line =>
@@ -141,7 +145,7 @@ object LoadPlink {
               case ffConfig.missingValue => null
               case "-9" =>
                 if (!warnedAbout9) {
-                  warn(
+                  logger.warn(
                     s"""Interpreting value '-9' as a valid quantitative phenotype, which differs from default PLINK behavior.
                        |  Use missing='-9' to interpret '-9' as a missing value.""".stripMargin
                   )
@@ -181,7 +185,7 @@ object LoadPlink {
   }
 }
 
-object MatrixPLINKReader {
+object MatrixPLINKReader extends Logging {
   def fromJValue(ctx: ExecuteContext, jv: JValue): MatrixPLINKReader = {
     val fs = ctx.fs
 
@@ -224,8 +228,8 @@ object MatrixPLINKReader {
     if (nTotalVariants <= 0)
       fatal("BIM file does not contain any variants")
 
-    info(s"Found $nSamples samples in fam file.")
-    info(s"Found $nTotalVariants variants in bim file.")
+    logger.info(s"Found $nSamples samples in fam file.")
+    logger.info(s"Found $nTotalVariants variants in bim file.")
 
     using(fs.open(params.bed)) { dis =>
       val b1 = dis.read()
@@ -264,8 +268,8 @@ object MatrixPLINKReader {
     val partSize = partition(nVariants, nPartitions)
     val partScan = partSize.scanLeft(0)(_ + _)
 
-    val cb = new BoxedArrayBuilder[Row]()
-    val ib = new BoxedArrayBuilder[Interval]()
+    val cb = ArraySeq.newBuilder[Row]
+    val ib = ArraySeq.newBuilder[Interval]
 
     var p = 0
     var prevEnd = 0
@@ -359,7 +363,7 @@ class MatrixPLINKReader(
   val fullMatrixTypeWithoutUIDs: MatrixType,
   val nVariants: Long,
   sampleInfo: IndexedSeq[Row],
-  contexts: Array[Row],
+  contexts: IndexedSeq[Row],
   partitioner: RVDPartitioner,
 ) extends MatrixHybridReader {
 

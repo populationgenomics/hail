@@ -1,24 +1,18 @@
 package is.hail.utils
 
-import org.apache.logging.log4j.{LogManager, Logger}
+import is.hail.utils.Logging.getLoggerContext
 
-object LogHelper {
-  // exposed more directly for generated code
-  def logInfo(msg: String): Unit = log.info(msg)
-  def warning(msg: String): Unit = log.warn(msg)
-  def consoleInfo(msg: String): Unit = info(msg)
-}
+import org.apache.logging.log4j.core.LoggerContext
+import org.apache.logging.log4j.scala.Logger
 
 trait Logging {
-  @transient lazy val log: Logger =
-    LogManager.getLogger(getClass.getName.stripSuffix("$"))
+  @transient protected lazy val logger: Logger =
+    Logger(getLoggerContext.getLogger(getClass))
+}
 
-  def info(msg: String): Unit =
-    log.info(msg)
-
-  def warn(msg: String): Unit =
-    log.warn(msg)
-
-  def error(msg: String): Unit =
-    log.error(msg)
+object Logging {
+  // Can't say I fully understand what's going on here, but
+  // spark 3.5.3 doesn't configure the active context.
+  def getLoggerContext: LoggerContext =
+    LoggerContext.getContext(false)
 }

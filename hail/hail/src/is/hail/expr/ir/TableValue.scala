@@ -22,6 +22,7 @@ import is.hail.types.physical.stypes.interfaces.NoBoxLongIterator
 import is.hail.types.tcoerce
 import is.hail.types.virtual.{Field, MatrixType, TArray, TInt32, TStream, TStruct, TableType}
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.reflect.ClassTag
 
@@ -67,7 +68,7 @@ case class TableStageIntermediate(ts: TableStage) extends TableExecuteIntermedia
   def partitioner: RVDPartitioner = ts.partitioner
 }
 
-object TableValue {
+object TableValue extends Logging {
   def apply(ctx: ExecuteContext, rowType: PStruct, key: IndexedSeq[String], rdd: ContextRDD[Long])
     : TableValue = {
     assert(rowType.required)
@@ -121,7 +122,7 @@ object TableValue {
       )
         childRVDs.map(_.truncateKey(typ.key.length))
       else {
-        info("TableMultiWayZipJoin: repartitioning children")
+        logger.info("TableMultiWayZipJoin: repartitioning children")
         val childRanges = childRVDs.flatMap(_.partitioner.coarsenedRangeBounds(typ.key.length))
         val newPartitioner = RVDPartitioner.generate(ctx.stateManager, typ.keyType, childRanges)
         childRVDs.map(_.repartition(ctx, newPartitioner))
@@ -146,7 +147,7 @@ object TableValue {
       )): _*
     )
     val localDataLength = childValues.length
-    val rvMerger = { (ctx: RVDContext, it: Iterator[BoxedArrayBuilder[(RegionValue, Int)]]) =>
+    val rvMerger = { (ctx: RVDContext, it: Iterator[collection.IndexedSeq[(RegionValue, Int)]]) =>
       val rvb = new RegionValueBuilder(sm)
       val newRegionValue = RegionValue()
 
@@ -239,7 +240,7 @@ object TableValue {
         s"\n  res=${resultRowType.virtualType}\n  typ=$rowType",
     )
 
-    log.info(s"parallelized $nRows rows in $nSplits partitions")
+    logger.info(s"parallelized $nRows rows in $nSplits partitions")
 
     val rvd = ContextRDD.parallelize(encRows, encRows.length)
       .cmapPartitions { (ctx, it) =>
@@ -301,7 +302,8 @@ object TableValue {
   }
 }
 
-case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow, rvd: RVD) {
+case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow, rvd: RVD)
+    extends Logging {
   if (typ.rowType != rvd.rowType)
     throw new RuntimeException(
       s"row mismatch:\n  typ: ${typ.rowType.parsableString()}\n  rvd: ${rvd.rowType.parsableString()}"
@@ -1224,11 +1226,11 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         }
       }.collect()
 
-      val fileStack = new BoxedArrayBuilder[Array[String]]()
+      val fileStack = ArraySeq.newBuilder[IndexedSeq[String]]
       var filesToMerge: Array[String] = files
       while (filesToMerge.length > 1) {
         val nToMerge = filesToMerge.length / 2
-        log.info(s"Running distributed combine stage with $nToMerge tasks")
+        logger.info(s"Running distributed combine stage with $nToMerge tasks")
         fileStack += filesToMerge
 
         filesToMerge =
@@ -1271,18 +1273,16 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         else
           0
         val partitionAggs = {
-          var j = 0
           var x = i
-          val ab = new BoxedArrayBuilder[String]
-          while (j < fileStack.length) {
-            assert(x <= fileStack(j).length)
+          val ab = ArraySeq.newBuilder[String]
+          fileStack.result().foreach { files =>
+            assert(x <= files.length)
             if (x % 2 != 0) {
               x -= 1
-              ab += fileStack(j)(x)
+              ab += files(x)
             }
             assert(x % 2 == 0)
             x = x / 2
-            j += 1
           }
           assert(x == 0)
           var b = initAgg
@@ -1361,7 +1361,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     using(ctx.fs.createNoCompression(scanAggsPerPartitionFile)) { os =>
       partAggs.zipWithIndex.foreach { case (x, i) =>
         if (i < scanAggCount) {
-          log.info(s"TableMapRows scan: serializing combined agg $i")
+          logger.info(s"TableMapRows scan: serializing combined agg $i")
           partitionIndices(i) = os.getPosition
           os.writeInt(x.length)
           os.write(x, 0, x.length)

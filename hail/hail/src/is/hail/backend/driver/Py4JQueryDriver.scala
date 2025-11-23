@@ -28,7 +28,6 @@ import java.io.Closeable
 import java.net.InetSocketAddress
 import java.util
 
-import com.google.api.client.http.HttpStatusCodes
 import com.sun.net.httpserver.{HttpExchange, HttpServer}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.DataFrame
@@ -36,7 +35,7 @@ import org.json4s._
 import org.json4s.jackson.{JsonMethods, Serialization}
 import sourcecode.Enclosing
 
-final class Py4JQueryDriver(backend: Backend) extends Closeable {
+final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
 
   private[this] val flags: HailFeatureFlags = HailFeatureFlags.fromEnv()
   private[this] val hcl = new HailClassLoader(getClass.getClassLoader)
@@ -77,7 +76,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable {
       localTmpdir = tmp
       backend match {
         case s: SparkBackend if tmp != "file://" + s.sc.getConf.get("spark.local.dir", "") =>
-          log.warn(
+          logger.warn(
             "Cannot modify Spark's local directory at runtime. " +
               "Please stop and re-initialize hail with 'spark.local.dir' " +
               "in your Spark configuration."
@@ -234,7 +233,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable {
   def pyReadMultipleMatrixTables(jsonQuery: String): util.List[MatrixIR] =
     withExecuteContext(selfContainedExecution = false) { ctx =>
       implicit val fmts: Formats = DefaultFormats
-      log.info("pyReadMultipleMatrixTables: got query")
+      logger.info("pyReadMultipleMatrixTables: got query")
 
       val kvs = JsonMethods.parse(jsonQuery).extract[Map[String, JValue]]
       val paths = kvs("paths").extract[IndexedSeq[String]]
@@ -246,12 +245,12 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable {
       val opts = NativeReaderOptions(intervalObjects, intervalPointType)
       val matrixReaders: util.List[MatrixIR] =
         paths.map { p =>
-          log.info(s"creating MatrixRead node for $p")
+          logger.info(s"creating MatrixRead node for $p")
           val mnr = MatrixNativeReader(ctx.fs, p, Some(opts))
           MatrixRead(mnr.fullMatrixTypeWithoutUIDs, false, false, mnr): MatrixIR
         }.asJava
 
-      log.info("pyReadMultipleMatrixTables: returning N matrix tables")
+      logger.info("pyReadMultipleMatrixTables: returning N matrix tables")
       matrixReaders
     }._1
 
@@ -293,10 +292,10 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable {
 
   def pyGrepPrint(regex: String, files: Seq[String], maxLines: Int): Unit =
     fileAndLineCounts(regex, files, maxLines).foreach { case (file, lines) =>
-      info(s"$file: ${lines.length} ${plural(lines.length, "match", "matches")}:")
+      logger.info(s"$file: ${lines.length} ${plural(lines.length, "match", "matches")}:")
       lines.map(_.value).foreach { line =>
         val (screen, logged) = line.truncatable().strings
-        log.info("\t" + logged)
+        logger.info("\t" + logged)
         println(s"\t$screen")
       }
     }
@@ -412,12 +411,12 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable {
         }
 
         override def result(req: HttpExchange, result: Array[Byte]): Unit =
-          respond(req, HttpStatusCodes.STATUS_CODE_OK, result)
+          respond(req, 200, result)
 
         override def failure(req: HttpExchange, t: Throwable): Unit =
           respond(
             req,
-            HttpStatusCodes.STATUS_CODE_SERVER_ERROR,
+            500,
             jsonToBytes {
               val (shortMessage, expandedMessage, errorId) = handleForPython(t)
               JObject(

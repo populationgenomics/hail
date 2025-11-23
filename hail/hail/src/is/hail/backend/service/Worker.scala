@@ -17,8 +17,7 @@ import java.nio.charset._
 import java.nio.file.Path
 import java.util
 import java.util.concurrent.Executors
-
-import com.google.common.util.concurrent.ThreadFactoryBuilder
+import java.util.concurrent.atomic.AtomicInteger
 
 class ServiceTaskContext(val partitionId: Int) extends HailTaskContext {
   override def stageId(): Int = 0
@@ -38,7 +37,7 @@ class WorkerTimer extends Logging {
     val startTime = startTimes.get(label)
     startTime.foreach { s =>
       val durationMS = "%.6f".format((endTime - s).toDouble / 1000000.0)
-      log.info(s"$label took $durationMS ms.")
+      logger.info(s"$label took $durationMS ms.")
     }
   }
 
@@ -177,8 +176,8 @@ object Worker extends Logging {
 
     sys.env.get("HAIL_SSL_CONFIG_DIR").foreach(tls.setSSLConfigFromDir)
 
-    log.info(s"${getClass.getName} $HAIL_REVISION")
-    log.info(s"running partition $partition root '$root' with scratch directory '$scratchDir'")
+    logger.info(s"${getClass.getName} $HAIL_REVISION")
+    logger.info(s"running partition $partition root '$root' with scratch directory '$scratchDir'")
 
     timer.start(s"partition $partition")
 
@@ -193,12 +192,15 @@ object Worker extends Logging {
 
     implicit val ec: ExecutionContext =
       ExecutionContext.fromExecutor(
-        Executors.newCachedThreadPool(
-          new ThreadFactoryBuilder()
-            .setDaemon(true)
-            .setNameFormat("hail-worker-thread-%d")
-            .build()
-        )
+        Executors.newCachedThreadPool {
+          val threadFactory = Executors.defaultThreadFactory()
+          val counter = new AtomicInteger(0)
+          task =>
+            val thread = threadFactory.newThread(task)
+            thread.setName(f"hail-worker-thread-${counter.getAndIncrement()}")
+            thread.setDaemon(true)
+            thread
+        }
       )
 
     def open(x: String): SeekableDataInputStream =
@@ -266,10 +268,10 @@ object Worker extends Logging {
     }
 
     timer.end(s"partition $partition")
-    log.info(s"finished job $index at root $root")
+    logger.info(s"finished job $index at root $root")
 
     result.left.foreach { throwableWhileExecutingUserCode =>
-      log.info("throwing the exception so that this Worker job is marked as failed.")
+      logger.info("throwing the exception so that this Worker job is marked as failed.")
       throw throwableWhileExecutingUserCode
     }
   }

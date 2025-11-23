@@ -10,7 +10,6 @@ import java.io.{InputStream, OutputStream}
 
 import org.apache.logging.log4j.Level
 import org.apache.logging.log4j.core.appender.ConsoleAppender
-import org.apache.logging.log4j.core.config.Configurator
 import org.apache.logging.log4j.core.config.builder.api.ConfigurationBuilderFactory
 import org.json4s.JsonAST._
 import org.json4s.jackson.JsonMethods
@@ -181,7 +180,7 @@ trait Py4jUtils extends Logging {
         .newLogger("org.apache.spark", Level.WARN)
         .add(configBuilder.newAppenderRef(fileAppender.getName))
 
-    Configurator.reconfigure(
+    Logging.getLoggerContext.reconfigure(
       configBuilder
         .add(fileAppender)
         .add(consoleAppender)
@@ -190,15 +189,6 @@ trait Py4jUtils extends Logging {
         .build(false)
     )
   }
-
-  def logWarn(msg: String): Unit =
-    warn(msg)
-
-  def logInfo(msg: String): Unit =
-    info(msg)
-
-  def logError(msg: String): Unit =
-    error(msg)
 
   def makeJSON(t: Type, value: Any): String = {
     val jv = JSONAnnotationImpex.exportAnnotation(value, t)

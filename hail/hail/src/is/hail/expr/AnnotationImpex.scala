@@ -6,7 +6,7 @@ import is.hail.types.physical.{
   PFloat64, PInt32, PInt64, PType,
 }
 import is.hail.types.virtual._
-import is.hail.utils.{Interval, _}
+import is.hail.utils._
 import is.hail.variant._
 
 import scala.collection.mutable
@@ -74,11 +74,11 @@ case class JSONExtractContig(name: String, length: Int)
 
 case class JSONExtractReferenceGenome(
   name: String,
-  contigs: Array[JSONExtractContig],
+  contigs: IndexedSeq[JSONExtractContig],
   xContigs: Set[String],
   yContigs: Set[String],
   mtContigs: Set[String],
-  par: Array[JSONExtractIntervalLocus],
+  par: IndexedSeq[JSONExtractIntervalLocus],
 ) {
 
   def toReferenceGenome: ReferenceGenome = ReferenceGenome(
@@ -92,7 +92,7 @@ case class JSONExtractReferenceGenome(
   )
 }
 
-object JSONAnnotationImpex {
+object JSONAnnotationImpex extends Logging {
   implicit val serializationFormats: json4s.Formats = Serialization.formats(NoTypeHints)
 
   def exportType(t: Type): Type = t
@@ -209,7 +209,7 @@ object JSONAnnotationImpex {
       importAnnotationInternal(jv, t, parent, padNulls, warnContext)
     def warnOnce(msg: String, path: String): Unit =
       if (!warnContext.contains(path)) {
-        warn(msg)
+        logger.warn(msg)
         warnContext += path
       }
 

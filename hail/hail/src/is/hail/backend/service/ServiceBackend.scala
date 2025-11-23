@@ -1,5 +1,6 @@
 package is.hail.backend.service
 
+import is.hail.HAIL_REVISION
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
 import is.hail.backend.local.LocalTaskContext
@@ -12,6 +13,7 @@ import is.hail.expr.ir.analyses.SemanticHash
 import is.hail.expr.ir.lowering._
 import is.hail.services._
 import is.hail.services.JobGroupStates.{Cancelled, Failure, Success}
+import is.hail.services.oauth2.{CloudCredentials, HailCredentials}
 import is.hail.types._
 import is.hail.types.physical._
 import is.hail.utils._
@@ -26,8 +28,65 @@ import scala.util.control.NonFatal
 import java.io._
 import java.util.concurrent.Executors
 
+import com.fasterxml.jackson.core.StreamReadConstraints
+
 object ServiceBackend {
   val MaxAvailableGcsConnections = 1000
+
+  // See https://github.com/hail-is/hail/issues/14580
+  StreamReadConstraints.overrideDefaultStreamReadConstraints(
+    StreamReadConstraints.builder().maxStringLength(Integer.MAX_VALUE).build()
+  )
+
+  def pyServiceBackend(
+    name: String,
+    batchId_ : Integer,
+    billingProject: String,
+    deployConfigFile: String,
+    workerCores: String,
+    workerMemory: String,
+    storage: String,
+    cloudfuse: Array[CloudfuseConfig],
+    regions: Array[String],
+  ): ServiceBackend = {
+    val credentials: CloudCredentials =
+      HailCredentials().getOrElse(CloudCredentials(keyPath = None))
+
+    val client =
+      BatchClient(
+        DeployConfig.fromConfigFile(deployConfigFile),
+        credentials,
+      )
+
+    val batchId =
+      Option(batchId_).map(_.toInt).getOrElse {
+        client.newBatch(
+          BatchRequest(
+            billing_project = billingProject,
+            token = tokenUrlSafe,
+            n_jobs = 0,
+            attributes = Map("name" -> name),
+          )
+        )
+      }
+
+    val workerConfig =
+      BatchJobConfig(
+        workerCores,
+        workerMemory,
+        storage,
+        cloudfuse,
+        regions,
+      )
+
+    new ServiceBackend(
+      name,
+      client,
+      GitRevision(HAIL_REVISION),
+      BatchConfig(batchId, 0),
+      workerConfig,
+    )
+  }
 }
 
 case class BatchJobConfig(
@@ -44,7 +103,7 @@ class ServiceBackend(
   jarSpec: JarSpec,
   val batchConfig: BatchConfig,
   jobConfig: BatchJobConfig,
-) extends Backend {
+) extends Backend with Logging {
 
   private[this] var stageCount = 0
 
@@ -122,10 +181,16 @@ class ServiceBackend(
           )
 
         stageCount += 1
-
-        Thread.sleep(600) // it is not possible for the batch to be finished in less than 600ms
-        val response = batchClient.waitForJobGroup(batchConfig.batchId, jobGroupId)
-        (response, startJobId)
+        try {
+          Thread.sleep(600) // it is not possible for the batch to be finished in less than 600ms
+          val response = batchClient.waitForJobGroup(batchConfig.batchId, jobGroupId)
+          (response, startJobId)
+        } catch {
+          case _: InterruptedException =>
+            batchClient.cancelJobGroup(batchConfig.batchId, jobGroupId)
+            Thread.currentThread().interrupt()
+            throw new CancellationException()
+        }
       }
 
       override def mapCollectPartitions(
@@ -150,7 +215,7 @@ class ServiceBackend(
           case todo =>
             val token = tokenUrlSafe
             val root = s"${ctx.tmpdir}/mapCollectPartitions/$token"
-            log.info(s"mapCollectPartitions: token='$token', nPartitions=${todo.length}")
+            logger.info(s"mapCollectPartitions: token='$token', nPartitions=${todo.length}")
 
             implicit val ec: ExecutionContext =
               ExecutionContext.fromExecutor(executor)
@@ -158,7 +223,7 @@ class ServiceBackend(
             val uploadGlobals = Future {
               retryTransientErrors {
                 ctx.fs.writePDOS(s"$root/globals")(_.write(globals))
-                log.info(s"mapCollectPartitions: $token: uploaded globals")
+                logger.info(s"mapCollectPartitions: $token: uploaded globals")
               }
             }
 
@@ -177,7 +242,7 @@ class ServiceBackend(
 
                   for (p <- partInputs) os.write(p)
 
-                  log.info(s"mapCollectPartitions: $token: wrote ${partInputs.length} contexts")
+                  logger.info(s"mapCollectPartitions: $token: wrote ${partInputs.length} contexts")
                 }
               }
             }
@@ -195,7 +260,7 @@ class ServiceBackend(
               retryTransientErrors {
                 ctx.fs.writePDOS(s"$root/f") { fos =>
                   using(new ObjectOutputStream(fos))(_.writeObject(partial))
-                  log.info(s"mapCollectPartitions: $token: uploaded function")
+                  logger.info(s"mapCollectPartitions: $token: uploaded function")
                 }
               }
             }
@@ -203,7 +268,7 @@ class ServiceBackend(
             Await.result(uploadGlobals zip uploadContexts zip uploadPartFn, Duration.Inf): Unit
 
             val (jobGroup, startJobId) = submitJobGroupAndWait(todo, token, root, stageIdentifier)
-            log.info(s"mapCollectPartitions: $token: reading results")
+            logger.info(s"mapCollectPartitions: $token: reading results")
             val startTime = System.nanoTime()
 
             def readPartitionOutputs(indices: IndexedSeq[Int]) =
@@ -232,7 +297,7 @@ class ServiceBackend(
                     )
 
                   if (failures.nonEmpty)
-                    log.error(
+                    logger.error(
                       f"Job group ${jobGroup.job_group_id} in batch ${jobGroup.batch_id} " +
                         f"completed successfully yet found errors in partition outputs."
                     )
@@ -305,7 +370,7 @@ class ServiceBackend(
             val end = (System.nanoTime() - startTime) / 1000000000.0
             val rate = results.length / end
             val byterate = results.view.map(_._1.length).sum / end / 1024 / 1024
-            log.info(s"all results read. $end s. $rate result/s. $byterate MiB/s.")
+            logger.info(s"all results read. $end s. $rate result/s. $byterate MiB/s.")
             (failureOpt, results.sortBy(_._2))
         }
     }
@@ -320,11 +385,11 @@ class ServiceBackend(
       TypeCheck(ctx, ir)
       Validate(ir)
       val queryID = Backend.nextID()
-      log.info(s"starting execution of query $queryID of initial size ${IRSize(ir)}")
+      logger.info(s"starting execution of query $queryID of initial size ${IRSize(ir)}")
       if (ctx.flags.isDefined(ExecutionCache.Flags.UseFastRestarts))
         ctx.irMetadata.semhash = SemanticHash(ctx, ir)
       val res = _jvmLowerAndExecute(ctx, ir)
-      log.info(s"finished execution of query $queryID")
+      logger.info(s"finished execution of query $queryID")
       res
     }
 
