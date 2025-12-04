@@ -17,19 +17,9 @@ jobs:
               https://ci.hail.populationgenomics.org.au/api/v1alpha/prod_deploy || echo "failed")
           echo DEPLOY_BATCH_URL_GCP="$DEPLOY_BATCH_URL_GCP" >> $GITHUB_ENV
 
-      - name: deploy to Azure
-        continue-on-error: true
-        run: |
-          DEPLOY_BATCH_URL_AZURE=$(curl --fail --silent --show-error -X POST \
-              -H "Authorization: Bearer ${{ secrets.CI_TOKEN_AZURE }}" \
-              -H "Content-Type:application/json" \
-              -d '{"steps": ["deploy_auth", "deploy_batch", "deploy_ci", "upload_query_jar"], "sha": "${{ github.sha }}"}' \
-              https://ci.azhail.populationgenomics.org.au/api/v1alpha/prod_deploy || echo "failed")
-          echo DEPLOY_BATCH_URL_AZURE="$DEPLOY_BATCH_URL_AZURE" >> $GITHUB_ENV
-
       - name: post to Slack
         run: |
-          SLACK_MSG="Deploying Hail Batch:\n*GCP:* $DEPLOY_BATCH_URL_GCP\n*Azure:* $DEPLOY_BATCH_URL_AZURE"
+          SLACK_MSG="Deploying Hail Batch:\n*GCP:* $DEPLOY_BATCH_URL_GCP"
           curl --fail --silent --show-error -X POST \
               -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
               -H "Content-type: application/json" \
@@ -38,6 +28,6 @@ jobs:
 
       - name: check if any deploy failed
         run: |
-          if [ "$DEPLOY_BATCH_URL_GCP" == "failed" ] || [ "$DEPLOY_BATCH_URL_AZURE" == "failed" ]; then
+          if [ "$DEPLOY_BATCH_URL_GCP" == "failed" ]; then
             exit 1
           fi
