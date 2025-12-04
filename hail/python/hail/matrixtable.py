@@ -24,7 +24,7 @@ from hail.expr.expressions import (
 )
 from hail.expr.matrix_type import tmatrix
 from hail.expr.types import tarray, tset, types_match
-from hail.table import ExprContainer, Table, TableIndexKeyError
+from hail.table import BaseTable, Table, TableIndexKeyError
 from hail.typecheck import (
     anyfunc,
     anytype,
@@ -43,7 +43,7 @@ from hail.utils.java import Env, info, warning
 from hail.utils.misc import check_annotate_exprs, get_key_by_exprs, get_select_exprs, process_joins, wrap_to_tuple
 
 
-class GroupedMatrixTable(ExprContainer):
+class GroupedMatrixTable(BaseTable):
     """Matrix table grouped by row or column that can be aggregated into a new matrix table."""
 
     def __init__(
@@ -539,7 +539,7 @@ class GroupedMatrixTable(ExprContainer):
 matrix_table_type = lazy()
 
 
-class MatrixTable(ExprContainer):
+class MatrixTable(BaseTable):
     """Hail's distributed implementation of a structured matrix.
 
     Use :func:`.read_matrix_table` to read a matrix table that was written with
@@ -725,9 +725,7 @@ class MatrixTable(ExprContainer):
         entries = [transpose(e) for e in transpose(entries)] if entries else [[{} for _ in cols] for _ in rows]
 
         if len(rows) != len(entries) or len(cols) != len(entries[0]):
-            raise ValueError(
-                ("mismatched matrix dimensions: " "number of rows and cols does not match entry dimensions.")
-            )
+            raise ValueError(("mismatched matrix dimensions: number of rows and cols does not match entry dimensions."))
 
         entries_field_name = Env.get_uid()
         for i, (row_props, entry_props) in enumerate(zip(rows, entries)):
@@ -2818,7 +2816,7 @@ class MatrixTable(ExprContainer):
         def __str__(self):
             s = self.table_show.__str__()
             if self.displayed_n_cols != self.actual_n_cols:
-                s += f"showing the first { self.displayed_n_cols } of { self.actual_n_cols } columns"
+                s += f"showing the first {self.displayed_n_cols} of {self.actual_n_cols} columns"
             return s
 
         def __repr__(self):
@@ -2828,7 +2826,7 @@ class MatrixTable(ExprContainer):
             s = self.table_show._repr_html_()
             if self.displayed_n_cols != self.actual_n_cols:
                 s += '<p style="background: #fdd; padding: 0.4em;">'
-                s += f"showing the first { self.displayed_n_cols } of { self.actual_n_cols } columns"
+                s += f"showing the first {self.displayed_n_cols} of {self.actual_n_cols} columns"
                 s += '</p>\n'
             return s
 
@@ -4040,11 +4038,9 @@ class MatrixTable(ExprContainer):
             Dataset with columns from both datasets.
         """
         if self.entry.dtype != other.entry.dtype:
-            raise ValueError(
-                f'entry types differ:\n' f'    left: {self.entry.dtype}\n' f'    right: {other.entry.dtype}'
-            )
+            raise ValueError(f'entry types differ:\n    left: {self.entry.dtype}\n    right: {other.entry.dtype}')
         if self.col.dtype != other.col.dtype:
-            raise ValueError(f'column types differ:\n' f'    left: {self.col.dtype}\n' f'    right: {other.col.dtype}')
+            raise ValueError(f'column types differ:\n    left: {self.col.dtype}\n    right: {other.col.dtype}')
         if self.col_key.keys() != other.col_key.keys():
             raise ValueError(
                 f'column key fields differ:\n'

@@ -1585,7 +1585,7 @@ class DictExpression(Expression):
         """
         if not self._kc.can_coerce(item.dtype):
             raise TypeError(
-                "dict encountered an invalid key type\n" "    dict key type:  '{}'\n" "    type of 'item': '{}'".format(
+                "dict encountered an invalid key type\n    dict key type:  '{}'\n    type of 'item': '{}'".format(
                     self.dtype.key_type, item.dtype
                 )
             )
@@ -1874,8 +1874,7 @@ class StructExpression(Mapping[Union[str, int], Expression], Expression):
     def __getattribute__(self, item):
         if item in super().__getattribute__('_warn_on_shadowed_name'):
             warning(
-                f'Field {item} is shadowed by another method or attribute. '
-                f'Use ["{item}"] syntax to access the field.'
+                f'Field {item} is shadowed by another method or attribute. Use ["{item}"] syntax to access the field.'
             )
             self._warn_on_shadowed_name.remove(item)
         return super().__getattribute__(item)
@@ -2043,7 +2042,7 @@ class StructExpression(Mapping[Union[str, int], Expression], Expression):
         for a in fields:
             if a not in self._fields:
                 raise KeyError(
-                    "Struct has no field '{}'\n" "    Fields: [ {} ]".format(
+                    "Struct has no field '{}'\n    Fields: [ {} ]".format(
                         a, ', '.join("'{}'".format(x) for x in self._fields)
                     )
                 )
@@ -2103,7 +2102,7 @@ class StructExpression(Mapping[Union[str, int], Expression], Expression):
             if old not in old_fields:
                 raise ValueError(f'{old} is not a field of this struct: {self.dtype}.')
             if new in old_fields and new not in mapping:
-                raise ValueError(f'{old} is renamed to {new} but {new} is already in the ' f'struct: {self.dtype}.')
+                raise ValueError(f'{old} is renamed to {new} but {new} is already in the struct: {self.dtype}.')
             if new in new_to_old:
                 raise ValueError(f'{new} is the new name of both {old} and {new_to_old[new]}.')
             new_to_old[new] = old
@@ -2137,7 +2136,7 @@ class StructExpression(Mapping[Union[str, int], Expression], Expression):
         for a in fields:
             if a not in self._fields:
                 raise KeyError(
-                    "Struct has no field '{}'\n" "    Fields: [ {} ]".format(
+                    "Struct has no field '{}'\n    Fields: [ {} ]".format(
                         a, ', '.join("'{}'".format(x) for x in self._fields)
                     )
                 )
@@ -4200,8 +4199,7 @@ class NDArrayExpression(Expression):
         else:
             if len(axes) != self.ndim:
                 raise ValueError(
-                    f'Must specify a complete permutation of the dimensions. '
-                    f'Expected {self.ndim} axes, got {len(axes)}'
+                    f'Must specify a complete permutation of the dimensions. Expected {self.ndim} axes, got {len(axes)}'
                 )
 
             if len(set(axes)) != len(axes):
@@ -4268,7 +4266,7 @@ class NDArrayExpression(Expression):
 
         if len(formatted_item) > self.ndim:
             raise IndexError(
-                f'too many indices for array: array is ' f'{self.ndim}-dimensional, but {len(item)} were indexed'
+                f'too many indices for array: array is {self.ndim}-dimensional, but {len(item)} were indexed'
             )
         if len(formatted_item) < self.ndim:
             formatted_item += [slice(None, None, None)] * (self.ndim - len(formatted_item))
@@ -4832,6 +4830,37 @@ class StreamExpression(Expression):
     @typecheck_method(f=func_spec(1, expr_any))
     def aggregate(self, f):
         return hl.agg._aggregate_local_array(self, f)
+
+    @typecheck_method(f=func_spec(1, expr_any))
+    def _aggregate_scan(self, f):
+        """Uses the scan library to compute a scan from an array.
+
+        This method is useful for accessing functionality that exists in the scan library
+        but not the basic expression library, for instance, :func:`.call_stats`.
+
+        Parameters
+        ----------
+        f
+            Scan function.
+
+        Returns
+        -------
+        :class:`.StreamExpression`
+        """
+        elt = self.dtype.element_type
+        var = Env.get_uid(base='scan')
+        ref = construct_expr(ir.Ref(var, elt), elt, self._indices)
+        scan_expr = f(ref)
+        if scan_expr._aggregations:
+            raise ExpressionException('local stream scan cannot aggregate')
+
+        indices, _ = unify_all(self, scan_expr)
+        return construct_expr(
+            ir.StreamAggScan(self._ir, var, scan_expr._ir),
+            tstream(scan_expr.dtype),
+            Indices(indices.source, indices.axes),
+            self._aggregations,
+        )
 
     def to_array(self):
         return construct_expr(ir.toArray(self._ir), tarray(self.dtype.element_type), self._indices, self._aggregations)

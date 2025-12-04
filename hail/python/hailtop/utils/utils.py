@@ -640,7 +640,7 @@ def is_transient_error(e: BaseException) -> bool:
     ):
         return True
     if isinstance(e, hailtop.httpx.ClientResponseError) and (
-        e.status in RETRYABLE_HTTP_STATUS_CODES or e.status == 403 and 'rateLimitExceeded' in e.body
+        e.status in RETRYABLE_HTTP_STATUS_CODES or (e.status == 403 and 'rateLimitExceeded' in e.body)
     ):
         return True
     if isinstance(e, aiohttp.ServerTimeoutError):
@@ -656,7 +656,7 @@ def is_transient_error(e: BaseException) -> bool:
     # https://github.com/aio-libs/aiohttp/blob/v3.7.4/aiohttp/client_proto.py#L85
     if isinstance(e, aiohttp.ClientPayloadError) and "Response payload is not completed" in e.args[0]:
         return True
-    if isinstance(e, aiohttp.ClientOSError) and 'sslv3 alert bad record mac' in e.strerror:
+    if isinstance(e, aiohttp.ClientOSError) and e.strerror and 'sslv3 alert bad record mac' in e.strerror:
         # aiohttp.client_exceptions.ClientOSError: [Errno 1] [SSL: SSLV3_ALERT_BAD_RECORD_MAC] sslv3 alert bad record mac (_ssl.c:2548)
         #
         # This appears to be a symptom of Google rate-limiting as of 2023-10-15
@@ -705,7 +705,7 @@ def is_rate_limit_error(e: BaseException) -> bool:
     if isinstance(e, aiohttp.ClientResponseError) and e.status == 429:
         return True
     if isinstance(e, hailtop.httpx.ClientResponseError) and (
-        e.status == 429 or e.status == 403 and 'rateLimitExceeded' in e.body
+        e.status == 429 or (e.status == 403 and 'rateLimitExceeded' in e.body)
     ):
         return True
     return False
@@ -868,7 +868,7 @@ def retry_response_returning_functions(fun, *args, **kwargs):
     while response.status_code in RETRYABLE_HTTP_STATUS_CODES:
         tries += 1
         if tries % 10 == 0:
-            log.warning(f'encountered {tries} bad status codes, most recent ' f'one was {response.status_code}')
+            log.warning(f'encountered {tries} bad status codes, most recent one was {response.status_code}')
         response = sync_retry_transient_errors(fun, *args, **kwargs)
         sync_sleep_before_try(tries)
     return response

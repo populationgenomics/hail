@@ -14,7 +14,7 @@ import mill.util.Jvm
 
 object Settings {
   val hailMajorMinorVersion = "0.2"
-  val hailPatchVersion = "134"
+  val hailPatchVersion = "135"
 }
 
 object Deps {
@@ -121,6 +121,7 @@ trait HailModule extends ScalaModule with ScalafmtModule with ScalafixModule { o
       "-Xlint",
       "-Ywarn-unused:_,-explicits,-implicits",
       "-Wconf:msg=legacy-binding:s",
+      "-feature",
     ) ++ (
       if (build.env.debugMode()) Seq()
       else Seq(
@@ -140,10 +141,12 @@ trait HailModule extends ScalaModule with ScalafmtModule with ScalafixModule { o
 
     override def ivyDeps: T[Agg[Dep]] =
       super.ivyDeps() ++ outer.compileIvyDeps() ++ Agg(
-        ivy"org.scalatest::scalatest:3.2.18",
-        ivy"org.scalatest::scalatest-shouldmatchers:3.2.18",
-        ivy"org.scalatestplus::testng-7-9:3.2.18.0",
-        ivy"org.testng:testng:7.9.0",
+        ivy"org.scalacheck::scalacheck:1.18.1",
+        ivy"org.scalatest::scalatest:3.2.19",
+        ivy"org.scalatest::scalatest-shouldmatchers:3.2.19",
+        ivy"org.scalatestplus::scalacheck-1-18:3.2.19.0",
+        ivy"org.scalatestplus::testng-7-10:3.2.19.0",
+        ivy"org.testng:testng:7.10.0",
         ivy"org.mockito::mockito-scala:1.17.31",
       )
 
@@ -175,6 +178,10 @@ object hail extends HailModule { outer =>
     PathRef(millOuterCtx.millSourcePath / "prebuilt" / "lib"),
     buildInfo(),
   )
+
+  override def generatedSources: T[Seq[PathRef]] = Task {
+    Seq(`ir-gen`.generate())
+  }
 
   override def unmanagedClasspath: T[Agg[PathRef]] =
     Agg(shadedazure.assembly())
@@ -246,6 +253,21 @@ object hail extends HailModule { outer =>
       runClasspath().map(_.path).mkString(":"),
     )
     PathRef(T.dest)
+  }
+
+  object `ir-gen` extends HailModule with TaskModule {
+    override def defaultCommandName(): String = "generate"
+
+    override def ivyDeps = Agg(
+      ivy"com.lihaoyi::mainargs:0.6.2",
+      ivy"com.lihaoyi::os-lib:0.10.7",
+      ivy"com.lihaoyi::sourcecode:0.4.2",
+    )
+
+    def generate: T[PathRef] = Task {
+      runner().run(Args("--path", T.dest).value)
+      PathRef(T.dest)
+    }
   }
 
   object memory extends JavaModule { // with CrossValue {

@@ -44,6 +44,7 @@ from gear import (
 )
 from gear.auth import get_session_id, impersonate_user
 from gear.clients import get_cloud_async_fs
+from gear.cloud_config import get_azure_config, get_gcp_config
 from gear.database import CallError
 from gear.profiling import install_profiler_if_requested
 from gear.time_limited_max_size_cache import TimeLimitedMaxSizeCache
@@ -266,6 +267,13 @@ async def rest_cloud(_) -> web.Response:
 @auth.authenticated_users_only()
 async def rest_get_supported_regions(request: web.Request, _) -> web.Response:
     return json_response(list(request.app['regions'].keys()))
+
+
+@routes.get('/api/v1alpha/default_region')
+@api_security_headers
+@auth.authenticated_users_only()
+async def rest_get_default_region(request: web.Request, _) -> web.Response:
+    return web.Response(text=request.app['default_region'])
 
 
 async def _handle_ui_error(
@@ -1640,7 +1648,7 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
 
         if spec.get('mount_tokens', False):
             # Clients stopped using `mount_tokens` prior to the introduction of terra deployments
-            assert not os.environ.get('HAIL_TERRA', False)
+            assert not os.environ.get('HAIL_TERRA')
             secrets.append({
                 'namespace': DEFAULT_NAMESPACE,
                 'name': userdata['tokens_secret_name'],
@@ -3787,6 +3795,18 @@ async def openapi(request):
     return await render_template('batch', request, None, 'openapi.yaml', page_context)
 
 
+@routes.get('/tos')
+@web_security_headers
+async def tos(request):
+    return await render_template('batch', request, None, 'tos.html', {})
+
+
+@routes.get('/privacy')
+@web_security_headers
+async def privacy(request):
+    return await render_template('batch', request, None, 'privacy.html', {})
+
+
 async def cancel_batch_loop_body(app):
     client_session = app[CommonAiohttpAppKeys.CLIENT_SESSION]
     await retry_transient_errors(
@@ -3862,6 +3882,12 @@ SELECT instance_id, n_tokens, frozen FROM globals;
 
     app['hail_credentials'] = hail_credentials()
     exit_stack.push_async_callback(app['hail_credentials'].close)
+
+    if CLOUD == 'gcp':
+        app['default_region'] = get_gcp_config().region
+    else:
+        assert CLOUD == 'azure'
+        app['default_region'] = get_azure_config().region
 
     app['frozen'] = row['frozen']
 

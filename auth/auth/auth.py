@@ -33,7 +33,7 @@ from gear import (
 from gear.auth import AIOHTTPHandler, get_session_id
 from gear.cloud_config import get_global_config
 from gear.profiling import install_profiler_if_requested
-from hailtop import httpx, uvloopx
+from hailtop import __version__, httpx, uvloopx
 from hailtop.auth import AzureFlow, Flow, GoogleFlow, IdentityProvider
 from hailtop.config import get_deploy_config
 from hailtop.hail_logging import AccessLogger
@@ -45,9 +45,10 @@ from web_common import (
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
+    web_security_headers_swagger,
 )
 
-from .auth_utils import validate_credentials_secret_name_input
+from .auth_utils import is_valid_username, validate_credentials_secret_name_input
 from .exceptions import (
     AuthUserError,
     DuplicateLoginID,
@@ -129,7 +130,7 @@ async def check_valid_new_user(tx: Transaction, username, login_id, is_developer
         raise MultipleUserTypes(username)
     if not is_service_account and not login_id:
         raise EmptyLoginID(username)
-    if not username or not all(c for c in username if c.isalnum()):
+    if not is_valid_username(username):
         raise InvalidUsername(username)
 
     existing_users = await users_with_username_or_login_id(tx, username, login_id)
@@ -219,6 +220,20 @@ def validate_next_page_url(next_page):
 @api_security_headers
 async def get_healthcheck(_) -> web.Response:
     return web.Response()
+
+
+@routes.get('/swagger')
+@web_security_headers_swagger
+async def swagger(request):
+    page_context = {'service': 'auth', 'base_path': deploy_config.base_path('auth')}
+    return await render_template('auth', request, None, 'swagger.html', page_context)
+
+
+@routes.get('/openapi.yaml')
+@web_security_headers
+async def openapi(request):
+    page_context = {'base_path': deploy_config.base_path('auth'), 'spec_version': __version__}
+    return await render_template('auth', request, None, 'openapi.yaml', page_context)
 
 
 @routes.get('')
@@ -801,6 +816,9 @@ async def get_userinfo(request: web.Request, auth_token: str) -> UserData:
 
     userdata = await get_userinfo_from_hail_session_id(request, auth_token)
     if userdata:
+        db = request.app[AppKeys.DB]
+        await db.just_execute("UPDATE sessions SET created = NOW() WHERE session_id = %s", (auth_token,))
+
         return userdata
 
     hailctl_oauth_client = request.app[AppKeys.HAILCTL_CLIENT_CONFIG]

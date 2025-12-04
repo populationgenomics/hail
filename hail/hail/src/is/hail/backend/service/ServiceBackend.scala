@@ -136,23 +136,12 @@ class ServiceBackend(
   private[this] val MAX_AVAILABLE_GCS_CONNECTIONS = 1000
   private[this] val executor = Executors.newFixedThreadPool(MAX_AVAILABLE_GCS_CONNECTIONS)
 
-  override def shouldCacheQueryInfo: Boolean = false
-
   def defaultParallelism: Int = 4
 
-  def broadcast[T: ClassTag](_value: T): BroadcastValue[T] = {
-    using(new ObjectOutputStream(new ByteArrayOutputStream())) { os =>
-      try
-        os.writeObject(_value)
-      catch {
-        case e: Exception =>
-          fatal(_value.toString, e)
-      }
-    }
+  def broadcast[T: ClassTag](_value: T): BroadcastValue[T] =
     new BroadcastValue[T] with Serializable {
       def value: T = _value
     }
-  }
 
   private[this] def readString(in: DataInputStream): String = {
     val n = in.readInt()
@@ -432,7 +421,8 @@ class ServiceBackend(
         serviceBackendContext,
         new IrMetadata(),
         ImmutableMap.empty,
-        mutable.Map.empty,
+        ImmutableMap.empty,
+        ImmutableMap.empty,
         ImmutableMap.empty,
       )(f)
     }

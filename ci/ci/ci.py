@@ -31,7 +31,7 @@ from gear import (
     setup_aiohttp_session,
 )
 from gear.profiling import install_profiler_if_requested
-from hailtop import aiotools, httpx, uvloopx
+from hailtop import __version__, aiotools, httpx, uvloopx
 from hailtop.auth import hail_credentials
 from hailtop.batch_client.aioclient import Batch, BatchClient
 from hailtop.config import get_deploy_config
@@ -44,6 +44,7 @@ from web_common import (
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
+    web_security_headers_swagger,
 )
 
 from .constants import AUTHORIZED_USERS, TEAMS
@@ -217,7 +218,7 @@ async def get_pr(request: web.Request, userdata: UserData) -> web.Response:
 
     batch_client = request.app[AppKeys.BATCH_CLIENT]
     target_branch = wb.branch.short_str()
-    batches = batch_client.list_batches(f'test=1 ' f'pr={pr.number} ' f'target_branch={target_branch} ' f'user:ci')
+    batches = batch_client.list_batches(f'test=1 pr={pr.number} target_branch={target_branch} user:ci')
     batches = sorted([b async for b in batches], key=lambda b: b.id, reverse=True)
     page_context['history'] = [await b.last_known_status() for b in batches]
 
@@ -381,6 +382,22 @@ async def post_authorized_source_sha(request: web.Request, _) -> NoReturn:
 @web_security_headers
 async def healthcheck(_) -> web.Response:
     return web.Response(status=200)
+
+
+@routes.get('/swagger')
+@web_security_headers_swagger
+async def swagger(request):
+    """UI for exploring the API documentation."""
+    page_context = {'service': 'ci', 'base_path': deploy_config.base_path('ci')}
+    return await render_template('ci', request, None, 'swagger.html', page_context)
+
+
+@routes.get('/openapi.yaml')
+@web_security_headers
+async def openapi(request):
+    """OpenAPI specification for the CI service."""
+    page_context = {'base_path': deploy_config.base_path('ci'), 'spec_version': __version__}
+    return await render_template('ci', request, None, 'openapi.yaml', page_context)
 
 
 gh_router = gh_routing.Router()
@@ -852,9 +869,9 @@ ON active_namespaces.namespace = deployed_services.namespace
 
     assert DEFAULT_NAMESPACE in services_per_namespace
     default_services = services_per_namespace.pop(DEFAULT_NAMESPACE)
-    assert set(['batch', 'auth', 'batch-driver', 'ci']).issubset(
-        set(s.name for s in default_services)
-    ), default_services
+    assert set(['batch', 'auth', 'batch-driver', 'ci']).issubset(set(s.name for s in default_services)), (
+        default_services
+    )
 
     cds_config = create_cds_response(default_services, services_per_namespace, proxy)
     rds_config = create_rds_response(default_services, services_per_namespace, proxy, domain=DOMAIN)

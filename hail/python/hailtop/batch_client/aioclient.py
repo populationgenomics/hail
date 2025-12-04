@@ -507,10 +507,12 @@ class JobGroup:
         else:
             description += url
 
-        with progress.with_task(description, total=status['n_jobs'], disable=disable_progress_bar) as progress_task:
+        with progress.with_task(
+            description, total=status['n_jobs'], disable=disable_progress_bar, cost=status['cost']
+        ) as progress_task:
             while True:
                 status = await self.status()
-                progress_task.update(None, total=status['n_jobs'], completed=status['n_completed'])
+                progress_task.update(None, total=status['n_jobs'], completed=status['n_completed'], cost=status['cost'])
                 if status['complete']:
                     return status
                 j = random.randrange(math.floor(1.1**i))
@@ -701,12 +703,15 @@ class Batch:
         else:
             description += url
         with progress.with_task(
-            description, total=status['n_jobs'] - starting_job + 1, disable=disable_progress_bar
+            description, total=status['n_jobs'] - starting_job + 1, disable=disable_progress_bar, cost=status['cost']
         ) as progress_task:
             while True:
                 status = await self.status()
                 progress_task.update(
-                    None, total=status['n_jobs'] - starting_job + 1, completed=status['n_completed'] - starting_job + 1
+                    None,
+                    total=status['n_jobs'] - starting_job + 1,
+                    completed=status['n_completed'] - starting_job + 1,
+                    cost=status['cost'],
                 )
                 if status['complete']:
                     return status
@@ -1037,7 +1042,7 @@ class Batch:
             n_bytes = spec.n_bytes
             assert n_bytes < max_bunch_bytesize, (
                 'every spec must be less than max_bunch_bytesize,'
-                f' { max_bunch_bytesize }B, but {spec.spec_bytes.decode()} is larger'
+                f' {max_bunch_bytesize}B, but {spec.spec_bytes.decode()} is larger'
             )
             if bunch_n_bytes + n_bytes < max_bunch_bytesize and len(bunch) < max_bunch_size:
                 bunch.append(spec)
@@ -1432,7 +1437,11 @@ class BatchClient:
         resp = await self._get('/api/v1alpha/supported_regions')
         return await resp.json()
 
-    async def cloud(self):
+    async def default_region(self) -> str:
+        resp = await self._get('/api/v1alpha/default_region')
+        return await resp.text()
+
+    async def cloud(self) -> str:
         resp = await self._get('/api/v1alpha/cloud')
         return await resp.text()
 
