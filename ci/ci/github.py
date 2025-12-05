@@ -1001,8 +1001,9 @@ mkdir -p {shq(repo_dir)}
                 test_services = BuildConfiguration(self, f.read(), scope='deploy').deployed_services()
 
             services.extend(test_services)
-            assert namespace is not None
-            await add_deployed_services(db, namespace, services, None)
+            if services:
+                assert namespace is not None
+                await add_deployed_services(db, namespace, services, None)
 
             log.info(f'creating deploy batch for {self.branch.short_str()}')
             deploy_batch = batch_client.create_batch(
