@@ -169,7 +169,7 @@ class BuildConfiguration:
         # build.yaml allows for multiple namespaces, but
         # in actuality we only ever use 1 and make many assumptions
         # around there being a 1:1 correspondence between builds and namespaces
-        namespaces = {s.namespace for s in self.steps if isinstance(s, DeployStep)}
+        namespaces = {s.namespace for s in self.steps if isinstance(s, DeployStep) or (isinstance(s, BuildImage2Step) and s.namespace)}
         assert len(namespaces) <= 1
         return namespaces.pop() if len(namespaces) == 1 else None
 
