@@ -53,6 +53,8 @@ steps:
       - name: batch-worker-ssh-public-key
         clouds:
           - azure
+    dependsOn:
+      - ci_utils_image
   - kind: runImage
     name: copy_third_party_images
     image: quay.io/skopeo/stable:v1.13.2
