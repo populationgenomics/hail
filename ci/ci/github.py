@@ -998,14 +998,9 @@ mkdir -p {shq(repo_dir)}
                 namespace = config.namespace()
                 services = config.deployed_services()
             with open(f'{repo_dir}/ci/test/resources/build.yaml', 'r', encoding='utf-8') as f:
-                test_config = BuildConfiguration(self, f.read(), scope='deploy')
-                test_namespace = test_config.namespace()
-                test_services = test_config.deployed_services()
+                test_services = BuildConfiguration(self, f.read(), scope='deploy').deployed_services()
 
-            if namespace is None:
-                namespace = test_namespace
             services.extend(test_services)
-
             assert namespace is not None
             await add_deployed_services(db, namespace, services, None)
 
