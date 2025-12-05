@@ -253,7 +253,6 @@ steps:
       - create_ssl_config_hail_root
   - kind: buildImage2
     name: ci_utils_image
-    namespaceName: default
     dockerFile: /io/repo/ci/Dockerfile.ci-utils
     contextPath: /io/repo
     publishAs: ci-utils
