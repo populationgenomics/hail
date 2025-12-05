@@ -53,8 +53,6 @@ steps:
       - name: batch-worker-ssh-public-key
         clouds:
           - azure
-    dependsOn:
-      - ci_utils_image
   - kind: runImage
     name: copy_third_party_images
     image: quay.io/skopeo/stable:v1.13.2
@@ -255,6 +253,7 @@ steps:
       - create_ssl_config_hail_root
   - kind: buildImage2
     name: ci_utils_image
+    namespaceName: default
     dockerFile: /io/repo/ci/Dockerfile.ci-utils
     contextPath: /io/repo
     publishAs: ci-utils
