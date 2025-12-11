@@ -143,6 +143,12 @@ resource "google_container_node_pool" "vdc_preemptible_pool" {
     spot = true
     machine_type = "n1-standard-4"
 
+    kubelet_config {
+      cpu_manager_policy = ""
+      cpu_cfs_quota = false
+      pod_pids_limit = 0
+    }
+
     labels = {
       "preemptible" = "true"
     }
@@ -179,6 +185,12 @@ resource "google_container_node_pool" "vdc_nonpreemptible_pool" {
   node_config {
     preemptible = false
     machine_type = "n1-standard-4"
+
+    kubelet_config {
+      cpu_manager_policy = ""
+      cpu_cfs_quota = false
+      pod_pids_limit = 0
+    }
 
     labels = {
       preemptible = "false"
