@@ -15,6 +15,7 @@ import is.hail.utils._
 import is.hail.variant.{Call0, Call1, Call2}
 
 import org.apache.spark.sql.Row
+import org.scalatest.Inspectors.forAll
 import org.testng.annotations.Test
 
 class Aggregators2Suite extends HailSuite {
@@ -481,7 +482,7 @@ class Aggregators2Suite extends HailSuite {
           invoke("str", TString, GetField(Ref(TableIR.rowName, tr.typ.rowType), "idx")),
           I32(9999) - GetField(Ref(TableIR.rowName, tr.typ.rowType), "idx"),
         ),
-        AggSignature(TakeBy(), FastSeq(TInt32), FastSeq(TString, TInt32)),
+        TakeBy(),
       ),
     )
 
@@ -542,7 +543,7 @@ class Aggregators2Suite extends HailSuite {
       ((x: IR) => GetField(x, f.name), (r: Row) => if (r == null) null else r.get(f.index), f.typ)
     }.filter(_._3 == TString)
 
-    transformations.foreach { case (irF, rowF, subT) =>
+    forAll(transformations) { case (irF, rowF, subT) =>
       val aggSig = PhysicalAggSig(Take(), TakeStateSig(VirtualTypeWithReq(PType.canonical(subT))))
       val seqOpArgs =
         Array.tabulate(rows.length)(i => FastSeq[IR](irF(ArrayRef(a, i))))
@@ -643,7 +644,7 @@ class Aggregators2Suite extends HailSuite {
   }
 
   @Test def testCollectBig(): Unit = {
-    val seqOpArgs = Array.tabulate(100)(i => FastSeq(I64(i)))
+    val seqOpArgs = Array.tabulate(100)(i => FastSeq(I64(i.toLong)))
     assertAggEquals(
       collectAggSig(TInt64),
       FastSeq(),
@@ -989,7 +990,7 @@ class Aggregators2Suite extends HailSuite {
       TStruct.empty,
     )
     val ir = TableCollect(MatrixColsTable(MatrixMapCols(
-      MatrixRead(t, false, false, MatrixRangeReader(10, 10, None)),
+      MatrixRead(t, false, false, MatrixRangeReader(ctx, 10, 10, None)),
       InsertFields(
         Ref(MatrixIR.colName, t.colType),
         FastSeq((
@@ -1000,7 +1001,7 @@ class Aggregators2Suite extends HailSuite {
               bar.toL + bar.toL + ApplyAggOp(
                 FastSeq(),
                 FastSeq(GetField(Ref(MatrixIR.rowName, t.rowType), "row_idx").toL),
-                AggSignature(Sum(), FastSeq(), FastSeq(TInt64)),
+                Sum(),
               ),
               false,
             )

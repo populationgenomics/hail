@@ -830,7 +830,7 @@ class BlockMatrix:
     def _check_indices(indices, size):
         if len(indices) == 0:
             raise ValueError('index list must be non-empty')
-        if not all(x < y for x, y in zip(indices, indices[1:])):
+        if not all(x < y for x, y in itertools.pairwise(indices)):
             raise ValueError('index list must be strictly increasing')
         if indices[0] < 0:
             raise ValueError(f'index list values must be in range [0, {size}), found {indices[0]}')
@@ -1303,14 +1303,7 @@ class BlockMatrix:
         if self.n_rows == 1 and self.n_cols == 1:
             return self
 
-        if self.n_rows == 1:
-            index_expr = [0]
-        elif self.n_cols == 1:
-            index_expr = [1]
-        else:
-            index_expr = [1, 0]
-
-        return BlockMatrix(BlockMatrixBroadcast(self._bmir, index_expr, [self.n_cols, self.n_rows], self.block_size))
+        return BlockMatrix(BlockMatrixBroadcast(self._bmir, [1, 0], [self.n_cols, self.n_rows], self.block_size))
 
     def densify(self):
         """Restore all dropped blocks as explicit blocks of zeros.
@@ -1583,7 +1576,7 @@ class BlockMatrix:
         if splits != 1:
             inner_brange_size = math.ceil(self._n_block_cols / splits)
             split_points = [*list(range(0, self._n_block_cols, inner_brange_size)), self._n_block_cols]
-            inner_ranges = list(zip(split_points[:-1], split_points[1:]))
+            inner_ranges = list(itertools.pairwise(split_points))
             blocks_to_multiply = [
                 (
                     self._select_blocks((0, self._n_block_rows), (start, stop)),
@@ -1823,6 +1816,9 @@ class BlockMatrix:
             )
 
         self.write(path, overwrite=True, force_row_major=True)
+
+        # target 16k rows per partition for a sizeable block matrix with default block size
+        n_partitions = max(1, n_partitions or self._n_block_rows // 4)
         reader = TableFromBlockMatrixNativeReader(path, n_partitions, maximum_cache_memory_in_bytes)
         return Table(TableRead(reader))
 

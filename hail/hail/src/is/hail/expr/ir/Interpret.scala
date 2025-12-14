@@ -4,6 +4,7 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.backend.spark.SparkTaskContext
+import is.hail.expr.ir.analyses.PartitionCounts
 import is.hail.expr.ir.compile.{Compile, CompileWithAggregators}
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.{ExecuteRelational, LoweringPipeline}
@@ -15,57 +16,56 @@ import is.hail.types.physical.stypes.{PTypeReferenceSingleCodeType, SingleCodeTy
 import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 
 import org.apache.spark.sql.Row
 
-object Interpret {
+object Interpret extends Logging {
   type Agg = (IndexedSeq[Row], TStruct)
 
-  def apply(tir: TableIR, ctx: ExecuteContext): TableValue =
-    apply(tir, ctx, optimize = true)
-
-  def apply(tir: TableIR, ctx: ExecuteContext, optimize: Boolean): TableValue = {
+  def apply(tir: TableIR, ctx: ExecuteContext): TableValue = {
     val lowered =
-      LoweringPipeline.legacyRelationalLowerer(optimize)(ctx, tir).asInstanceOf[TableIR].noSharing(
+      LoweringPipeline.legacyRelationalLowerer(ctx, tir).asInstanceOf[TableIR].noSharing(
         ctx
       )
     ExecuteRelational(ctx, lowered).asTableValue(ctx)
   }
 
-  def apply(mir: MatrixIR, ctx: ExecuteContext, optimize: Boolean): TableValue = {
-    val lowered = LoweringPipeline.legacyRelationalLowerer(optimize)(ctx, mir).asInstanceOf[TableIR]
+  def apply(mir: MatrixIR, ctx: ExecuteContext): TableValue = {
+    val lowered = LoweringPipeline.legacyRelationalLowerer(ctx, mir).asInstanceOf[TableIR]
     ExecuteRelational(ctx, lowered).asTableValue(ctx)
   }
 
-  def apply(bmir: BlockMatrixIR, ctx: ExecuteContext, optimize: Boolean): BlockMatrix = {
+  def apply(bmir: BlockMatrixIR, ctx: ExecuteContext): BlockMatrix = {
     val lowered =
-      LoweringPipeline.legacyRelationalLowerer(optimize)(ctx, bmir).asInstanceOf[BlockMatrixIR]
+      LoweringPipeline.legacyRelationalLowerer(ctx, bmir).asInstanceOf[BlockMatrixIR]
     lowered.execute(ctx)
   }
 
   def apply[T](ctx: ExecuteContext, ir: IR): T =
-    apply(ctx, ir, Env.empty[(Any, Type)], FastSeq[(Any, Type)]()).asInstanceOf[T]
+    apply[T](ctx, ir, Env.empty[(Any, Type)], FastSeq[(Any, Type)]())
 
   def apply[T](
     ctx: ExecuteContext,
     ir0: IR,
     env: Env[(Any, Type)],
     args: IndexedSeq[(Any, Type)],
-    optimize: Boolean = true,
   ): T = {
     val bindings = env.m.view.map { case (k, (value, t)) =>
       k -> Literal.coerce(t, value)
     }.toFastSeq
     val lowered =
-      LoweringPipeline.relationalLowerer(optimize).apply(ctx, Let(bindings, ir0)).asInstanceOf[IR]
+      LoweringPipeline.relationalLowerer(ctx, Let(bindings, ir0)).asInstanceOf[IR]
     val result = run(ctx, lowered, Env.empty[Any], args, Memo.empty).asInstanceOf[T]
     result
   }
 
   def alreadyLowered(ctx: ExecuteContext, ir: IR): Any =
-    run(ctx, ir, Env.empty, FastSeq(), Memo.empty)
+    ctx.local(flags = ctx.flags - Optimize.Flags.Optimize) { ctx =>
+      run(ctx, ir, Env.empty, FastSeq(), Memo.empty)
+    }
 
   private def run(
     ctx: ExecuteContext,
@@ -201,7 +201,7 @@ object Interpret {
                 case Subtract() => ll - rr
                 case Multiply() => ll * rr
                 case FloatingPointDivide() => ll / rr
-                case RoundToNegInfDivide() => math.floor(ll / rr).toFloat
+                case RoundToNegInfDivide() => math.floor(ll.toDouble / rr).toFloat
               }
             case (TFloat64, TFloat64) =>
               val ll = lValue.asInstanceOf[Double]
@@ -246,19 +246,20 @@ object Interpret {
       case ApplyComparisonOp(op, l, r) =>
         val lValue = interpret(l, env, args)
         val rValue = interpret(r, env, args)
+        val t = l.typ
         if (op.strict && (lValue == null || rValue == null))
           null
         else
           op match {
-            case EQ(t, _) => t.ordering(ctx.stateManager).equiv(lValue, rValue)
-            case EQWithNA(t, _) => t.ordering(ctx.stateManager).equiv(lValue, rValue)
-            case NEQ(t, _) => !t.ordering(ctx.stateManager).equiv(lValue, rValue)
-            case NEQWithNA(t, _) => !t.ordering(ctx.stateManager).equiv(lValue, rValue)
-            case LT(t, _) => t.ordering(ctx.stateManager).lt(lValue, rValue)
-            case GT(t, _) => t.ordering(ctx.stateManager).gt(lValue, rValue)
-            case LTEQ(t, _) => t.ordering(ctx.stateManager).lteq(lValue, rValue)
-            case GTEQ(t, _) => t.ordering(ctx.stateManager).gteq(lValue, rValue)
-            case Compare(t, _) => t.ordering(ctx.stateManager).compare(lValue, rValue)
+            case EQ => t.ordering(ctx.stateManager).equiv(lValue, rValue)
+            case EQWithNA => t.ordering(ctx.stateManager).equiv(lValue, rValue)
+            case NEQ => !t.ordering(ctx.stateManager).equiv(lValue, rValue)
+            case NEQWithNA => !t.ordering(ctx.stateManager).equiv(lValue, rValue)
+            case LT => t.ordering(ctx.stateManager).lt(lValue, rValue)
+            case GT => t.ordering(ctx.stateManager).gt(lValue, rValue)
+            case LTEQ => t.ordering(ctx.stateManager).lteq(lValue, rValue)
+            case GTEQ => t.ordering(ctx.stateManager).gteq(lValue, rValue)
+            case Compare => t.ordering(ctx.stateManager).compare(lValue, rValue)
           }
 
       case MakeArray(elements, _) => elements.map(interpret(_, env, args)).toFastSeq
@@ -466,8 +467,8 @@ object Interpret {
           if (seq.isEmpty)
             FastSeq[IndexedSeq[Row]]()
           else {
-            val outer = new BoxedArrayBuilder[IndexedSeq[Row]]()
-            val inner = new BoxedArrayBuilder[Row]()
+            val outer = ArraySeq.newBuilder[IndexedSeq[Row]]
+            val inner = ArraySeq.newBuilder[Row]
             val (kType, getKey) = structType.select(key)
             val keyOrd = TBaseStruct.getJoinOrdering(ctx.stateManager, kType.types, missingEqual)
             var curKey: Row = getKey(seq.head)
@@ -552,14 +553,14 @@ object Interpret {
 
           for (i <- 0 until k) advance(i)
 
-          val builder = new BoxedArrayBuilder[Row]()
+          val builder = ArraySeq.newBuilder[Row]
           while (tournament(0) != k) {
             val i = tournament(0)
             val elt = streams(i)(heads(i))
             advance(i)
             builder += elt
           }
-          builder.result().toFastSeq
+          builder.result()
         }
       case StreamZipJoin(as, key, curKeyName, curValsName, joinF) =>
         val streams = as.map(interpret(_, env, args).asInstanceOf[IndexedSeq[Row]])
@@ -828,7 +829,7 @@ object Interpret {
         }
       case ConsoleLog(message, result) =>
         val message_ = interpret(message).asInstanceOf[String]
-        info(message_)
+        logger.info(message_)
         interpret(result)
       case ir @ ApplyIR(_, _, _, _, _) =>
         interpret(ir.explicitNode, env, args)
@@ -865,17 +866,17 @@ object Interpret {
               val in = Ref(freshName(), argTuple.virtualType)
               val wrappedIR = ir.mapChildrenWithIndex { case (_, i) => GetTupleElement(in, i) }
 
-              val (rt, makeFunction) = Compile[AsmFunction2RegionLongLong](
-                ctx,
-                FastSeq((
-                  in.name,
-                  SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(argTuple)),
-                )),
-                FastSeq(classInfo[Region], LongInfo),
-                LongInfo,
-                MakeTuple.ordered(FastSeq(wrappedIR)),
-                optimize = false,
-              )
+              val (rt, makeFunction) =
+                Compile[AsmFunction2RegionLongLong](
+                  ctx,
+                  FastSeq((
+                    in.name,
+                    SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(argTuple)),
+                  )),
+                  FastSeq(classInfo[Region], LongInfo),
+                  LongInfo,
+                  MakeTuple.ordered(FastSeq(wrappedIR)),
+                )
               (rt.get, makeFunction(ctx.theHailClassLoader, ctx.fs, ctx.taskContext, region))
             },
           )
@@ -902,7 +903,7 @@ object Interpret {
           }
         }
       case TableCount(child) =>
-        child.partitionCounts
+        PartitionCounts(child)
           .map(_.sum)
           .getOrElse(ExecuteRelational(ctx, child).asTableValue(ctx).rvd.count())
       case TableGetGlobals(child) =>
@@ -936,9 +937,10 @@ object Interpret {
         val globalsBc = value.globals.broadcast(ctx.theHailClassLoader)
         val globalsOffset = value.globals.value.offset
 
-        val extracted = agg.Extract(query, Requiredness(x, ctx))
+        val extracted = agg.Extract(ctx, query, Requiredness(x, ctx)).independent
+        val aggSigs = extracted.sigs
 
-        val wrapped = if (extracted.aggs.isEmpty) {
+        val wrapped = if (aggSigs.isEmpty) {
           val (Some(PTypeReferenceSingleCodeType(rt: PTuple)), f) =
             Compile[AsmFunction2RegionLongLong](
               ctx,
@@ -948,7 +950,7 @@ object Interpret {
               )),
               FastSeq(classInfo[Region], LongInfo),
               LongInfo,
-              MakeTuple.ordered(FastSeq(extracted.postAggIR)),
+              MakeTuple.ordered(FastSeq(extracted.result)),
             )
 
           // TODO Is this right? where does wrapped run?
@@ -960,7 +962,7 @@ object Interpret {
 
           val (_, initOp) = CompileWithAggregators[AsmFunction2RegionLongUnit](
             ctx,
-            extracted.states,
+            aggSigs.states,
             FastSeq((
               TableIR.globalName,
               SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(value.globals.t)),
@@ -972,7 +974,7 @@ object Interpret {
 
           val (_, partitionOpSeq) = CompileWithAggregators[AsmFunction3RegionLongLongUnit](
             ctx,
-            extracted.states,
+            aggSigs.states,
             FastSeq(
               (
                 TableIR.globalName,
@@ -988,10 +990,10 @@ object Interpret {
             extracted.seqPerElt,
           )
 
-          val useTreeAggregate = extracted.shouldTreeAggregate
-          val isCommutative = extracted.isCommutative
-          log.info(s"Aggregate: useTreeAggregate=$useTreeAggregate")
-          log.info(s"Aggregate: commutative=$isCommutative")
+          val useTreeAggregate = aggSigs.shouldTreeAggregate
+          val isCommutative = aggSigs.isCommutative
+          logger.info(s"Aggregate: useTreeAggregate=$useTreeAggregate")
+          logger.info(s"Aggregate: commutative=$isCommutative")
 
           // A mutable reference to a byte array. If someone higher up the
           // call stack holds a WrappedByteArray, we can set the reference
@@ -1004,7 +1006,7 @@ object Interpret {
 
           // creates a region, giving ownership to the caller
           val read: (HailClassLoader, HailTaskContext) => (WrappedByteArray => RegionValue) = {
-            val deserialize = extracted.deserialize(ctx, spec)
+            val deserialize = aggSigs.deserialize(ctx, spec)
             (hcl: HailClassLoader, htc: HailTaskContext) => {
               (a: WrappedByteArray) =>
                 val r = Region(Region.SMALL, htc.getRegionPool())
@@ -1016,7 +1018,7 @@ object Interpret {
 
           // consumes a region, taking ownership from the caller
           val write: (HailClassLoader, HailTaskContext, RegionValue) => WrappedByteArray = {
-            val serialize = extracted.serialize(ctx, spec)
+            val serialize = aggSigs.serialize(ctx, spec)
             (hcl: HailClassLoader, htc: HailTaskContext, rv: RegionValue) => {
               val a = serialize(hcl, htc, rv.region, rv.offset)
               rv.region.invalidate()
@@ -1026,7 +1028,7 @@ object Interpret {
 
           // takes ownership of both inputs, returns ownership of result
           val combOpF: (HailClassLoader, HailTaskContext, RegionValue, RegionValue) => RegionValue =
-            extracted.combOpF(ctx, spec)
+            aggSigs.combOpF(ctx, spec)
 
           // returns ownership of a new region holding the partition aggregation
           // result
@@ -1066,17 +1068,14 @@ object Interpret {
           val (Some(PTypeReferenceSingleCodeType(rTyp: PTuple)), f) =
             CompileWithAggregators[AsmFunction2RegionLongLong](
               ctx,
-              extracted.states,
+              aggSigs.states,
               FastSeq((
                 TableIR.globalName,
                 SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(value.globals.t)),
               )),
               FastSeq(classInfo[Region], LongInfo),
               LongInfo,
-              Let(
-                FastSeq(extracted.resultRef.name -> extracted.results),
-                MakeTuple.ordered(FastSeq(extracted.postAggIR)),
-              ),
+              MakeTuple.ordered(FastSeq(extracted.result)),
             )
           assert(rTyp.types(0).virtualType == query.typ)
 
@@ -1100,7 +1099,6 @@ object Interpret {
             FastSeq(classInfo[Region]),
             LongInfo,
             MakeTuple.ordered(FastSeq(child)),
-            optimize = false,
           )
         ctx.scopedExecution { (hcl, fs, htc, r) =>
           SafeRow.read(rt, makeFunction(hcl, fs, htc, r)(r)).asInstanceOf[Row](0)

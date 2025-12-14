@@ -1,6 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.HailSuite
+import is.hail.backend.ExecuteContext
 import is.hail.expr.Nat
 import is.hail.expr.ir.PruneDeadFields.TypeState
 import is.hail.expr.ir.defs._
@@ -10,12 +11,14 @@ import is.hail.rvd.RVD
 import is.hail.types._
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.sql.Row
 import org.json4s.JValue
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.{DataProvider, Test}
 
 class PruneSuite extends HailSuite {
@@ -83,7 +86,7 @@ class PruneSuite extends HailSuite {
       PruneDeadFields.isSupertype(requestedType, irCopy.typ),
       s"not supertype:\n  super: ${requestedType.parsableString()}\n  sub:   ${irCopy.typ.parsableString()}",
     )
-    val ms = PruneDeadFields.ComputeMutableState(Memo.empty[BaseType], mutable.HashMap.empty)
+    val ms = new PruneDeadFields.ComputeMutableState
     irCopy match {
       case mir: MatrixIR =>
         PruneDeadFields.memoizeMatrixIR(ctx, mir, requestedType.asInstanceOf[MatrixType], ms)
@@ -93,12 +96,12 @@ class PruneSuite extends HailSuite {
         val envStates = env.mapValues(TypeState(_))
         PruneDeadFields.memoizeValueIR(ctx, ir, requestedType.asInstanceOf[Type], ms, envStates)
     }
-    irCopy.children.zipWithIndex.foreach { case (child, i) =>
-      if (expected(i) != null && expected(i) != ms.requestedType.lookup(child)) {
-        fatal(
-          s"For base IR $ir\n  Child $i with IR $child\n  Expected: ${expected(i)}\n  Actual:   ${ms.requestedType.lookup(child)}"
-        )
-      }
+
+    forAll(irCopy.children.zipWithIndex) { case (child, i) =>
+      assert(
+        expected(i) == null || expected(i) == ms.requestedType.lookup(child),
+        s"For base IR $ir\n  Child $i with IR $child\n  Expected: ${expected(i)}\n  Actual:   ${ms.requestedType.get(child)}",
+      )
     }
   }
 
@@ -110,7 +113,7 @@ class PruneSuite extends HailSuite {
   ): Unit = {
     TypeCheck(ctx, ir, env)
     val irCopy = ir.deepCopy()
-    val ms = PruneDeadFields.ComputeMutableState(Memo.empty[BaseType], mutable.HashMap.empty)
+    val ms = new PruneDeadFields.ComputeMutableState
     val rebuilt = (irCopy match {
       case mir: MatrixIR =>
         PruneDeadFields.memoizeMatrixIR(ctx, mir, requestedType.asInstanceOf[MatrixType], ms)
@@ -128,10 +131,10 @@ class PruneSuite extends HailSuite {
           ms.rebuildState,
         )
     }).asInstanceOf[T]
-    if (!f(ir, rebuilt))
-      fatal(
-        s"IR did not rebuild the same:\n  Base:    ${Pretty.sexprStyle(ir)}\n  Rebuilt: ${Pretty.sexprStyle(rebuilt)}"
-      )
+    assert(
+      f(ir, rebuilt),
+      s"IR did not rebuild the same:\n  Base:    ${Pretty.sexprStyle(ir)}\n  Rebuilt: ${Pretty.sexprStyle(rebuilt)}",
+    )
   }
 
   lazy val tab = TableLiteral(
@@ -210,11 +213,16 @@ class PruneSuite extends HailSuite {
 
       def fullMatrixTypeWithoutUIDs: MatrixType = mat.typ
 
-      def lower(requestedType: MatrixType, dropCols: Boolean, dropRows: Boolean): TableIR = ???
+      def lower(
+        ctx: ExecuteContext,
+        requestedType: MatrixType,
+        dropCols: Boolean,
+        dropRows: Boolean,
+      ): TableIR = ???
 
       def toJValue: JValue = ???
 
-      override def renderShort(): String = ???
+      override def renderShort(): String = "mr"
     },
   )
 
@@ -261,8 +269,8 @@ class PruneSuite extends HailSuite {
     MakeStruct(FastSeq("foo" -> matrixRefBoolean(mt, fields: _*)))
 
   def subsetTable(tt: TableType, fields: String*): TableType = {
-    val rowFields = new BoxedArrayBuilder[TStruct]()
-    val globalFields = new BoxedArrayBuilder[TStruct]()
+    val rowFields = ArraySeq.newBuilder[TStruct]
+    val globalFields = ArraySeq.newBuilder[TStruct]
     var noKey = false
     fields.foreach { f =>
       val split = f.split("\\.")
@@ -287,10 +295,10 @@ class PruneSuite extends HailSuite {
   }
 
   def subsetMatrixTable(mt: MatrixType, fields: String*): MatrixType = {
-    val rowFields = new BoxedArrayBuilder[TStruct]()
-    val colFields = new BoxedArrayBuilder[TStruct]()
-    val entryFields = new BoxedArrayBuilder[TStruct]()
-    val globalFields = new BoxedArrayBuilder[TStruct]()
+    val rowFields = ArraySeq.newBuilder[TStruct]
+    val colFields = ArraySeq.newBuilder[TStruct]
+    val entryFields = ArraySeq.newBuilder[TStruct]
+    val globalFields = ArraySeq.newBuilder[TStruct]
     var noRowKey = false
     var noColKey = false
     fields.foreach { f =>
@@ -1113,15 +1121,10 @@ class PruneSuite extends HailSuite {
   @Test def testAggFilterMemo(): Unit = {
     val t = TStruct("a" -> TInt32, "b" -> TInt64, "c" -> TString)
     val x = Ref(freshName(), t)
-    val select = SelectFields(x, IndexedSeq("c"))
     checkMemo(
       AggFilter(
-        ApplyComparisonOp(LT(TInt32, TInt32), GetField(x, "a"), I32(0)),
-        ApplyAggOp(
-          FastSeq(),
-          FastSeq(select),
-          AggSignature(Collect(), FastSeq(), FastSeq(select.typ)),
-        ),
+        ApplyComparisonOp(LT, GetField(x, "a"), I32(0)),
+        ApplyAggOp(Collect())(SelectFields(x, IndexedSeq("c"))),
         false,
       ),
       TArray(TStruct("c" -> TString)),
@@ -1134,14 +1137,7 @@ class PruneSuite extends HailSuite {
     val t = TStream(TStruct("a" -> TInt32, "b" -> TInt64))
     val x = Ref(freshName(), t)
     checkMemo(
-      aggExplodeIR(x) { foo =>
-        val select = SelectFields(foo, IndexedSeq("a"))
-        ApplyAggOp(
-          FastSeq(),
-          FastSeq(select),
-          AggSignature(Collect(), FastSeq(), FastSeq(select.typ)),
-        )
-      },
+      aggExplodeIR(x)(foo => ApplyAggOp(Collect())(SelectFields(foo, IndexedSeq("a")))),
       TArray(TStruct("a" -> TInt32)),
       Array(TStream(TStruct("a" -> TInt32)), TArray(TStruct("a" -> TInt32))),
       BindingEnv.empty.createAgg.bindAgg(x.name -> t),
@@ -1153,12 +1149,7 @@ class PruneSuite extends HailSuite {
     val x = Ref(freshName(), t)
     checkMemo(
       aggArrayPerElement(x) { (foo, _) =>
-        val select = SelectFields(foo, IndexedSeq("a"))
-        ApplyAggOp(
-          FastSeq(),
-          FastSeq(select),
-          AggSignature(Collect(), FastSeq(), FastSeq(select.typ)),
-        )
+        ApplyAggOp(Collect())(SelectFields(foo, IndexedSeq("a")))
       },
       TArray(TArray(TStruct("a" -> TInt32))),
       Array(TArray(TStruct("a" -> TInt32)), TArray(TStruct("a" -> TInt32))),
@@ -1868,8 +1859,8 @@ class PruneSuite extends HailSuite {
   }
 
   val ndArrayTS = MakeNDArray(
-    MakeArray(ArrayBuffer(NA(ts)), TArray(ts)),
-    MakeTuple(IndexedSeq((0, I64(1L)))),
+    MakeArray(ArraySeq(NA(ts)), TArray(ts)),
+    MakeTuple(ArraySeq((0, I64(1L)))),
     True(),
     ErrorIDs.NO_ERROR,
   )
@@ -1893,7 +1884,7 @@ class PruneSuite extends HailSuite {
       TNDArray(subsetTS("b"), Nat(1)),
       (_: BaseIR, r: BaseIR) => {
         val ir = r.asInstanceOf[NDArrayMap2]
-        ir.l.typ == TNDArray(TStruct(("b", TInt64)), Nat(1))
+        ir.l.typ == TNDArray(TStruct(("b", TInt64)), Nat(1)) &&
         ir.r.typ == TNDArray(TStruct.empty, Nat(1))
       },
     )
@@ -1902,7 +1893,7 @@ class PruneSuite extends HailSuite {
       TNDArray(subsetTS("b"), Nat(1)),
       (_: BaseIR, r: BaseIR) => {
         val ir = r.asInstanceOf[NDArrayMap2]
-        ir.l.typ == TNDArray(TStruct.empty, Nat(1))
+        ir.l.typ == TNDArray(TStruct.empty, Nat(1)) &&
         ir.r.typ == TNDArray(TStruct(("b", TInt64)), Nat(1))
       },
     )
@@ -2034,7 +2025,7 @@ class PruneSuite extends HailSuite {
       ifIR,
       BindingEnv.empty[Type].bindEval(freshName(), t),
       PruneDeadFields.RebuildMutableState(memo, mutable.HashMap.empty),
-    )
+    ): Unit
   }
 
   @DataProvider(name = "supertypePairs")
@@ -2054,7 +2045,7 @@ class PruneSuite extends HailSuite {
   )
 
   @Test(dataProvider = "supertypePairs")
-  def testIsSupertypeRequiredness(t1: Type, t2: Type) =
+  def testIsSupertypeRequiredness(t1: Type, t2: Type): Unit =
     assert(
       PruneDeadFields.isSupertype(t1, t2),
       s"""Failure, supertype relationship not met
@@ -2167,9 +2158,13 @@ class PruneSuite extends HailSuite {
 
     def checker(original: IR, rebuilt: IR): Boolean = {
       val r = rebuilt.asInstanceOf[StreamFold2]
-      r.typ == TStruct("c" -> TInt32)
-      r.a.typ == TStream(TStruct("a" -> TInt32))
       r.accum(0)._2.typ == r.typ
+      // FIXME: This test was intended to be as below, but a typo prevented it
+      // from working as intended. The intended test currently fails.
+      // Fix the implementation and restore the test.
+//      r.typ == TStruct("c" -> TInt32) &&
+//      r.a.typ == TStream(TStruct("a" -> TInt32)) &&
+//      r.accum(0)._2.typ == r.typ
     }
 
     checkRebuild(ir0, TStruct("c" -> TInt32), checker)

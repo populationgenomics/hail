@@ -2,6 +2,8 @@ import re
 import sys
 from typing import Literal, Optional, Union
 
+from py4j.java_gateway import JavaClass, JavaGateway
+
 from hailtop.config import ConfigVariable, configuration_of
 
 BackendType = Literal['batch', 'local', 'spark']
@@ -73,22 +75,6 @@ class Env:
         return Env._hc is not None
 
     @staticmethod
-    async def _async_hc() -> 'hail.context.HailContext':
-        if not Env._hc:
-            sys.stderr.write("Initializing Hail with default parameters...\n")
-            sys.stderr.flush()
-
-            backend_name = choose_backend()
-            if backend_name == 'service':
-                from hail.context import init_batch
-
-                await init_batch()
-            else:
-                return Env.hc()
-        assert Env._hc is not None
-        return Env._hc
-
-    @staticmethod
     def backend() -> 'hail.backend.Backend':
         return Env.hc()._backend
 
@@ -97,10 +83,8 @@ class Env:
         from hail.backend.py4j_backend import Py4JBackend
 
         b = Env.backend()
-        if isinstance(b, Py4JBackend):
-            return b
-        else:
-            raise NotImplementedError(f"{b.__class__.__name__} doesn't support {op}, only Py4JBackend")
+        assert isinstance(b, Py4JBackend), f"{b.__class__.__name__} doesn't support {op}, only Py4JBackend"
+        return b
 
     @staticmethod
     def spark_backend(op):
@@ -118,7 +102,7 @@ class Env:
 
     @staticmethod
     def spark_session():
-        return Env.backend()._spark_session
+        return Env.spark_backend('Env.spark_session')._spark
 
     _dummy_table = None
 
@@ -148,6 +132,13 @@ def scala_object(jpackage, name):
 
 def scala_package_object(jpackage):
     return scala_object(jpackage, 'package')
+
+
+def array_of(gateway: JavaGateway, clazz: JavaClass, *elems):
+    array = gateway.new_array(clazz, len(elems))
+    for i, elem in enumerate(elems):
+        array[i] = elem
+    return array
 
 
 def jindexed_seq(x):

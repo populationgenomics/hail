@@ -8,7 +8,7 @@ import org.json4s.{JArray, JString, JValue}
 import org.json4s.JsonAST.JLong
 import sourcecode.Enclosing
 
-object ExecutionTimer {
+object ExecutionTimer extends Logging {
 
   def time[T](f: ExecutionTimer => T)(implicit E: Enclosing): (T, Timings) = {
     val timer = new ExecutionTimer(E.value)
@@ -51,7 +51,7 @@ object ExecutionTimer {
 
       val selfPrefix = prefix :+ name
 
-      log.info(
+      logger.info(
         s"timing ${selfPrefix.mkString("/")} total ${formatTime(totalTime)} self ${formatTime(
             totalTime - childrenTime
           )} children ${formatTime(childrenTime)} %children ${formatDouble(childrenTime.toDouble * 100 / totalTime, 2)}%"
@@ -99,7 +99,7 @@ class ExecutionTimer(val rootName: String) {
     finally {
       val end = System.nanoTime()
       child.finish(end - start)
-      stack.pop()
+      stack.pop(): Unit
     }
   }
 
@@ -108,7 +108,7 @@ class ExecutionTimer(val rootName: String) {
       return
     val end = System.nanoTime()
     rootBlock.finish(end - start)
-    stack.pop()
+    stack.pop(): Unit
     assert(stack.size == 0)
     finished = true
   }

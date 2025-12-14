@@ -1,6 +1,5 @@
 package is.hail
 
-import scala.language.implicitConversions
 import scala.reflect.ClassTag
 
 import org.objectweb.asm.Opcodes._
@@ -369,6 +368,8 @@ package object asm4s {
   implicit def const(c: Char): Value[Char] = _const(c.toInt, CharInfo)
 
   implicit def const(b: Byte): Value[Byte] = _const(b.toInt, ByteInfo)
+
+  implicit def const(b: Short): Value[Short] = _const(b.toInt, ShortInfo)
 
   implicit def strToCode(s: String): Code[String] = const(s)
 

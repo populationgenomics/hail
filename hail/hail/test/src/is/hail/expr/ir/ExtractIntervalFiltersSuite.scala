@@ -8,6 +8,7 @@ import is.hail.utils.{FastSeq, Interval, IntervalEndpoint}
 import is.hail.variant.{Locus, ReferenceGenome}
 
 import org.apache.spark.sql.Row
+import org.scalatest.Inspectors.forAll
 import org.testng.annotations.Test
 
 class ExtractIntervalFiltersSuite extends HailSuite { outer =>
@@ -38,14 +39,14 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
 
   def grch38: ReferenceGenome = ctx.references(ReferenceGenome.GRCh38)
 
-  def lt(l: IR, r: IR): IR = ApplyComparisonOp(LT(l.typ), l, r)
-  def gt(l: IR, r: IR): IR = ApplyComparisonOp(GT(l.typ), l, r)
-  def lteq(l: IR, r: IR): IR = ApplyComparisonOp(LTEQ(l.typ), l, r)
-  def gteq(l: IR, r: IR): IR = ApplyComparisonOp(GTEQ(l.typ), l, r)
-  def eq(l: IR, r: IR): IR = ApplyComparisonOp(EQ(l.typ), l, r)
-  def neq(l: IR, r: IR): IR = ApplyComparisonOp(NEQ(l.typ), l, r)
-  def eqna(l: IR, r: IR): IR = ApplyComparisonOp(EQWithNA(l.typ), l, r)
-  def neqna(l: IR, r: IR): IR = ApplyComparisonOp(NEQWithNA(l.typ), l, r)
+  def lt(l: IR, r: IR): IR = ApplyComparisonOp(LT, l, r)
+  def gt(l: IR, r: IR): IR = ApplyComparisonOp(GT, l, r)
+  def lteq(l: IR, r: IR): IR = ApplyComparisonOp(LTEQ, l, r)
+  def gteq(l: IR, r: IR): IR = ApplyComparisonOp(GTEQ, l, r)
+  def eq(l: IR, r: IR): IR = ApplyComparisonOp(EQ, l, r)
+  def neq(l: IR, r: IR): IR = ApplyComparisonOp(NEQ, l, r)
+  def eqna(l: IR, r: IR): IR = ApplyComparisonOp(EQWithNA, l, r)
+  def neqna(l: IR, r: IR): IR = ApplyComparisonOp(NEQWithNA, l, r)
   def or(l: IR, r: IR): IR = invoke("lor", TBoolean, l, r)
   def and(l: IR, r: IR): IR = invoke("land", TBoolean, l, r)
   def not(b: IR): IR = ApplyUnaryPrimOp(Bang, b)
@@ -90,7 +91,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       accRef.name,
       rowRef.name,
       ApplyComparisonOp(
-        EQ(TBoolean),
+        EQ,
         filterIsTrue,
         invoke("land", TBoolean, keyInIntervals, residualIsTrue),
       ),
@@ -186,21 +187,21 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     }
 
     check(
-      LT(TInt32),
+      LT,
       I32(0),
       FastSeq(Interval(Row(), Row(0), true, false)),
       FastSeq(Interval(Row(0), Row(null), true, false)),
       FastSeq(Interval(Row(null), Row(), true, true)),
     )
     check(
-      GT(TInt32),
+      GT,
       I32(0),
       FastSeq(Interval(Row(0), Row(null), false, false)),
       FastSeq(Interval(Row(), Row(0), true, true)),
       FastSeq(Interval(Row(null), Row(), true, true)),
     )
     check(
-      EQ(TInt32),
+      EQ,
       I32(0),
       FastSeq(Interval(Row(0), Row(0), true, true)),
       FastSeq(
@@ -211,12 +212,12 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     )
 
     // These are never true (always missing), extracts the empty set of intervals
-    check(LT(TInt32), NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
-    check(GT(TInt32), NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
-    check(EQ(TInt32), NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
+    check(LT, NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
+    check(GT, NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
+    check(EQ, NA(TInt32), FastSeq(), FastSeq(), FastSeq(Interval(Row(), Row(), true, true)))
 
     check(
-      EQWithNA(TInt32),
+      EQWithNA,
       I32(0),
       FastSeq(Interval(Row(0), Row(0), true, true)),
       FastSeq(
@@ -226,7 +227,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       FastSeq(),
     )
     check(
-      EQWithNA(TInt32),
+      EQWithNA,
       NA(TInt32),
       FastSeq(Interval(Row(null), Row(), true, true)),
       FastSeq(Interval(Row(), Row(null), true, false)),
@@ -235,7 +236,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
 
     assert(ExtractIntervalFilters.extractPartitionFilters(
       ctx,
-      ApplyComparisonOp(Compare(TInt32), I32(0), k1),
+      ApplyComparisonOp(Compare, I32(0), k1),
       ref1,
       ref1Key,
     ).isEmpty)
@@ -257,13 +258,13 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       checkAll(node, ref1, k1Full, testRows, trueIntervals, falseIntervals, naIntervals)
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(TInt32), Set(null, 10, 1)),
         Literal(TArray(TInt32), FastSeq(10, 1, null)),
         Literal(TDict(TInt32, TString), Map(1 -> "foo", (null, "bar"), 10 -> "baz")),
       )
-    } {
+    } { lit =>
       check(
         invoke("contains", TBoolean, lit, k1),
         FastSeq(
@@ -280,13 +281,13 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       )
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(TInt32), Set(10, 1)),
         Literal(TArray(TInt32), FastSeq(10, 1)),
         Literal(TDict(TInt32, TString), Map(1 -> "foo", 10 -> "baz")),
       )
-    } {
+    } { lit =>
       check(
         invoke("contains", TBoolean, lit, k1),
         FastSeq(
@@ -304,8 +305,6 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
   }
 
   @Test def testLiteralContainsStruct(): Unit = {
-    hc // force initialization
-
     def check(
       node: IR,
       trueIntervals: IndexedSeq[Interval],
@@ -332,8 +331,8 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       )
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(structT1), Set(Row(1, 2), Row(3, 4), Row(3, null))),
         Literal(TArray(structT1), FastSeq(Row(3, 4), Row(1, 2), Row(3, null))),
         Literal(
@@ -341,8 +340,8 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
           Map(Row(1, 2) -> "foo", Row(3, 4) -> "bar", Row(3, null) -> "baz"),
         ),
       )
-    } {
-      for (k <- fullKeyRefs) {
+    } { lit =>
+      forAll(fullKeyRefs) { k =>
         check(
           invoke("contains", TBoolean, lit, k),
           IndexedSeq(
@@ -361,14 +360,14 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       }
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(structT2), Set(Row(1), Row(3), Row(null))),
         Literal(TArray(structT2), FastSeq(Row(3), Row(null), Row(1))),
         Literal(TDict(structT2, TString), Map(Row(1) -> "foo", Row(null) -> "baz", Row(3) -> "bar")),
       )
-    } {
-      for (k <- prefixKeyRefs) {
+    } { lit =>
+      forAll(prefixKeyRefs) { k =>
         check(
           invoke("contains", TBoolean, lit, k),
           IndexedSeq(
@@ -446,7 +445,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       )
     }
 
-    for (k <- fullKeyRefs) {
+    forAll(fullKeyRefs) { k =>
       check(
         invoke("contains", TBoolean, Literal(TInterval(structT1), fullInterval), k),
         FastSeq(fullInterval),
@@ -458,7 +457,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       )
     }
 
-    for (k <- prefixKeyRefs) {
+    forAll(prefixKeyRefs) { k =>
       check(
         invoke("contains", TBoolean, Literal(TInterval(structT2), prefixInterval), k),
         FastSeq(prefixInterval),
@@ -472,7 +471,6 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
   }
 
   @Test def testLocusContigComparison(): Unit = {
-    hc // force initialization
     val ref = Ref(freshName(), TStruct("x" -> TLocus(ReferenceGenome.GRCh38)))
     val k = GetField(ref, "x")
 
@@ -505,7 +503,6 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
   }
 
   @Test def testLocusPositionComparison(): Unit = {
-    hc // force initialization
     val ref = Ref(freshName(), TStruct("x" -> TLocus(ReferenceGenome.GRCh38)))
     val k = GetField(ref, "x")
     val pos = invoke("position", TInt32, k)
@@ -574,14 +571,14 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     }
 
     check(
-      GT(TInt32),
+      GT,
       100,
       FastSeq(Interval(Row(100), Row(null), false, false)),
       FastSeq(Interval(Row(), Row(100), true, true)),
       FastSeq(Interval(Row(null), Row(), true, true)),
     )
     check(
-      GT(TInt32),
+      GT,
       -1000,
       FastSeq(Interval(Row(1), Row(null), true, false)),
       FastSeq(),
@@ -589,14 +586,14 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     )
 
     check(
-      LT(TInt32),
+      LT,
       100,
       FastSeq(Interval(Row(), Row(100), true, false)),
       FastSeq(Interval(Row(100), Row(null), true, false)),
       FastSeq(Interval(Row(null), Row(), true, true)),
     )
     check(
-      LT(TInt32),
+      LT,
       -1000,
       FastSeq(),
       FastSeq(Interval(Row(), Row(null), true, false)),
@@ -604,7 +601,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     )
 
     check(
-      EQ(TInt32),
+      EQ,
       100,
       FastSeq(Interval(Row(100), Row(100), true, true)),
       FastSeq(
@@ -614,7 +611,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       FastSeq(Interval(Row(null), Row(), true, true)),
     )
     check(
-      EQ(TInt32),
+      EQ,
       -1000,
       FastSeq(),
       FastSeq(Interval(Row(), Row(null), true, false)),
@@ -622,7 +619,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
     )
 
     check(
-      EQWithNA(TInt32),
+      EQWithNA,
       100,
       FastSeq(Interval(Row(100), Row(100), true, true)),
       FastSeq(
@@ -632,7 +629,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       FastSeq(),
     )
     check(
-      EQWithNA(TInt32),
+      EQWithNA,
       -1000,
       FastSeq(),
       FastSeq(Interval(Row(), Row(), true, true)),
@@ -641,14 +638,13 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
 
     assert(ExtractIntervalFilters.extractPartitionFilters(
       ctx,
-      ApplyComparisonOp(Compare(TInt32), I32(0), pos),
+      ApplyComparisonOp(Compare, I32(0), pos),
       ref,
       ref1Key,
     ).isEmpty)
   }
 
   @Test def testLocusContigContains(): Unit = {
-    hc // force initialization
     val ref = Ref(freshName(), TStruct("x" -> TLocus(ReferenceGenome.GRCh38)))
     val k = GetField(ref, "x")
     val contig = invoke("contig", TString, k)
@@ -668,8 +664,8 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       checkAll(node, ref, ref, testRows, trueIntervals, falseIntervals, naIntervals)
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(TString), Set("chr10", "chr1", null, "foo")),
         Literal(TArray(TString), FastSeq("foo", "chr10", null, "chr1")),
         Literal(
@@ -677,7 +673,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
           Map("chr1" -> "foo", "chr10" -> "bar", "foo" -> "baz", (null, "quux")),
         ),
       )
-    } {
+    } { lit =>
       check(
         invoke("contains", TBoolean, lit, contig),
         FastSeq(
@@ -719,13 +715,13 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
       )
     }
 
-    for {
-      lit <- Array(
+    forAll {
+      Array(
         Literal(TSet(TString), Set("chr10", "chr1", "foo")),
         Literal(TArray(TString), FastSeq("foo", "chr10", "chr1")),
         Literal(TDict(TString, TString), Map("chr1" -> "foo", "chr10" -> "bar", "foo" -> "baz")),
       )
-    } {
+    } { lit =>
       check(
         invoke("contains", TBoolean, lit, contig),
         FastSeq(
@@ -1098,7 +1094,7 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
 
     val count = TableAggregate(
       TableRange(10, 1),
-      ApplyAggOp(FastSeq(), FastSeq(), AggSignature(Count(), FastSeq(), FastSeq())),
+      ApplyAggOp(Count())(),
     )
     print(count.typ)
     val filter = gt(count, Cast(k1, TInt64))
@@ -1106,7 +1102,6 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
   }
 
   @Test def testIntegration(): Unit = {
-    hc // force initialization
     val tab1 = TableRange(10, 5)
 
     def k = GetField(Ref(TableIR.rowName, tab1.typ.rowType), "idx")
@@ -1117,8 +1112,8 @@ class ExtractIntervalFiltersSuite extends HailSuite { outer =>
         invoke(
           "land",
           TBoolean,
-          ApplyComparisonOp(GT(TInt32), k, I32(3)),
-          ApplyComparisonOp(LTEQ(TInt32), k, I32(9)),
+          ApplyComparisonOp(GT, k, I32(3)),
+          ApplyComparisonOp(LTEQ, k, I32(9)),
         ),
         False(),
       )),

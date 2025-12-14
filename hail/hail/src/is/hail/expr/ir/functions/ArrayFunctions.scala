@@ -81,7 +81,7 @@ object ArrayFunctions extends RegistryFunctions {
     )
   }
 
-  def isEmpty(a: IR): IR = ApplyComparisonOp(EQ(TInt32), ArrayLen(a), I32(0))
+  def isEmpty(a: IR): IR = ApplyComparisonOp(EQ, ArrayLen(a), I32(0))
 
   def extend(a1: IR, a2: IR): IR = {
     val uid = freshName()
@@ -106,15 +106,7 @@ object ArrayFunctions extends RegistryFunctions {
   }
 
   def contains(a: IR, value: IR): IR =
-    exists(
-      a,
-      elt =>
-        ApplyComparisonOp(
-          EQWithNA(elt.typ, value.typ),
-          elt,
-          value,
-        ),
-    )
+    exists(a, elt => ApplyComparisonOp(EQWithNA, elt, value))
 
   def sum(a: IR): IR = {
     val t = tcoerce[TArray](a.typ).elementType
@@ -224,7 +216,7 @@ object ArrayFunctions extends RegistryFunctions {
       }
     }
 
-    def argF(a: IR, op: (Type) => ComparisonOp[Boolean], errorID: Int): IR = {
+    def argF(a: IR, op: ComparisonOp[Boolean], errorID: Int): IR = {
       val t = tcoerce[TArray](a.typ).elementType
       val tAccum = TStruct("m" -> t, "midx" -> TInt32)
 
@@ -241,7 +233,7 @@ object ArrayFunctions extends RegistryFunctions {
                 IsNA(m),
                 updateAccum(value, idx),
                 If(
-                  ApplyComparisonOp(op(t), value, m),
+                  ApplyComparisonOp(op, value, m),
                   updateAccum(value, idx),
                   accum,
                 ),
@@ -253,11 +245,11 @@ object ArrayFunctions extends RegistryFunctions {
       )
     }
 
-    registerIR1("argmin", TArray(tv("T")), TInt32)((_, a, errorID) => argF(a, LT(_), errorID))
+    registerIR1("argmin", TArray(tv("T")), TInt32)((_, a, errorID) => argF(a, LT, errorID))
 
-    registerIR1("argmax", TArray(tv("T")), TInt32)((_, a, errorID) => argF(a, GT(_), errorID))
+    registerIR1("argmax", TArray(tv("T")), TInt32)((_, a, errorID) => argF(a, GT, errorID))
 
-    def uniqueIndex(a: IR, op: (Type) => ComparisonOp[Boolean], errorID: Int): IR = {
+    def uniqueIndex(a: IR, op: ComparisonOp[Boolean], errorID: Int): IR = {
       val t = tcoerce[TArray](a.typ).elementType
       val tAccum = TStruct("m" -> t, "midx" -> TInt32, "count" -> TInt32)
 
@@ -273,10 +265,10 @@ object ArrayFunctions extends RegistryFunctions {
               IsNA(m),
               updateAccum(value, idx, I32(1)),
               If(
-                ApplyComparisonOp(op(t), value, m),
+                ApplyComparisonOp(op, value, m),
                 updateAccum(value, idx, I32(1)),
                 If(
-                  ApplyComparisonOp(EQ(t), value, m),
+                  ApplyComparisonOp(EQ, value, m),
                   updateAccum(
                     value,
                     idx,
@@ -292,7 +284,7 @@ object ArrayFunctions extends RegistryFunctions {
 
       bindIR(fold) { result =>
         If(
-          ApplyComparisonOp(EQ(TInt32), GetField(result, "count"), I32(1)),
+          ApplyComparisonOp(EQ, GetField(result, "count"), I32(1)),
           GetField(result, "midx"),
           NA(TInt32),
         )
@@ -300,23 +292,71 @@ object ArrayFunctions extends RegistryFunctions {
     }
 
     registerIR1("uniqueMinIndex", TArray(tv("T")), TInt32)((_, a, errorID) =>
-      uniqueIndex(a, LT(_), errorID)
+      uniqueIndex(a, LT, errorID)
     )
 
     registerIR1("uniqueMaxIndex", TArray(tv("T")), TInt32)((_, a, errorID) =>
-      uniqueIndex(a, GT(_), errorID)
+      uniqueIndex(a, GT, errorID)
     )
 
     registerIR2("indexArray", TArray(tv("T")), TInt32, tv("T")) { (_, a, i, errorID) =>
       ArrayRef(
         a,
-        If(ApplyComparisonOp(LT(TInt32), i, I32(0)), ApplyBinaryPrimOp(Add(), ArrayLen(a), i), i),
+        If(ApplyComparisonOp(LT, i, I32(0)), ApplyBinaryPrimOp(Add(), ArrayLen(a), i), i),
         errorID,
       )
     }
 
     registerIR1("flatten", TArray(TArray(tv("T"))), TArray(tv("T"))) { (_, a, _) =>
       ToArray(flatMapIR(ToStream(a))(ToStream(_)))
+    }
+
+    /* Construct an array of length `len`, with the values in `elts` copied to the positions in
+     * `indices` */
+    registerSCode3t(
+      "scatter",
+      Array(tv("T")),
+      TArray(tv("T")), // elts
+      TArray(TInt32), // indices
+      TInt32, // len
+      TArray(tv("T")),
+      (_, a, _, _) => PCanonicalArray(a.asInstanceOf[SContainer].elementType.storageType()).sType,
+    ) {
+      case (
+            er,
+            cb,
+            _,
+            rt: SIndexablePointer,
+            elts: SIndexableValue,
+            indices: SIndexableValue,
+            len: SInt32Value,
+            errorID,
+          ) =>
+        cb.if_(
+          elts.loadLength.cne(indices.loadLength),
+          cb._fatalWithError(errorID, "scatter: values and indices arrays have different lengths"),
+        )
+        cb.if_(
+          elts.loadLength > len.value,
+          cb._fatalWithError(errorID, "scatter: values array is larger than result length"),
+        )
+        val pt = rt.pType.asInstanceOf[PCanonicalArray]
+        val (push, finish) =
+          pt.constructFromIndicesUnsafe(cb, er.region, len.value, deepCopy = false)
+        indices.forEachDefined(cb) { case (cb, pos, idx: SInt32Value) =>
+          cb.if_(
+            idx.value < 0 || idx.value >= len.value,
+            cb._fatalWithError(
+              errorID,
+              "scatter: indices array contained index ",
+              idx.value.toS,
+              ", which is greater than result length ",
+              len.value.toS,
+            ),
+          )
+          push(cb, idx.value, elts.loadElement(cb, pos))
+        }
+        finish(cb)
     }
 
     registerSCode4(
@@ -348,8 +388,8 @@ object ArrayFunctions extends RegistryFunctions {
     ) { case (cb, _, _, errorID, ec1, ec2) =>
       ec1.toI(cb).flatMap(cb) { case pv1: SIndexableValue =>
         ec2.toI(cb).flatMap(cb) { case pv2: SIndexableValue =>
-          val l1 = cb.newLocal("len1", pv1.loadLength())
-          val l2 = cb.newLocal("len2", pv2.loadLength())
+          val l1 = cb.newLocal("len1", pv1.loadLength)
+          val l2 = cb.newLocal("len2", pv2.loadLength)
           cb.if_(
             l1.cne(l2),
             cb._fatalWithError(
@@ -453,8 +493,8 @@ object ArrayFunctions extends RegistryFunctions {
                 nGenotypes.toS,
               ),
             )
-            val localLen = array.loadLength()
-            val laLen = localAlleles.loadLength()
+            val localLen = array.loadLength
+            val laLen = localAlleles.loadLength
             cb.if_(
               localLen cne triangle(laLen),
               cb._fatalWithError(
@@ -582,15 +622,15 @@ object ArrayFunctions extends RegistryFunctions {
                 nTotalAlleles.toS,
               ),
             )
-            val localLen = array.loadLength()
+            val localLen = array.loadLength
             cb.if_(
-              localLen cne localAlleles.loadLength(),
+              localLen cne localAlleles.loadLength,
               cb._fatalWithError(
                 err,
                 "local_to_global: array and local alleles lengths differ: ",
                 localLen.toS,
                 ", ",
-                localAlleles.loadLength().toS,
+                localAlleles.loadLength.toS,
               ),
             )
 

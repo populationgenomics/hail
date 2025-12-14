@@ -2,7 +2,6 @@ package is.hail
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.language.{higherKinds, implicitConversions}
 import scala.reflect.ClassTag
 
 import org.apache.commons.math3.distribution.{
@@ -60,7 +59,7 @@ package object scalacheck
         }
     }
 
-  private[scalacheck] def MaxCollisionsExceeded(s: Traversable[_], size: Int, collisions: Int) =
+  private[scalacheck] def MaxCollisionsExceeded(s: Iterable[_], size: Int, collisions: Int) =
     new RuntimeException(
       f"Failed to generate $size distinct elements after $collisions collisions." +
         f"Elements are: ${s.mkString("[", ", ", "]")}"

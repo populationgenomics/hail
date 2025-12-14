@@ -56,37 +56,27 @@ case class TableType(rowType: TStruct, key: IndexedSeq[String], globalType: TStr
   def valueFieldIdx: Array[Int] = canonicalRVDType.valueFieldIdx
 
   def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
-    var indent = indent0
 
     val space: String = if (compact) "" else " "
+    val padding: String = if (compact) "" else " " * indent0
+    val newline: String = if (compact) "" else "\n"
 
-    def newline(): Unit =
-      if (!compact) {
-        sb += '\n'
-        sb.append(" " * indent)
-      }
+    val indent = indent0 + 4
 
-    sb.append(s"Table$space{")
-    indent += 4
-    newline()
+    sb ++= "Table" ++= space += '{' ++= newline: Unit
 
-    sb.append(s"global:$space")
+    sb ++= padding ++= "global:" ++= space: Unit
     globalType.pretty(sb, indent, compact)
-    sb += ','
-    newline()
+    sb += ',' ++= newline: Unit
 
-    sb.append(s"key:$space[")
-    key.foreachBetween(k => sb.append(prettyIdentifier(k)))(sb.append(s",$space"))
-    sb += ']'
-    sb += ','
-    newline()
+    sb ++= padding ++= "key:" ++= space += '[': Unit
+    key.foreachBetween(k => sb ++= prettyIdentifier(k))(sb += ',' ++= space: Unit)
+    sb ++= "]," ++ newline
 
-    sb.append(s"row:$space")
+    sb ++= padding ++= "row:" ++= space: Unit
     rowType.pretty(sb, indent, compact)
 
-    indent -= 4
-    newline()
-    sb += '}'
+    sb ++= newline += '}': Unit
   }
 
   override def toJSON: JObject =

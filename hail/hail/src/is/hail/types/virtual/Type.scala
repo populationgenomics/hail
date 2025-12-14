@@ -59,7 +59,7 @@ abstract class Type extends VType with Serializable {
   def _toPretty: String
 
   def _pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit =
-    sb.append(_toPretty)
+    sb ++= _toPretty
 
   def schema: DataType = SparkAnnotationImpex.exportType(this)
 
@@ -77,7 +77,7 @@ abstract class Type extends VType with Serializable {
       s
   }
 
-  def export(a: Annotation): JValue =
+  def `export`(a: Annotation): JValue =
     JSONAnnotationImpex.exportAnnotation(a, this)
 
   override def toJSON: JValue =

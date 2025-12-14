@@ -17,6 +17,9 @@ import is.hail.types.encoded.ETypeSerializer
 import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
+
+import scala.collection.compat._
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.Row
@@ -72,10 +75,10 @@ object AbstractRVDSpec {
     val partsPath = path + "/parts"
     fs.mkDir(partsPath)
 
-    val filePath = if (TaskContext.get == null)
+    val filePath = if (TaskContext.get() == null)
       "part-0"
     else
-      partFile(0, 0, TaskContext.get)
+      partFile(0, 0, TaskContext.get())
     val codecSpec = TypedCodecSpec(execCtx, rowType, bufferSpec)
 
     val (part0Count, bytesWritten) =
@@ -124,11 +127,11 @@ object AbstractRVDSpec {
         val leftParts = specLeft.absolutePartPaths(pathLeft)
         val rightParts = specRight.absolutePartPaths(pathRight)
         assert(leftParts.length == rightParts.length)
-        val contextsValue: IndexedSeq[Any] = (leftParts, rightParts, leftParts.indices)
-          .zipped
-          .map { (path1, path2, partIdx) =>
-            Row(Row(partIdx.toLong, path1), Row(partIdx.toLong, path2))
-          }
+        val contextsValue: IndexedSeq[Any] =
+          (leftParts lazyZip rightParts lazyZip leftParts.indices)
+            .map { (path1, path2, partIdx) =>
+              Row(Row(partIdx.toLong, path1), Row(partIdx.toLong, path2))
+            }
 
         val ctxIR = ToStream(Literal(TArray(reader.contextType), contextsValue))
 
@@ -223,9 +226,9 @@ abstract class AbstractRVDSpec {
 
   def key: IndexedSeq[String]
 
-  def partFiles: Array[String]
+  def partFiles: IndexedSeq[String]
 
-  def absolutePartPaths(path: String): Array[String] = partFiles.map(path + "/parts/" + _)
+  def absolutePartPaths(path: String): IndexedSeq[String] = partFiles.map(path + "/parts/" + _)
 
   def typedCodecSpec: AbstractTypedCodecSpec
 
@@ -364,7 +367,7 @@ object IndexSpec {
 object MakeRVDSpec {
   def apply(
     codecSpec: AbstractTypedCodecSpec,
-    partFiles: Array[String],
+    partFiles: IndexedSeq[String],
     partitioner: RVDPartitioner,
     indexSpec: AbstractIndexSpec = null,
     attrs: Map[String, String] = Map.empty,
@@ -397,7 +400,7 @@ case class RVDSpecMaker(
   indexSpec: AbstractIndexSpec,
   attrs: Map[String, String],
 ) {
-  def apply(partFiles: Array[String]): AbstractRVDSpec =
+  def apply(partFiles: IndexedSeq[String]): AbstractRVDSpec =
     Option(indexSpec) match {
       case Some(ais) => IndexedRVDSpec2(
           key,
@@ -414,6 +417,9 @@ case class RVDSpecMaker(
           attrs,
         )
     }
+
+  def applyFromCodegen(partFiles: Array[String]): AbstractRVDSpec =
+    apply(ArraySeq.unsafeWrapArray(partFiles))
 }
 
 object IndexedRVDSpec2 {
@@ -421,7 +427,7 @@ object IndexedRVDSpec2 {
     key: IndexedSeq[String],
     codecSpec: AbstractTypedCodecSpec,
     indexSpec: AbstractIndexSpec,
-    partFiles: Array[String],
+    partFiles: IndexedSeq[String],
     partitioner: RVDPartitioner,
     attrs: Map[String, String],
   ): AbstractRVDSpec = {
@@ -443,7 +449,7 @@ case class IndexedRVDSpec2(
   _key: IndexedSeq[String],
   _codecSpec: AbstractTypedCodecSpec,
   _indexSpec: AbstractIndexSpec,
-  _partFiles: Array[String],
+  _partFiles: IndexedSeq[String],
   _jRangeBounds: JValue,
   _attrs: Map[String, String],
 ) extends AbstractRVDSpec with Indexed {
@@ -474,7 +480,7 @@ case class IndexedRVDSpec2(
     )
   }
 
-  def partFiles: Array[String] = _partFiles
+  def partFiles: IndexedSeq[String] = _partFiles
 
   def key: IndexedSeq[String] = _key
 
@@ -578,7 +584,7 @@ case class IndexedRVDSpec2(
 case class OrderedRVDSpec2(
   _key: IndexedSeq[String],
   _codecSpec: AbstractTypedCodecSpec,
-  _partFiles: Array[String],
+  _partFiles: IndexedSeq[String],
   _jRangeBounds: JValue,
   _attrs: Map[String, String],
 ) extends AbstractRVDSpec {
@@ -605,7 +611,7 @@ case class OrderedRVDSpec2(
     )
   }
 
-  def partFiles: Array[String] = _partFiles
+  def partFiles: IndexedSeq[String] = _partFiles
 
   def key: IndexedSeq[String] = _key
 

@@ -1,10 +1,12 @@
 package is.hail.stats
 
-import is.hail.{HailSuite, TestUtils}
+import is.hail.HailSuite
 import is.hail.utils._
 
 import breeze.linalg.{eigSym, svd, DenseMatrix, DenseVector}
 import org.apache.commons.math3.random.JDKRandomGenerator
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.Test
 
 class eigSymDSuite extends HailSuite {
@@ -26,21 +28,21 @@ class eigSymDSuite extends HailSuite {
     val eigSymDK = eigSymD(K)
 
     // eigSymD = svdW
-    for (j <- 0 until n) {
+    forAll(0 until n) { j =>
       assert(D_==(svdW.S(j) * svdW.S(j), eigSymDK.eigenvalues(n - j - 1)))
       for (i <- 0 until n)
         assert(D_==(math.abs(svdW.U(i, j)), math.abs(eigSymDK.eigenvectors(i, n - j - 1))))
     }
 
     // eigSymR = svdK
-    for (j <- 0 until n) {
+    forAll(0 until n) { j =>
       assert(D_==(svdK.S(j), eigSymDK.eigenvalues(n - j - 1)))
       for (i <- 0 until n)
         assert(D_==(math.abs(svdK.U(i, j)), math.abs(eigSymDK.eigenvectors(i, n - j - 1))))
     }
 
     // eigSymD = eigSym
-    for (j <- 0 until n) {
+    forAll(0 until n) { j =>
       assert(D_==(eigSymK.eigenvalues(j), eigSymDK.eigenvalues(j)))
       for (i <- 0 until n)
         assert(D_==(math.abs(eigSymK.eigenvectors(i, j)), math.abs(eigSymDK.eigenvectors(i, j))))
@@ -81,15 +83,15 @@ class eigSymDSuite extends HailSuite {
 
         println(s"$n dim")
         print("svd:     ")
-        printTime({ svd(W) })
+        printTime({ svd(W) }): Unit
         print("svdK:    ")
-        printTime({ svd(K) })
+        printTime({ svd(K) }): Unit
         print("eigSym:  ")
-        printTime({ eigSymD(K) })
+        printTime({ eigSymD(K) }): Unit
         print("eigSymR: ")
-        printTime({ eigSymR(K) })
+        printTime({ eigSymR(K) }): Unit
         print("eigSymD: ")
-        printTime({ eigSym(K) })
+        printTime({ eigSym(K) }): Unit
         println()
       }
     }
@@ -103,13 +105,13 @@ class eigSymDSuite extends HailSuite {
     val rand = new JDKRandomGenerator()
     rand.setSeed(seed)
 
-    (1 to 5).foreach { n =>
+    forAll(1 to 5) { n =>
       val A = DenseMatrix.zeros[Double](n, n)
       (0 until n).foreach(i => (i until n).foreach(j => A(i, j) = rand.nextGaussian()))
 
       val x = DenseVector.fill[Double](n)(rand.nextGaussian())
 
-      TestUtils.assertVectorEqualityDouble(x, TriSolve(A, A * x))
+      assertVectorEqualityDouble(x, TriSolve(A, A * x))
     }
   }
 }

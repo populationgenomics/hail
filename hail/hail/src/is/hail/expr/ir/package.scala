@@ -11,7 +11,7 @@ import is.hail.types.virtual._
 import is.hail.types.virtual.TIterable.elementType
 import is.hail.utils._
 
-import scala.language.implicitConversions
+import scala.collection.BufferedIterator
 
 import java.util.UUID
 
@@ -44,7 +44,7 @@ package object ir {
     IRFunctionRegistry.lookupUnseeded(name, rt, typeArgs, args.map(_.typ)) match {
       case Some(f) => f(args, errorID)
       case None => fatal(
-          s"no conversion found for $name(${typeArgs.mkString(", ")}, ${args.map(_.typ).mkString(", ")}) => $rt"
+          s"no conversion found for $name[${typeArgs.mkString(", ")}](${args.map(_.typ).mkString(", ")}) => $rt"
         )
     }
 
@@ -170,7 +170,7 @@ package object ir {
     val accums = inits.map(i => Ref(freshName(), i.typ)).toFastSeq
     StreamFold2(
       stream,
-      (accums, inits).zipped.map((acc, i) => (acc.name, i)),
+      accums.lazyZip(inits).map((acc, i) => (acc.name, i)),
       elt.name,
       seqs.map(f => f(elt, accums)).toFastSeq,
       result(accums),
@@ -394,7 +394,7 @@ package object ir {
   )(
     f: (Ref, Ref) => IR
   ): TableGen = {
-    TypeCheck.coerce[TStream]("contexts", contexts.typ)
+    TypeCheck.coerce[TStream]("contexts", contexts.typ): Unit
     val c = Ref(freshName(), elementType(contexts.typ))
     val g = Ref(freshName(), globals.typ)
     TableGen(contexts, globals, c.name, g.name, f(c, g), partitioner, errorID)
@@ -409,15 +409,15 @@ package object ir {
         case x: String => Str(x)
       }
 
+      val xstr = if (x.typ == TString)
+        x
+      else
+        invoke("str", TString, x)
+
       if (s == null)
-        s = x
-      else {
-        val xstr = if (x.typ == TString)
-          x
-        else
-          invoke("str", TString, x)
+        s = xstr
+      else
         s = invoke("concat", TString, s, xstr)
-      }
     }
     s
   }

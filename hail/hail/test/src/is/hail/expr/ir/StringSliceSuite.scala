@@ -1,15 +1,16 @@
 package is.hail.expr.ir
 
 import is.hail.{ExecStrategy, HailSuite}
-import is.hail.TestUtils._
+import is.hail.ExecStrategy.ExecStrategy
 import is.hail.expr.ir.defs.{I32, In, NA, Str}
 import is.hail.types.virtual.TString
 import is.hail.utils._
 
+import org.scalatest.Inspectors.forEvery
 import org.testng.annotations.Test
 
 class StringSliceSuite extends HailSuite {
-  implicit val execStrats = ExecStrategy.javaOnly
+  implicit val execStrats: Set[ExecStrategy] = ExecStrategy.javaOnly
 
   @Test def unicodeSlicingSlicesCodePoints(): Unit = {
     val poopEmoji = "\uD83D\uDCA9"
@@ -128,19 +129,24 @@ class StringSliceSuite extends HailSuite {
     assertEvalsTo(invoke("index", TString, In(0, TString), I32(-2)), FastSeq("Baz" -> TString), "a")
     assertEvalsTo(invoke("index", TString, In(0, TString), I32(-3)), FastSeq("Baz" -> TString), "B")
 
-    interceptFatal("string index out of bounds") {
-      assertEvalsTo(
-        invoke("index", TString, In(0, TString), I32(3)),
-        FastSeq("Baz" -> TString),
-        "B",
-      )
+    forEvery(execStrats) { implicit strat =>
+      interceptFatal("string index out of bounds") {
+        evaluate(
+          ctx,
+          invoke("index", TString, In(0, TString), I32(3)),
+          FastSeq("Baz" -> TString),
+        )
+      }
     }
-    interceptFatal("string index out of bounds") {
-      assertEvalsTo(
-        invoke("index", TString, In(0, TString), I32(-4)),
-        FastSeq("Baz" -> TString),
-        "B",
-      )
+
+    forEvery(execStrats) { implicit strat =>
+      interceptFatal("string index out of bounds") {
+        evaluate(
+          ctx,
+          invoke("index", TString, In(0, TString), I32(-4)),
+          FastSeq("Baz" -> TString),
+        )
+      }
     }
   }
 }

@@ -1,11 +1,12 @@
 package is.hail.variant
 
-import is.hail.TestUtils
 import is.hail.scalacheck.partition
 import is.hail.testUtils.Variant
 import is.hail.utils._
 
 import org.scalacheck.Gen
+import org.scalatest
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.scalatestplus.testng.TestNGSuite
 import org.testng.annotations.Test
@@ -18,17 +19,21 @@ class GenotypeSuite extends TestNGSuite with ScalaCheckDrivenPropertyChecks {
     forAll(Gen.choose(0, 32768), Gen.choose(0, 32768)) { (x, y) =>
       val (j, k) = if (x < y) (x, y) else (y, x)
       val gt = AllelePair(j, k)
-      Genotype.allelePair(Genotype.diploidGtIndex(gt)) == gt
+      assert(Genotype.allelePair(Genotype.diploidGtIndex(gt)) == gt)
     }
 
   def triangleNumberOf(i: Int): Int =
     (i * i + i) / 2
 
   @Test def gtIndexGtPairIsId(): Unit =
-    forAll(Gen.choose(0, 10000))(idx => Genotype.diploidGtIndex(Genotype.allelePair(idx)) == idx)
+    forAll(Gen.choose(0, 10000)) { idx =>
+      assert(Genotype.diploidGtIndex(Genotype.allelePair(idx)) == idx)
+    }
 
   @Test def gtPairAndGtPairSqrtEqual(): Unit =
-    forAll(Gen.choose(0, 10000))(idx => Genotype.allelePair(idx) == Genotype.allelePairSqrt(idx))
+    forAll(Gen.choose(0, 10000)) { idx =>
+      assert(Genotype.allelePair(idx) == Genotype.allelePairSqrt(idx))
+    }
 
   @Test def testGtFromLinear(): Unit = {
     val gen =
@@ -42,14 +47,12 @@ class GenotypeSuite extends TestNGSuite with ScalaCheckDrivenPropertyChecks {
       assert(gp.sum == 32768)
       val dMax = gp.max
 
-      val check1 = gt.forall { gt =>
+      scalatest.Inspectors.forAll(gt.toSeq) { gt =>
         val dosageP = gp(gt)
         dosageP == dMax && gp.zipWithIndex.forall { case (d, index) => index == gt || d != dosageP }
       }
 
-      val check2 = gp.count(_ == dMax) > 1 || gt.contains(gp.indexOf(dMax))
-
-      check1 && check2
+      assert(gp.count(_ == dMax) > 1 || gt.contains(gp.indexOf(dMax)))
     }
   }
 
@@ -64,15 +67,17 @@ class GenotypeSuite extends TestNGSuite with ScalaCheckDrivenPropertyChecks {
   }
 
   @Test def testCall(): Unit = {
-    assert((0 until 9).forall { gt =>
+    scalatest.Inspectors.forAll(0 until 9) { gt =>
       val c = Call2.fromUnphasedDiploidGtIndex(gt)
-      !Call.isPhased(c) &&
-      Call.ploidy(c) == 2 &&
-      Call.isDiploid(c) &&
-      Call.isUnphasedDiploid(c) &&
-      Call.unphasedDiploidGtIndex(c) == gt &&
-      Call.alleleRepr(c) == gt
-    })
+      assert(
+        !Call.isPhased(c) &&
+          Call.ploidy(c) == 2 &&
+          Call.isDiploid(c) &&
+          Call.isUnphasedDiploid(c) &&
+          Call.unphasedDiploidGtIndex(c) == gt &&
+          Call.alleleRepr(c) == gt
+      )
+    }
 
     val c0 = Call2(0, 0, phased = true)
     val c1a = Call2(0, 1, phased = true)
@@ -86,7 +91,7 @@ class GenotypeSuite extends TestNGSuite with ScalaCheckDrivenPropertyChecks {
       val alleles = Call.alleles(c)
       c != Call2.fromUnphasedDiploidGtIndex(unphasedGt) &&
       Call.isPhased(c) &&
-      Call.ploidy(c) == 2
+      Call.ploidy(c) == 2 &&
       Call.isDiploid(c) &&
       !Call.isUnphasedDiploid(c) &&
       Call.unphasedDiploidGtIndex(Call2(alleles(0), alleles(1))) == unphasedGt &&
@@ -114,8 +119,9 @@ class GenotypeSuite extends TestNGSuite with ScalaCheckDrivenPropertyChecks {
     assert(Call.parse("|1") == Call1(1, phased = true))
     assert(Call.parse("0/0") == Call2(0, 0))
     assert(Call.parse("0|1") == Call2(0, 1, phased = true))
-    intercept[UnsupportedOperationException](Call.parse("1/1/1"))
-    intercept[UnsupportedOperationException](Call.parse("1|1|1"))
-    TestUtils.interceptFatal("invalid call expression:")(Call.parse("0/"))
+    assertThrows[UnsupportedOperationException](Call.parse("1/1/1"))
+    assertThrows[UnsupportedOperationException](Call.parse("1|1|1"))
+    val he = intercept[HailException](Call.parse("0/"))
+    assert(he.msg.contains("invalid call expression"))
   }
 }

@@ -49,7 +49,7 @@ final case class TVariable(name: String, cond: String = null) extends Type {
       s"?$name"
 
   override def pyString(sb: StringBuilder): Unit =
-    sb.append(_toPretty)
+    sb ++= _toPretty
 
   override def isRealizable = false
 

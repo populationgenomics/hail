@@ -5,7 +5,7 @@ import is.hail.backend.ExecuteContext
 import is.hail.expr.ir.defs._
 import is.hail.rvd.PartitionBoundOrdering
 import is.hail.types.virtual._
-import is.hail.utils.{Interval, IntervalEndpoint, _}
+import is.hail.utils._
 import is.hail.variant.{Locus, ReferenceGenome}
 
 import scala.Option.option2Iterable
@@ -21,56 +21,58 @@ trait Lattice {
   def meet(l: Value, r: Value): Value
 }
 
-object ExtractIntervalFilters {
+object ExtractIntervalFilters extends Logging {
 
   val MAX_LITERAL_SIZE = 4096
 
-  def apply(ctx: ExecuteContext, ir0: BaseIR): BaseIR = {
-    MapIR.mapBaseIR(
-      ir0,
-      (ir: BaseIR) => {
-        (
-          ir match {
-            case TableFilter(child, pred) =>
-              extractPartitionFilters(
-                ctx,
-                pred,
-                Ref(TableIR.rowName, child.typ.rowType),
-                child.typ.key,
-              )
-                .map { case (newCond, intervals) =>
-                  log.info(
-                    s"generated TableFilterIntervals node with ${intervals.length} intervals:\n  " +
-                      s"Intervals: ${intervals.mkString(", ")}\n  " +
-                      s"Predicate: ${Pretty(ctx, pred)}\n " + s"Post: ${Pretty(ctx, newCond)}"
-                  )
-                  TableFilter(TableFilterIntervals(child, intervals, keep = true), newCond)
-                }
-            case MatrixFilterRows(child, pred) => extractPartitionFilters(
-                ctx,
-                pred,
-                Ref(MatrixIR.rowName, child.typ.rowType),
-                child.typ.rowKey,
-              ).map { case (newCond, intervals) =>
-                log.info(
+  def apply(ctx: ExecuteContext, ir0: BaseIR): BaseIR =
+    ctx.time {
+      MapIR.mapBaseIR(
+        ir0,
+        {
+          case ir @ TableFilter(child, pred) =>
+            extractPartitionFilters(
+              ctx,
+              pred,
+              Ref(TableIR.rowName, child.typ.rowType),
+              child.typ.key,
+            )
+              .map { case (newCond, intervals) =>
+                logger.info(
+                  s"generated TableFilterIntervals node with ${intervals.length} intervals:\n  " +
+                    s"Intervals: ${intervals.mkString(", ")}\n  " +
+                    s"Predicate: ${Pretty(ctx, pred)}\n " + s"Post: ${Pretty(ctx, newCond)}"
+                )
+                TableFilter(TableFilterIntervals(child, intervals, keep = true), newCond)
+              }
+              .getOrElse(ir)
+
+          case ir @ MatrixFilterRows(child, pred) =>
+            extractPartitionFilters(
+              ctx,
+              pred,
+              Ref(MatrixIR.rowName, child.typ.rowType),
+              child.typ.rowKey,
+            )
+              .map { case (newCond, intervals) =>
+                logger.info(
                   s"generated MatrixFilterIntervals node with ${intervals.length} intervals:\n  " +
                     s"Intervals: ${intervals.mkString(", ")}\n  " +
                     s"Predicate: ${Pretty(ctx, pred)}\n " + s"Post: ${Pretty(ctx, newCond)}"
                 )
                 MatrixFilterRows(MatrixFilterIntervals(child, intervals, keep = true), newCond)
               }
+              .getOrElse(ir)
 
-            case _ => None
-          }
-        ).getOrElse(ir)
-      },
-    )
-  }
+          case ir => ir
+        },
+      )
+    }
 
   def extractPartitionFilters(ctx: ExecuteContext, cond: IR, ref: Ref, key: IndexedSeq[String])
-    : Option[(IR, IndexedSeq[Interval])] = {
+    : Option[(IR, IndexedSeq[Interval])] =
     if (key.isEmpty) None
-    else {
+    else ctx.time {
       val extract =
         new ExtractIntervalFilters(ctx, ref.typ.asInstanceOf[TStruct].typeAfterSelectNames(key))
       val trueSet = extract.analyze(cond, ref.name)
@@ -78,11 +80,10 @@ object ExtractIntervalFilters {
         None
       else {
         val rw = extract.Rewrites(mutable.Set.empty, mutable.Set.empty)
-        extract.analyze(cond, ref.name, Some(rw), trueSet)
+        extract.analyze(cond, ref.name, Some(rw), trueSet): Unit
         Some((extract.rewrite(cond, rw), trueSet))
       }
     }
-  }
 
   def liftPosIntervalsToLocus(pos: IndexedSeq[Interval], rg: ReferenceGenome, ctx: ExecuteContext)
     : IndexedSeq[Interval] = {
@@ -173,7 +174,7 @@ class KeySetLattice(ctx: ExecuteContext, keyType: TStruct) extends Lattice {
   def complement(v: Value): Value = {
     if (v.isEmpty) return top
 
-    val builder = mutable.ArrayBuilder.make[Interval]()
+    val builder = mutable.ArrayBuilder.make[Interval]
     if (v.head.left != IntervalEndpoint(Row(), -1)) {
       builder += Interval(IntervalEndpoint(Row(), -1), v.head.left)
     }
@@ -187,7 +188,7 @@ class KeySetLattice(ctx: ExecuteContext, keyType: TStruct) extends Lattice {
   }
 }
 
-class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
+class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) extends Logging {
   import ExtractIntervalFilters._
 
   object KeySetLattice extends is.hail.expr.ir.KeySetLattice(ctx, keyType)
@@ -349,7 +350,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
 
       def fromComparison(v: Any, op: ComparisonOp[_], wrapped: Boolean = true): BoolValue = {
         (op: @unchecked) match {
-          case _: EQ => BoolValue( // value == key
+          case EQ => BoolValue( // value == key
               KeySet(Interval(endpoint(v, -1, wrapped), endpoint(v, 1, wrapped))),
               KeySet(
                 Interval(negInf, endpoint(v, -1, wrapped)),
@@ -357,7 +358,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               ),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: NEQ => BoolValue( // value != key
+          case NEQ => BoolValue( // value != key
               KeySet(
                 Interval(negInf, endpoint(v, -1, wrapped)),
                 Interval(endpoint(v, 1, wrapped), endpoint(null, -1)),
@@ -365,27 +366,27 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               KeySet(Interval(endpoint(v, -1, wrapped), endpoint(v, 1, wrapped))),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: GT => BoolValue( // value > key
+          case GT => BoolValue( // value > key
               KeySet(Interval(negInf, endpoint(v, -1, wrapped))),
               KeySet(Interval(endpoint(v, -1, wrapped), endpoint(null, -1))),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: GTEQ => BoolValue( // value >= key
+          case GTEQ => BoolValue( // value >= key
               KeySet(Interval(negInf, endpoint(v, 1, wrapped))),
               KeySet(Interval(endpoint(v, 1, wrapped), endpoint(null, -1))),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: LT => BoolValue( // value < key
+          case LT => BoolValue( // value < key
               KeySet(Interval(endpoint(v, 1, wrapped), endpoint(null, -1))),
               KeySet(Interval(negInf, endpoint(v, 1, wrapped))),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: LTEQ => BoolValue( // value <= key
+          case LTEQ => BoolValue( // value <= key
               KeySet(Interval(endpoint(v, -1, wrapped), endpoint(null, -1))),
               KeySet(Interval(negInf, endpoint(v, -1, wrapped))),
               KeySet(Interval(endpoint(null, -1), posInf)),
             )
-          case _: EQWithNA => // value == key
+          case EQWithNA => // value == key
             if (v == null)
               BoolValue(
                 KeySet(Interval(endpoint(v, -1, wrapped), posInf)),
@@ -401,7 +402,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
                 ),
                 KeySetLattice.bottom,
               )
-          case _: NEQWithNA => // value != key
+          case NEQWithNA => // value != key
             if (v == null)
               BoolValue(
                 KeySet(Interval(negInf, endpoint(v, -1, wrapped))),
@@ -422,7 +423,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
 
       def fromComparisonKeyPrefix(v: Row, op: ComparisonOp[_]): BoolValue = {
         (op: @unchecked) match {
-          case _: EQ => BoolValue( // value == key
+          case EQ => BoolValue( // value == key
               KeySet(Interval(endpoint(v, -1, false), endpoint(v, 1, false))),
               KeySet(
                 Interval(negInf, endpoint(v, -1, false)),
@@ -430,7 +431,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               ),
               KeySetLattice.bottom,
             )
-          case _: NEQ => BoolValue( // value != key
+          case NEQ => BoolValue( // value != key
               KeySet(
                 Interval(negInf, endpoint(v, -1, false)),
                 Interval(endpoint(v, 1, false), posInf),
@@ -438,27 +439,27 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               KeySet(Interval(endpoint(v, -1, false), endpoint(v, 1, false))),
               KeySetLattice.bottom,
             )
-          case _: GT => BoolValue( // value > key
+          case GT => BoolValue( // value > key
               KeySet(Interval(negInf, endpoint(v, -1, false))),
               KeySet(Interval(endpoint(v, -1, false), posInf)),
               KeySetLattice.bottom,
             )
-          case _: GTEQ => BoolValue( // value >= key
+          case GTEQ => BoolValue( // value >= key
               KeySet(Interval(negInf, endpoint(v, 1, false))),
               KeySet(Interval(endpoint(v, 1, false), posInf)),
               KeySetLattice.bottom,
             )
-          case _: LT => BoolValue( // value < key
+          case LT => BoolValue( // value < key
               KeySet(Interval(endpoint(v, 1, false), posInf)),
               KeySet(Interval(negInf, endpoint(v, 1, false))),
               KeySetLattice.bottom,
             )
-          case _: LTEQ => BoolValue( // value <= key
+          case LTEQ => BoolValue( // value <= key
               KeySet(Interval(endpoint(v, -1, false), posInf)),
               KeySet(Interval(negInf, endpoint(v, 1, false))),
               KeySetLattice.bottom,
             )
-          case _: EQWithNA => BoolValue( // value == key
+          case EQWithNA => BoolValue( // value == key
               KeySet(Interval(endpoint(v, -1, false), endpoint(v, 1, false))),
               KeySet(
                 Interval(negInf, endpoint(v, -1, false)),
@@ -466,7 +467,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               ),
               KeySetLattice.bottom,
             )
-          case _: NEQWithNA => BoolValue( // value != key
+          case NEQWithNA => BoolValue( // value != key
               KeySet(
                 Interval(negInf, endpoint(v, -1, false)),
                 Interval(endpoint(v, 1, false), posInf),
@@ -656,8 +657,8 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
               )
 
               op match {
-                case _: EQ => b
-                case _: NEQ => BoolValue.not(b)
+                case EQ => b
+                case NEQ => BoolValue.not(b)
                 case _ => BoolValue.top(keySet)
               }
             case None =>
@@ -684,7 +685,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
       }
 
     private def opIsSupported(op: ComparisonOp[_]): Boolean = op match {
-      case _: EQ | _: NEQ | _: LTEQ | _: LT | _: GTEQ | _: GT | _: EQWithNA | _: NEQWithNA => true
+      case EQ | NEQ | LTEQ | LT | GTEQ | GT | EQWithNA | NEQWithNA => true
       case _ => false
     }
   }
@@ -711,11 +712,11 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
   private def intervalsFromLiteral(lit: Any, ordering: Ordering[Any], wrapped: Boolean): KeySet =
     (lit: @unchecked) match {
       case x: Map[_, _] => intervalsFromCollection(x.keys, ordering, wrapped)
-      case x: Traversable[_] => intervalsFromCollection(x, ordering, wrapped)
+      case x: Iterable[_] => intervalsFromCollection(x, ordering, wrapped)
     }
 
   private def intervalsFromCollection(
-    lit: Traversable[Any],
+    lit: Iterable[Any],
     ordering: Ordering[Any],
     wrapped: Boolean,
   ): KeySet =
@@ -732,7 +733,7 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
             TInt32.ordering(null).toOrdering.asInstanceOf[Ordering[Integer]]
           )
           .flatMap(getIntervalFromContig(_, rg))
-      case x: Traversable[_] => x.asInstanceOf[Traversable[String]].toArray.toFastSeq
+      case x: Iterable[_] => x.asInstanceOf[Iterable[String]].toArray.toFastSeq
           .sortBy(rg.contigsIndex.get(_))(
             TInt32.ordering(null).toOrdering.asInstanceOf[Ordering[Integer]]
           )
@@ -744,10 +745,10 @@ class ExtractIntervalFilters(ctx: ExecuteContext, keyType: TStruct) {
     if (rg.contigsSet.contains(c))
       Some(Interval(Row(Locus(c, 1)), Row(Locus(c, rg.contigLength(c))), true, false))
     else if (c == null) {
-      warn(s"Filtered with null contig")
+      logger.warn(s"Filtered with null contig")
       Some(Interval(Row(null), Row(), true, true))
     } else {
-      warn(
+      logger.warn(
         s"Filtered with contig '$c', but '$c' is not a valid contig in reference genome ${rg.name}"
       )
       None

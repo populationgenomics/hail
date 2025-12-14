@@ -5,7 +5,7 @@ azure-mgmt-storage==20.1.0
 azure-storage-blob>=12.11.0,<13
 boto3>=1.17,<2.0
 botocore>=1.20,<2.0
-dill>=0.3.6,<0.4
+dill>=0.4.0,<0.5
 frozenlist>=1.3.1,<2
 google-auth>=2.14.1,<3
 google-auth-oauthlib>=0.5.2,<1
@@ -19,5 +19,5 @@ python-json-logger>=2.0.2,<3
 pyyaml>=6.0,<7.0
 sortedcontainers>=2.4.0,<3
 tabulate>=0.8.9,<1
-uvloop>=0.19.0,<1; sys_platform!='win32'
+uvloop>=0.19.0,<0.22.0; sys_platform!='win32' # non-trivial errors raising to 0.22.0; and exclude windows
 jproperties>=2.1.1,<3

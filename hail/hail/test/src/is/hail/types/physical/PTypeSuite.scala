@@ -41,8 +41,7 @@ class PTypeSuite extends HailSuite {
     ).map(t => Array(t: Any))
   }
 
-  @Test def testPTypesDataProvider(): Unit =
-    ptypes()
+  @Test def testPTypesDataProvider(): Unit = ptypes(): Unit
 
   @Test(dataProvider = "ptypes")
   def testSerialization(ptype: PType): Unit = {

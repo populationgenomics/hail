@@ -1,7 +1,7 @@
 package is.hail.variant
 
-import is.hail.{HailSuite, TestUtils}
-import is.hail.backend.{ExecuteContext, HailStateManager}
+import is.hail.HailSuite
+import is.hail.backend.HailStateManager
 import is.hail.expr.ir.EmitFunctionBuilder
 import is.hail.io.reference.{FASTAReader, FASTAReaderConfig, LiftOver}
 import is.hail.scalacheck.{genLocus, genNullable}
@@ -14,13 +14,9 @@ import org.testng.annotations.Test
 
 class ReferenceGenomeSuite extends HailSuite {
 
-  def hasReference(name: String) = ctx.stateManager.referenceGenomes.contains(name)
-
-  def getReference(name: String) = ctx.references(name)
-
   @Test def testGRCh37(): Unit = {
-    assert(hasReference(ReferenceGenome.GRCh37))
-    val grch37 = getReference(ReferenceGenome.GRCh37)
+    assert(ctx.references.contains(ReferenceGenome.GRCh37))
+    val grch37 = ctx.references(ReferenceGenome.GRCh37)
 
     assert(grch37.inX("X") && grch37.inY("Y") && grch37.isMitochondrial("MT"))
     assert(grch37.contigLength("1") == 249250621)
@@ -35,8 +31,8 @@ class ReferenceGenomeSuite extends HailSuite {
   }
 
   @Test def testGRCh38(): Unit = {
-    assert(hasReference(ReferenceGenome.GRCh38))
-    val grch38 = getReference(ReferenceGenome.GRCh38)
+    assert(ctx.references.contains(ReferenceGenome.GRCh38))
+    val grch38 = ctx.references(ReferenceGenome.GRCh38)
 
     assert(grch38.inX("chrX") && grch38.inY("chrY") && grch38.isMitochondrial("chrM"))
     assert(grch38.contigLength("chr1") == 248956422)
@@ -51,18 +47,18 @@ class ReferenceGenomeSuite extends HailSuite {
   }
 
   @Test def testAssertions(): Unit = {
-    TestUtils.interceptFatal("Must have at least one contig in the reference genome.")(
+    interceptFatal("Must have at least one contig in the reference genome.")(
       ReferenceGenome("test", Array.empty[String], Map.empty[String, Int])
     )
-    TestUtils.interceptFatal("No lengths given for the following contigs:")(ReferenceGenome(
+    interceptFatal("No lengths given for the following contigs:")(ReferenceGenome(
       "test",
       Array("1", "2", "3"),
       Map("1" -> 5),
     ))
-    TestUtils.interceptFatal("Contigs found in 'lengths' that are not present in 'contigs'")(
+    interceptFatal("Contigs found in 'lengths' that are not present in 'contigs'")(
       ReferenceGenome("test", Array("1", "2", "3"), Map("1" -> 5, "2" -> 5, "3" -> 5, "4" -> 100))
     )
-    TestUtils.interceptFatal("The following X contig names are absent from the reference:")(
+    interceptFatal("The following X contig names are absent from the reference:")(
       ReferenceGenome(
         "test",
         Array("1", "2", "3"),
@@ -70,7 +66,7 @@ class ReferenceGenomeSuite extends HailSuite {
         xContigs = Set("X"),
       )
     )
-    TestUtils.interceptFatal("The following Y contig names are absent from the reference:")(
+    interceptFatal("The following Y contig names are absent from the reference:")(
       ReferenceGenome(
         "test",
         Array("1", "2", "3"),
@@ -78,7 +74,7 @@ class ReferenceGenomeSuite extends HailSuite {
         yContigs = Set("Y"),
       )
     )
-    TestUtils.interceptFatal(
+    interceptFatal(
       "The following mitochondrial contig names are absent from the reference:"
     )(ReferenceGenome(
       "test",
@@ -86,13 +82,13 @@ class ReferenceGenomeSuite extends HailSuite {
       Map("1" -> 5, "2" -> 5, "3" -> 5),
       mtContigs = Set("MT"),
     ))
-    TestUtils.interceptFatal("The contig name for PAR interval")(ReferenceGenome(
+    interceptFatal("The contig name for PAR interval")(ReferenceGenome(
       "test",
       Array("1", "2", "3"),
       Map("1" -> 5, "2" -> 5, "3" -> 5),
       parInput = Array((Locus("X", 1), Locus("X", 5))),
     ))
-    TestUtils.interceptFatal("in both X and Y contigs.")(ReferenceGenome(
+    interceptFatal("in both X and Y contigs.")(ReferenceGenome(
       "test",
       Array("1", "2", "3"),
       Map("1" -> 5, "2" -> 5, "3" -> 5),
@@ -103,13 +99,13 @@ class ReferenceGenomeSuite extends HailSuite {
 
   @Test def testContigRemap(): Unit = {
     val mapping = Map("23" -> "foo")
-    TestUtils.interceptFatal("have remapped contigs in reference genome")(
-      getReference(ReferenceGenome.GRCh37).validateContigRemap(mapping)
+    interceptFatal("have remapped contigs in reference genome")(
+      ctx.references(ReferenceGenome.GRCh37).validateContigRemap(mapping)
     )
   }
 
   @Test def testComparisonOps(): Unit = {
-    val rg = getReference(ReferenceGenome.GRCh37)
+    val rg = ctx.references(ReferenceGenome.GRCh37)
 
     // Test contigs
     assert(rg.compare("3", "18") < 0)
@@ -128,7 +124,7 @@ class ReferenceGenomeSuite extends HailSuite {
   @Test def testWriteToFile(): Unit = {
     val tmpFile = ctx.createTmpPath("grWrite", "json")
 
-    val rg = getReference(ReferenceGenome.GRCh37)
+    val rg = ctx.references(ReferenceGenome.GRCh37)
     rg.copy(name = "GRCh37_2").write(fs, tmpFile)
     val gr2 = ReferenceGenome.fromFile(fs, tmpFile)
 
@@ -165,8 +161,9 @@ class ReferenceGenomeSuite extends HailSuite {
         "cache gives same base as from file" |: forAll(genLocus(rg)) { l =>
           val contig = l.contig
           val pos = l.position
-          val expected = refReader.getSubsequenceAt(contig, pos, pos).getBaseString
-          val expectedGz = refReaderGz.getSubsequenceAt(contig, pos, pos).getBaseString
+          val expected = refReader.getSubsequenceAt(contig, pos.toLong, pos.toLong).getBaseString
+          val expectedGz =
+            refReaderGz.getSubsequenceAt(contig, pos.toLong, pos.toLong).getBaseString
           assert(expected == expectedGz, "wat: fasta files don't have the same data")
           fr.lookup(contig, pos, 0, 0) == expected && frGzip.lookup(contig, pos, 0, 0) == expectedGz
         }
@@ -188,7 +185,11 @@ class ReferenceGenomeSuite extends HailSuite {
               while (ordering.lteq(pos, end) && pos != null) {
                 val endPos =
                   if (pos.contig != end.contig) rg.contigLength(pos.contig) else end.position
-                sb ++= refReader.getSubsequenceAt(pos.contig, pos.position, endPos).getBaseString
+                sb ++= refReader.getSubsequenceAt(
+                  pos.contig,
+                  pos.position.toLong,
+                  endPos.toLong,
+                ).getBaseString
                 pos =
                   if (rg.contigsIndex.get(pos.contig) == rg.contigs.length - 1)
                     null
@@ -229,19 +230,18 @@ class ReferenceGenomeSuite extends HailSuite {
   }
 
   @Test def testSerializeOnFB(): Unit = {
-    ExecuteContext.scoped { ctx =>
-      val grch38 = ctx.references(ReferenceGenome.GRCh38)
-      val fb = EmitFunctionBuilder[String, Boolean](ctx, "serialize_rg")
-      val rgfield = fb.getReferenceGenome(grch38.name)
-      fb.emit(rgfield.invoke[String, Boolean]("isValidContig", fb.getCodeParam[String](1)))
-
-      val f = fb.resultWithIndex()(theHailClassLoader, ctx.fs, ctx.taskContext, ctx.r)
+    val grch38 = ctx.references(ReferenceGenome.GRCh38)
+    val fb = EmitFunctionBuilder[String, Boolean](ctx, "serialize_rg")
+    val rgfield = fb.getReferenceGenome(grch38.name)
+    fb.emit(rgfield.invoke[String, Boolean]("isValidContig", fb.getCodeParam[String](1)))
+    ctx.scopedExecution { (cl, fs, tc, r) =>
+      val f = fb.resultWithIndex()(cl, fs, tc, r)
       assert(f("X") == grch38.isValidContig("X"))
     }
   }
 
-  @Test def testSerializeWithLiftoverOnFB(): Unit = {
-    ExecuteContext.scoped { ctx =>
+  @Test def testSerializeWithLiftoverOnFB(): Unit =
+    ctx.local(references = ReferenceGenome.builtinReferences()) { ctx =>
       val grch37 = ctx.references(ReferenceGenome.GRCh37)
       val liftoverFile = getTestResource("grch37_to_grch38_chr20.over.chain.gz")
 
@@ -257,13 +257,13 @@ class ReferenceGenomeSuite extends HailSuite {
         fb.getCodeParam[Double](3),
       ))
 
-      val f = fb.resultWithIndex()(theHailClassLoader, ctx.fs, ctx.taskContext, ctx.r)
-      assert(f("GRCh38", Locus("20", 60001), 0.95) == grch37.liftoverLocus(
-        "GRCh38",
-        Locus("20", 60001),
-        0.95,
-      ))
-      grch37.removeLiftover("GRCh38")
+      ctx.scopedExecution { (cl, fs, tc, r) =>
+        val f = fb.resultWithIndex()(cl, fs, tc, r)
+        assert(f("GRCh38", Locus("20", 60001), 0.95) == grch37.liftoverLocus(
+          "GRCh38",
+          Locus("20", 60001),
+          0.95,
+        ))
+      }
     }
-  }
 }

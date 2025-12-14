@@ -9,7 +9,9 @@ import is.hail.types.physical.PType
 import is.hail.types.physical.stypes.{EmitType, PTypeReferenceSingleCodeType, StreamSingleCodeType}
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
+import scala.collection.compat._
 import scala.collection.mutable
 
 object Requiredness {
@@ -131,7 +133,7 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
     }
 
     def addBlockMatrixElementBinding(name: Name, d: BlockMatrixIR, makeOptional: Boolean = false)
-      : Unit = {
+      : Unit =
       if (refMap.contains(name)) {
         val uses = refMap(name)
         val eltReq = tcoerce[RBlockMatrix](lookup(d)).elementType
@@ -143,9 +145,8 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
         uses.foreach(u => defs.bind(u, Array(req)))
         dependents.getOrElseUpdate(d, mutable.Set[RefEquality[BaseIR]]()) ++= uses
       }
-    }
 
-    def addBindings(name: Name, ds: Array[IR]): Unit =
+    def addBindings(name: Name, ds: IndexedSeq[IR]): Unit =
       if (refMap.contains(name)) {
         val uses = refMap(name)
         uses.foreach(u => defs.bind(u, ds.map(lookup).toArray[BaseTypeWithRequiredness]))
@@ -174,19 +175,18 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
       case RelationalLetTable(name, value, _) => addBinding(name, value)
       case TailLoop(loopName, params, _, body) =>
         addBinding(loopName, body)
-        val argDefs = Array.fill(params.length)(new BoxedArrayBuilder[IR]())
+        val argDefs = ArraySeq.fill(params.length)(ArraySeq.newBuilder[IR])
         refMap.getOrElse(loopName, FastSeq()).map(_.t).foreach { case Recur(_, args, _) =>
           argDefs.zip(args).foreach { case (ab, d) => ab += d }
         }
-        val s = Array.fill[TypeWithRequiredness](params.length)(null)
-        var i = 0
-        while (i < params.length) {
-          val (name, init) = params(i)
-          s(i) = lookup(refMap.get(name).flatMap(refs =>
+
+        val s = params.lazyZip(argDefs).map { (param, args) =>
+          val (name, init) = param
+          args += init
+          addBindings(name, args.result())
+          lookup(refMap.get(name).flatMap(refs =>
             refs.headOption.map(_.t.asInstanceOf[IR])
           ).getOrElse(init))
-          addBindings(name, argDefs(i).result() :+ init)
-          i += 1
         }
         states.bind(node, s)
       case x @ ApplyIR(_, _, args, _, _) =>
@@ -568,11 +568,9 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
       case ConsoleLog(_, result) =>
         requiredness.unionFrom(lookup(result))
       case x if x.typ == TVoid =>
-      case ApplyComparisonOp(EQWithNA(_, _), _, _) | ApplyComparisonOp(
-            NEQWithNA(_, _),
-            _,
-            _,
-          ) | ApplyComparisonOp(Compare(_, _), _, _) =>
+      case ApplyComparisonOp(EQWithNA, _, _) |
+          ApplyComparisonOp(NEQWithNA, _, _) |
+          ApplyComparisonOp(Compare, _, _) =>
       case ApplyComparisonOp(op, _, _) =>
         fatal(s"non-strict comparison op $op must have explicit case")
       case TableCount(_) =>
@@ -731,22 +729,16 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
         val rit = tcoerce[RIterable](requiredness)
         rit.union(lookup(a).required)
         rit.elementType.unionFrom(lookup(body))
-      case ApplyAggOp(_, seqOpArgs, aggSig) => // FIXME round-tripping through ptype
+      case ApplyAggOp(_, seqOpArgs, op) => // FIXME round-tripping through ptype
         val emitResult = agg.PhysicalAggSig(
-          aggSig.op,
-          agg.AggStateSig(
-            aggSig.op,
-            seqOpArgs.map(s => s -> lookup(s)),
-          ),
+          op,
+          agg.AggStateSig(op, seqOpArgs.map(s => s -> lookup(s))),
         ).emitResultType
         requiredness.fromEmitType(emitResult)
-      case ApplyScanOp(_, seqOpArgs, aggSig) =>
+      case ApplyScanOp(_, seqOpArgs, op) =>
         val emitResult = agg.PhysicalAggSig(
-          aggSig.op,
-          agg.AggStateSig(
-            aggSig.op,
-            seqOpArgs.map(s => s -> lookup(s)),
-          ),
+          op,
+          agg.AggStateSig(op, seqOpArgs.map(s => s -> lookup(s))),
         ).emitResultType
         requiredness.fromEmitType(emitResult)
       case AggFold(zero, seqOp, combOp, _, _, _) =>

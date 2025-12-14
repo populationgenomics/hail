@@ -1,8 +1,8 @@
 package is.hail.utils
 
 import is.hail.HailSuite
+import is.hail.utils.compat.mutable.{Growable, GrowableCompat}
 
-import scala.collection.generic.Growable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.runtime.universe._
 
@@ -42,12 +42,15 @@ class FlipbookIteratorSuite extends HailSuite {
   }
 
   def boxBuffer[A: TypeTag]: Growable[Box[A]] with Iterable[Box[A]] =
-    new Growable[Box[A]] with Iterable[Box[A]] {
+    new GrowableCompat[Box[A]] with Iterable[Box[A]] {
       val buf = ArrayBuffer[A]()
       val box = Box[A]
+
+      override def knownSize: Int = buf.size
+
       def clear(): Unit = buf.clear()
 
-      def +=(x: Box[A]) = {
+      def addOne(x: Box[A]) = {
         buf += x.value
         this
       }
@@ -324,7 +327,7 @@ class FlipbookIteratorSuite extends HailSuite {
     val three = makeTestIterator(2, 3, 4, 4, 5, 6, 1000, 1000)
     val its: Array[FlipbookIterator[Box[Int]]] = Array(one, two, three)
     val zipped = FlipbookIterator.multiZipJoin(its, boxIntOrd(missingValue = 1000))
-    def fillOut(ar: BoxedArrayBuilder[(Box[Int], Int)], default: Box[Int]): Array[Box[Int]] = {
+    def fillOut(ar: collection.IndexedSeq[(Box[Int], Int)], default: Box[Int]): Array[Box[Int]] = {
       val a: Array[Box[Int]] = Array.fill(3)(default)
       var i = 0;
       while (i < ar.size) {

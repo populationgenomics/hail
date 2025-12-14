@@ -2,11 +2,14 @@ package is.hail.types.virtual
 
 import is.hail.annotations._
 import is.hail.backend.HailStateManager
-import is.hail.expr.ir.{Env, IRParser, IntArrayBuilder, Name}
+import is.hail.expr.ir.{Env, IRParser, Name}
 import is.hail.utils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 
-import scala.collection.JavaConverters._
+import scala.collection.compat._
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.Row
 import org.json4s.CustomSerializer
@@ -24,10 +27,10 @@ object TStruct {
 
   def apply(args: (String, Type)*): TStruct =
     TStruct(args
-      .iterator
+      .view
       .zipWithIndex
       .map { case ((n, t), i) => Field(n, t, i) }
-      .toArray)
+      .to(ArraySeq))
 
   def apply(names: java.util.List[String], types: java.util.List[Type]): TStruct = {
     val sNames = names.asScala.toArray
@@ -79,7 +82,7 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
   override def unify(concrete: Type): Boolean = concrete match {
     case TStruct(cfields) =>
       fields.length == cfields.length &&
-      (fields, cfields).zipped.forall { case (f, cf) =>
+      fields.lazyZip(cfields).forall { case (f, cf) =>
         f.unify(cf)
       }
     case _ => false
@@ -233,8 +236,8 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
   }
 
   def annotate(other: TStruct): (TStruct, Merger) = {
-    val newFieldsBuilder = new BoxedArrayBuilder[(String, Type)]()
-    val fieldIdxBuilder = new IntArrayBuilder()
+    val newFieldsBuilder = ArraySeq.newBuilder[(String, Type)]
+    val fieldIdxBuilder = ArraySeq.newBuilder[Int]
     // In fieldIdxBuilder, positive integers are field indices from the left.
     // Negative integers are the complement of field indices from the right.
 
@@ -285,8 +288,9 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
     newStruct -> annotator
   }
 
-  def insertFields(fieldsToInsert: TraversableOnce[(String, Type)]): TStruct = {
-    val ab = new BoxedArrayBuilder[Field](fields.length)
+  def insertFields(fieldsToInsert: IterableOnce[(String, Type)]): TStruct = {
+    val ab = mutable.ArrayBuffer.empty[Field]
+    ab.sizeHint(fields.length)
     var i = 0
     while (i < fields.length) {
       ab += fields(i)
@@ -294,18 +298,18 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
     }
     val it = fieldsToInsert.toIterator
     while (it.hasNext) {
-      val (name, typ) = it.next
+      val (name, typ) = it.next()
       if (fieldIdx.contains(name)) {
         val j = fieldIdx(name)
         ab(j) = Field(name, typ, j)
       } else
         ab += Field(name, typ, ab.length)
     }
-    TStruct(ab.result())
+    TStruct(ab.to(ArraySeq))
   }
 
   def rename(m: Map[String, String]): TStruct = {
-    val newFieldsBuilder = new BoxedArrayBuilder[(String, Type)]()
+    val newFieldsBuilder = ArraySeq.newBuilder[(String, Type)]
     fields.foreach { fd =>
       val n = fd.name
       newFieldsBuilder += (m.getOrElse(n, n) -> fd.typ)
@@ -374,29 +378,27 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
   }
 
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("struct{")
+    sb ++= "struct{"
     fields.foreachBetween({ field =>
-      sb.append(prettyIdentifier(field.name))
-      sb.append(": ")
+      sb ++= prettyIdentifier(field.name) ++= ": ": Unit
       field.typ.pyString(sb)
-    })(sb.append(", "))
-    sb.append('}')
+    })(sb ++= ", ")
+    sb += '}'
   }
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
     if (compact) {
-      sb.append("Struct{")
+      sb ++= "Struct{"
       fields.foreachBetween(_.pretty(sb, indent, compact))(sb += ',')
       sb += '}'
     } else {
       if (size == 0)
-        sb.append("Struct { }")
+        sb ++= "Struct { }"
       else {
-        sb.append("Struct {")
+        sb ++= "Struct {\n"
+        fields.foreachBetween(_.pretty(sb, indent + 4, compact))(sb ++= ",\n")
         sb += '\n'
-        fields.foreachBetween(_.pretty(sb, indent + 4, compact))(sb.append(",\n"))
-        sb += '\n'
-        sb.append(" " * indent)
+        sb ++= (" " * indent)
         sb += '}'
       }
     }

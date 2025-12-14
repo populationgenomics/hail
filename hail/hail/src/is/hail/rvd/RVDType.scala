@@ -6,6 +6,8 @@ import is.hail.expr.ir.IRParser
 import is.hail.types.physical.{PInterval, PStruct}
 import is.hail.utils._
 
+import scala.collection.compat._
+
 import org.json4s.CustomSerializer
 import org.json4s.JsonAST.{JArray, JObject, JString, JValue}
 
@@ -142,13 +144,14 @@ final case class RVDType(rowType: PStruct, key: IndexedSeq[String]) extends Seri
 
   override def toString: String = {
     val sb = new StringBuilder()
-    sb.append("RVDType{key:[[")
+
+    sb ++= "RVDType{key:[["
     if (key.nonEmpty) {
-      key.foreachBetween(k => sb.append(prettyIdentifier(k)))(sb += ',')
+      key.foreachBetween(k => sb ++= prettyIdentifier(k))(sb += ',')
     }
-    sb.append("]],row:")
-    sb.append(rowType.toString)
-    sb += '}'
+
+    sb ++= "]],row:" ++= rowType.toString += '}': Unit
+
     sb.result()
   }
 }
@@ -178,7 +181,7 @@ object RVDType {
     missingEqual: Boolean,
   ): UnsafeOrdering = {
     require(fields1.length == fields2.length)
-    require((fields1, fields2).zipped.forall { case (f1, f2) =>
+    require(fields1.lazyZip(fields2).forall { case (f1, f2) =>
       t1.types(f1) isOfType t2.types(f2)
     })
 

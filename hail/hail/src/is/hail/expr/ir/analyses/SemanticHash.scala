@@ -25,12 +25,11 @@ case object SemanticHash extends Logging {
   def extend(x: Type, bytes: Array[Byte]): Type =
     MurmurHash3.hash32x86(bytes, 0, bytes.length, x)
 
-  def apply(ctx: ExecuteContext)(root: BaseIR): Option[Type] =
+  def apply(ctx: ExecuteContext, root: BaseIR): Option[Type] =
     ctx.time {
-
       // Running the algorithm on the name-normalised IR
       // removes sensitivity to compiler-generated names
-      val nameNormalizedIR = NormalizeNames(ctx, root, allowFreeVariables = true)
+      val nameNormalizedIR = NormalizeNames(allowFreeVariables = true)(ctx, root)
 
       def go: Option[Int] = {
         var hash: Type =
@@ -44,11 +43,11 @@ case object SemanticHash extends Logging {
             hash = extend(hash, bytes)
           } catch {
             case error @ (_: UnsupportedOperationException | _: FileNotFoundException) =>
-              log.info(error)
+              logger.info(error)
               return None
 
             case NonFatal(error) =>
-              log.warn(
+              logger.warn(
                 """AN INTERNAL COMPILER ERROR OCCURRED.
                   |PLEASE REPORT THIS TO THE HAIL TEAM USING THE LINK BELOW,
                   |INCLUDING THE STACK TRACE AT THE END OF THIS MESSAGE.
@@ -64,7 +63,7 @@ case object SemanticHash extends Logging {
       }
 
       val semhash = go
-      log.info(s"IR Semantic Hash: $semhash")
+      logger.info(s"IR Semantic Hash: $semhash")
       semhash
     }
 
@@ -98,10 +97,8 @@ case object SemanticHash extends Logging {
         tyArgs.foreach(buffer ++= EncodeTypename(_))
         buffer ++= EncodeTypename(retTy)
 
-      case ApplyAggOp(_, _, AggSignature(op, initOpTys, seqOpTys)) =>
+      case ApplyAggOp(_, _, op) =>
         buffer ++= Bytes.fromClass(op.getClass)
-        initOpTys.foreach(buffer ++= EncodeTypename(_))
-        seqOpTys.foreach(buffer ++= EncodeTypename(_))
 
       case ApplyBinaryPrimOp(op, _, _) =>
         buffer ++= Bytes.fromClass(op.getClass)
@@ -117,7 +114,7 @@ case object SemanticHash extends Logging {
         buffer ++=
           fname.getBytes ++=
           Bytes.fromLong(staticUID) ++=
-          EncodeTypename(retTy)
+          EncodeTypename(retTy): Unit
 
       case ApplySpecial(fname, tyArgs, _, retTy, _) =>
         buffer ++= fname.getBytes
@@ -135,7 +132,7 @@ case object SemanticHash extends Logging {
               Bytes.fromDouble(maf) ++=
               Bytes.fromInt(blockSize) ++=
               kinship.fold(Array.empty[Byte])(Bytes.fromDouble) ++=
-              Bytes.fromInt(stats)
+              Bytes.fromInt(stats): Unit
         }
 
       case BlockMatrixRead(reader) =>
@@ -169,7 +166,7 @@ case object SemanticHash extends Logging {
         buffer ++= Bytes.fromInt(idx)
 
       case Literal(typ, value) =>
-        buffer ++= EncodeTypename(typ) ++= typ.export(value).toString.getBytes
+        buffer ++= EncodeTypename(typ) ++= typ.export(value).toString.getBytes: Unit
 
       case MakeTuple(fields) =>
         fields.foreach { case (index, _) => buffer ++= Bytes.fromInt(index) }
@@ -180,7 +177,7 @@ case object SemanticHash extends Logging {
           EncodeTypename(ty.rowType) ++=
           EncodeTypename(ty.colType) ++=
           EncodeTypename(ty.entryType) ++=
-          encode(fs, tLiteral, 0)
+          encode(fs, tLiteral, 0): Unit
 
       case MatrixRead(_, _, _, reader) =>
         buffer ++= Bytes.fromClass(reader.getClass)
@@ -190,7 +187,7 @@ case object SemanticHash extends Logging {
               Bytes.fromInt(params.nRows) ++=
               Bytes.fromInt(params.nCols) ++=
               params.nPartitions.fold(Array.empty[Byte])(Bytes.fromInt) ++=
-              Bytes.fromInt(nPartitionsAdj)
+              Bytes.fromInt(nPartitionsAdj): Unit
 
           case _: MatrixNativeReader =>
             reader
@@ -240,16 +237,16 @@ case object SemanticHash extends Logging {
         buffer ++= Bytes.fromInt(bufferSize)
 
       case TableJoin(_, _, joinop, key) =>
-        buffer ++= joinop.getBytes ++= Bytes.fromInt(key)
+        buffer ++= joinop.getBytes ++= Bytes.fromInt(key): Unit
 
       case TableParallelize(_, nPartitions) =>
         nPartitions.foreach(buffer ++= Bytes.fromInt(_))
 
       case TableRange(count, numPartitions) =>
-        buffer ++= Bytes.fromInt(count) ++= Bytes.fromInt(numPartitions)
+        buffer ++= Bytes.fromInt(count) ++= Bytes.fromInt(numPartitions): Unit
 
       case TableRead(_, dropRows, reader) =>
-        buffer += dropRows.toByte ++= Bytes.fromClass(reader.getClass)
+        buffer += dropRows.toByte ++= Bytes.fromClass(reader.getClass): Unit
 
         reader match {
           case StringTableReader(_, fileStatuses) =>
@@ -416,11 +413,6 @@ case object SemanticHash extends Logging {
 
     def fromClass(clz: Class[_]): Array[Byte] =
       fromInt(clz.hashCode())
-  }
-
-  object CodeGenSupport {
-    def lift(hash: SemanticHash.Type): Option[SemanticHash.Type] =
-      Some(hash)
   }
 
 }
