@@ -1223,6 +1223,8 @@ async def _create_job_groups(db: Database, batch_id: int, update_id: int, user: 
 
     @transaction(db)
     async def insert(tx):
+        job_group_ids = [spec['job_group_id'] for spec in job_group_specs]
+        log.info(f'JobGroupOrdering: _create_job_groups {batch_id=} {update_id=} start {job_group_ids=}')
         record = await tx.execute_and_fetchone(
             """
 SELECT `state`, format_version, `committed`, start_job_group_id
@@ -1240,6 +1242,7 @@ LOCK IN SHARE MODE;
             raise web.HTTPBadRequest(reason=f'update {update_id} is already committed')
 
         start_job_group_id = record['start_job_group_id']
+        log.info(f'JobGroupOrdering: select1 {batch_id=} {update_id=} -> {start_job_group_id=}')
 
         last_inserted_job_group_id = await tx.execute_and_fetchone(
             """
@@ -1254,6 +1257,8 @@ FOR UPDATE;
         )
 
         next_job_group_id = start_job_group_id + job_group_specs[0]['job_group_id'] - 1
+        last_i_j_g_id = last_inserted_job_group_id['job_group_id']
+        log.info(f'JobGroupOrdering: select2 {batch_id=} {update_id=} -> {last_i_j_g_id=} ({next_job_group_id=})')
         if next_job_group_id != last_inserted_job_group_id['job_group_id'] + 1:
             raise web.HTTPBadRequest(reason='job group specs were not submitted in order')
 
@@ -1269,6 +1274,7 @@ FOR UPDATE;
                 parent_job_group_id = start_job_group_id + spec['in_update_parent_id'] - 1
 
             try:
+                log.info(f'JobGroupOrdering: _create_job_group {batch_id=} {update_id=} {job_group_id=}')
                 await _create_job_group(
                     tx,
                     batch_id=batch_id,
@@ -1287,6 +1293,8 @@ FOR UPDATE;
                 raise web.HTTPBadRequest(
                     reason=f'error while inserting job group {spec["job_group_id"]} into batch {batch_id}: {e}'
                 )
+
+        log.info(f'JobGroupOrdering: _create_job_groups {batch_id=} {update_id=} complete')
 
     await insert()
 
