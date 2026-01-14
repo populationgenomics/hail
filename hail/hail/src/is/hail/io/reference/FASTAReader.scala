@@ -31,7 +31,7 @@ case class FASTAReaderConfig(
   def reader: FASTAReader = new FASTAReader(this)
 }
 
-object FASTAReader {
+object FASTAReader extends Logging {
   private[this] val localFastaFiles: concurrent.Map[String, String] = new concurrent.TrieMap()
   private[this] val localFastaLock: Lock = new ReentrantLock()
 
@@ -51,7 +51,7 @@ object FASTAReader {
       fastaFile
     } else {
       val localPath = ExecuteContext.createTmpPathNoCleanup(tmpdir, "fasta-reader", "fasta")
-      log.info(s"copying FASTA file at $fastaFile to $localPath")
+      logger.info(s"copying FASTA file at $fastaFile to $localPath")
       fs.copyRecode(fastaFile, localPath)
       localPath
     }
@@ -90,14 +90,22 @@ class FASTAReader(val cfg: FASTAReaderConfig) {
   private def hash(pos: Long): Int = (pos / blockSize).toInt
 
   private def getSequence(contig: String, start: Int, end: Int): String = {
-    val maxEnd = rg.contigLength(contig)
+    val maxEnd = rg.contigLength(contig).toLong
     try
-      reader.getSubsequenceAt(contig, start, if (end > maxEnd) maxEnd else end).getBaseString
+      reader.getSubsequenceAt(
+        contig,
+        start.toLong,
+        if (end > maxEnd) maxEnd else end.toLong,
+      ).getBaseString
     catch {
       // One retry, to refresh the file
       case _: htsjdk.samtools.SAMException =>
         reader = newReader()
-        reader.getSubsequenceAt(contig, start, if (end > maxEnd) maxEnd else end).getBaseString
+        reader.getSubsequenceAt(
+          contig,
+          start.toLong,
+          if (end > maxEnd) maxEnd else end.toLong,
+        ).getBaseString
     }
   }
 
@@ -180,7 +188,7 @@ class FASTAReader(val cfg: FASTAReaderConfig) {
       val offset = (pos % blockSize).toInt
       val maxSize = blockSize - offset
       val nRemaining = end - pos + 1
-      val size = if (nRemaining > maxSize) maxSize else nRemaining
+      val size = math.min(maxSize.toLong, nRemaining)
       seq ++= readBlock(blockIdx, offset, size.toInt)
       pos += size
     }

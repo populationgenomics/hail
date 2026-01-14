@@ -55,7 +55,7 @@ class SStructViewSuite extends HailSuite {
   }
 
   @Test def testAssertIsomorphism(): Unit =
-    intercept[AssertionError] {
+    assertThrows[AssertionError] {
       SStructView.subset(FastSeq("x", "y"), xyz)
         .castRename(TStruct("x" -> TInt64, "x" -> TInt32))
     }

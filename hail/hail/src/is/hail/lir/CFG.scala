@@ -14,6 +14,7 @@ object CFG {
 
       def edgeTo(L: Block): Unit = {
         val j = blocks.index(L)
+
         succ(i) += j
         pred(j) += i
       }

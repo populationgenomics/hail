@@ -3,7 +3,7 @@ package is.hail.annotations
 import is.hail.asm4s
 import is.hail.asm4s.Code
 import is.hail.types.physical._
-import is.hail.utils._
+import is.hail.utils.Logging
 
 object Region {
   type Size = Int
@@ -53,7 +53,7 @@ object Region {
 
   def loadBytes(addr: Long, n: Int): Array[Byte] = {
     val a = new Array[Byte](n)
-    Memory.copyToArray(a, 0, addr, n)
+    Memory.copyToArray(a, 0, addr, n.toLong)
     a
   }
 
@@ -61,7 +61,7 @@ object Region {
     Memory.copyToArray(dst, dstOff, addr, n)
 
   def storeBytes(addr: Long, src: Array[Byte]): Unit =
-    Memory.copyFromArray(addr, src, 0, src.length)
+    Memory.copyFromArray(addr, src, 0, src.length.toLong)
 
   def storeBytes(addr: Long, src: Array[Byte], srcOff: Long, n: Long): Unit =
     Memory.copyFromArray(addr, src, srcOff, n)
@@ -428,7 +428,7 @@ final class Region protected[annotations] (
     memory = pool.getMemory(blockSize)
   }
 
-  def nReferencedRegions(): Long = memory.nReferencedRegions()
+  def nReferencedRegions(): Int = memory.nReferencedRegions()
 
   def getNewRegion(blockSize: Region.Size): Unit = {
     if (memory != null)
@@ -475,7 +475,7 @@ final class Region protected[annotations] (
   def totalManagedBytes(): Long = memory.totalManagedBytes()
 }
 
-object RegionUtils {
+object RegionUtils extends Logging {
   def printAddr(off: Long, name: String): String = s"$name: ${"%016x".format(off)}"
 
   def printAddr(off: Code[Long], name: String): Code[String] =
@@ -512,7 +512,7 @@ object RegionUtils {
 
     val nReferenced = region.nReferencedRegions()
 
-    info(
+    logger.info(
       s"""
          |$header:
          |  block size: $size

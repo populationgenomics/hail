@@ -158,7 +158,7 @@ class Batch:
         from hailtop.batch.backend import ServiceBackend  # pylint: disable=import-outside-toplevel
 
         b = Batch(*args, **kwargs)
-        assert isinstance(b._backend, ServiceBackend)
+        assert isinstance(b._backend, ServiceBackend), repr(b._backend)
         b._async_batch = await (await b._backend._batch_client()).get_batch(batch_id)
         return b
 
@@ -357,7 +357,7 @@ class Batch:
 
         .. code-block:: python
 
-            b = Batch(default_python_image='hailgenetics/python-dill:3.9-slim')
+            b = Batch(default_python_image='hailgenetics/python-dill:3.11-slim')
 
             def hello(name):
                 return f'hello {name}'

@@ -1,58 +1,18 @@
 package is.hail.utils
 
-import org.apache.log4j.{LogManager, Logger}
+import is.hail.utils.Logging.getLoggerContext
 
-object LogHelper {
-  // exposed more directly for generated code
-  def logInfo(msg: String): Unit = log.info(msg)
-  def warning(msg: String): Unit = consoleLog.warn(msg)
-  def consoleInfo(msg: String): Unit = info(msg)
-}
+import org.apache.logging.log4j.core.LoggerContext
+import org.apache.logging.log4j.scala.Logger
 
 trait Logging {
-  @transient private var logger: Logger = _
-  @transient private var consoleLogger: Logger = _
+  @transient protected lazy val logger: Logger =
+    Logger(getLoggerContext.getLogger(getClass))
+}
 
-  def log: Logger = {
-    if (logger == null)
-      logger = LogManager.getRootLogger
-    logger
-  }
-
-  def consoleLog: Logger = {
-    if (consoleLogger == null)
-      consoleLogger = LogManager.getLogger("Hail")
-    consoleLogger
-  }
-
-  def info(msg: String): Unit =
-    consoleLog.info(msg)
-
-  def info(msg: String, t: Truncatable): Unit = {
-    val (screen, logged) = t.strings
-    if (screen == logged)
-      consoleLog.info(format(msg, screen))
-    else {
-      // writes twice to the log file, but this isn't a big problem
-      consoleLog.info(format(msg, screen))
-      log.info(format(msg, logged))
-    }
-  }
-
-  def warn(msg: String): Unit =
-    consoleLog.warn(msg)
-
-  def warn(msg: String, t: Truncatable): Unit = {
-    val (screen, logged) = t.strings
-    if (screen == logged)
-      consoleLog.warn(format(msg, screen))
-    else {
-      // writes twice to the log file, but this isn't a big problem
-      consoleLog.warn(format(msg, screen))
-      log.warn(format(msg, logged))
-    }
-  }
-
-  def error(msg: String): Unit =
-    consoleLog.error(msg)
+object Logging {
+  // Can't say I fully understand what's going on here, but
+  // spark 3.5.3 doesn't configure the active context.
+  def getLoggerContext: LoggerContext =
+    LoggerContext.getContext(false)
 }

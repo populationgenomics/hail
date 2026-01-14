@@ -27,8 +27,6 @@ import is.hail.utils._
 import is.hail.utils.richUtils.ByteTrackingOutputStream
 import is.hail.variant.ReferenceGenome
 
-import scala.language.existentials
-
 import java.io.{BufferedOutputStream, OutputStream}
 import java.nio.file.{FileSystems, Path}
 import java.util.UUID
@@ -325,8 +323,8 @@ case class PartitionNativeWriter(
                 firstSeenSettable,
                 EmitValue.present(key.copyToRegion(cb, region, firstSeenSettable.st)),
               ),
-              { lastSeen =>
-                val comparator = EQ(lastSeenSettable.emitType.virtualType).codeOrdering(
+              { _ =>
+                val comparator = EQ.codeOrdering(
                   cb.emb.ecb,
                   lastSeenSettable.st,
                   key.st,
@@ -414,7 +412,7 @@ case class RVDSpecWriter(path: String, spec: RVDSpecMaker) extends MetadataWrite
     cb += cb.emb.getFS.invoke[String, Unit]("mkDir", path)
     val a = writeAnnotations.getOrFatal(cb, "write annotations can't be missing!").asIndexable
     val partFiles = cb.newLocal[Array[String]]("partFiles")
-    val n = cb.newLocal[Int]("n", a.loadLength())
+    val n = cb.newLocal[Int]("n", a.loadLength)
     val i = cb.newLocal[Int]("i", 0)
     cb.assign(partFiles, Code.newArray[String](n))
     cb.while_(
@@ -425,7 +423,7 @@ case class RVDSpecWriter(path: String, spec: RVDSpecMaker) extends MetadataWrite
       },
     )
     cb += cb.emb.getObject(spec)
-      .invoke[Array[String], AbstractRVDSpec]("apply", partFiles)
+      .invoke[Array[String], AbstractRVDSpec]("applyFromCodegen", partFiles)
       .invoke[FS, String, Unit]("write", cb.emb.getFS, path)
   }
 }
@@ -437,7 +435,7 @@ class TableSpecHelper(
   refRelPath: String,
   typ: TableType,
   log: Boolean,
-) extends Serializable {
+) extends Serializable with Logging {
   def write(fs: FS, partCounts: Array[Long], distinctlyKeyed: Boolean): Unit = {
     val spec = TableSpecParameters(
       FileFormat.version.rep,
@@ -457,7 +455,7 @@ class TableSpecHelper(
     spec.write(fs, path)
 
     val nRows = partCounts.sum
-    if (log) info(s"wrote table with $nRows ${plural(nRows, "row")} " +
+    if (log) logger.info(s"wrote table with $nRows ${plural(nRows, "row")} " +
       s"in ${partCounts.length} ${plural(partCounts.length, "partition")} " +
       s"to $path")
   }
@@ -498,7 +496,7 @@ case class TableSpecWriter(
     cb.assign(lastSeenSettable, EmitCode.missing(cb.emb, keySType))
     val distinctlyKeyed = cb.newLocal[Boolean]("tsw_write_metadata_distinctlyKeyed", hasKey)
 
-    val n = cb.newLocal[Int]("n", a.loadLength())
+    val n = cb.newLocal[Int]("n", a.loadLength)
     val i = cb.newLocal[Int]("i", 0)
     cb.assign(partCounts, Code.newArray[Long](n))
     cb.while_(
@@ -522,7 +520,7 @@ case class TableSpecWriter(
                 const("firstKey of curElement can't be missing, part size was ") concat count.toS,
               )
 
-              val comparator = NEQ(lastSeenSettable.emitType.virtualType).codeOrdering(
+              val comparator = NEQ.codeOrdering(
                 cb.emb.ecb,
                 lastSeenSettable.st,
                 curFirst.st,
@@ -833,7 +831,7 @@ case class TableTextFinalizer(
           cb += os.invoke[Int, Unit]("write", '\n')
           cb += os.invoke[Unit]("close")
 
-          val allFiles = cb.memoize(Code.newArray[String](files.length + 1))
+          val allFiles = cb.memoize(Code.newArray[String](files.length() + 1))
           cb += (allFiles(0) = const(headerFilePath))
           cb += Code.invokeStatic5[System, Any, Int, Any, Int, Int, Unit](
             "arraycopy",
@@ -841,7 +839,7 @@ case class TableTextFinalizer(
             0 /*srcPos*/,
             allFiles /*dest*/,
             1 /*destPos*/,
-            files.length, /*len*/
+            files.length(), /*len*/
           )
           allFiles
         } else {
@@ -857,7 +855,7 @@ case class TableTextFinalizer(
         val i = cb.newLocal[Int]("i")
         cb.for_(
           cb.assign(i, 0),
-          i < jFiles.length,
+          i < jFiles.length(),
           cb.assign(i, i + 1),
           cb += cb.emb.getFS.invoke[String, Boolean, Unit]("delete", jFiles(i), const(false)),
         )

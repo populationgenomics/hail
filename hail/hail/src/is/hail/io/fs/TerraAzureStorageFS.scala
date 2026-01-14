@@ -16,8 +16,8 @@ import org.json4s.jackson.JsonMethods
 object TerraAzureStorageFS {
   private val TEN_MINUTES_IN_MS = 10 * 60 * 1000
 
-  val RequiredOAuthScopes: IndexedSeq[String] =
-    FastSeq("https://management.azure.com/.default")
+  val RequiredOAuthScopes: Array[String] =
+    Array("https://management.azure.com/.default")
 }
 
 class TerraAzureStorageFS(credential: AzureCloudCredentials) extends AzureStorageFS(credential) {
@@ -70,7 +70,7 @@ class TerraAzureStorageFS(credential: AzureCloudCredentials) extends AzureStorag
 
     val sasTokenUrl = using(httpClient.execute(req)) { resp =>
       val json = JsonMethods.parse(new String(EntityUtils.toString(resp.getEntity)))
-      log.info(s"Created sas token client for $containerResourceId")
+      logger.info(s"Created sas token client for $containerResourceId")
       (json \ "url").extract[String]
     }
 

@@ -35,8 +35,8 @@ class RegionSuite extends TestNGSuite {
       assert(pool.numFreeRegions() == 0)
       assert(pool.numFreeBlocks() == 0)
 
-      r.allocate(Region.SIZES(Region.REGULAR) - 1)
-      r.allocate(16)
+      r.allocate(Region.SIZES(Region.REGULAR) - 1): Unit
+      r.allocate(16): Unit
       r.clear()
 
       assert(pool.numRegions() == 1)
@@ -158,8 +158,8 @@ class RegionSuite extends TestNGSuite {
       val region = pool.getRegion(Region.REGULAR)
       val off1 = region.allocate(1, 10)
       val off2 = region.allocate(1, 10)
-      assert(off2 - off1 == 10)
       region.invalidate()
+      assert(off2 - off1 == 10)
     }
   }
 
@@ -179,10 +179,10 @@ class RegionSuite extends TestNGSuite {
   @Test def largeChunksAreNotReturnedToBlockPool(): Unit = {
     using(RegionPool(strictMemoryCheck = true)) { pool =>
       val region = pool.getRegion(Region.REGULAR)
-      region.allocate(4, Region.SIZES(Region.REGULAR) - 4)
+      region.allocate(4, Region.SIZES(Region.REGULAR) - 4): Unit
 
       assert(pool.numFreeBlocks() == 0)
-      region.allocate(4, 1024 * 1024)
+      region.allocate(4, 1024 * 1024): Unit
       region.invalidate()
       assert(pool.numFreeBlocks() == 1)
     }
@@ -263,7 +263,6 @@ class RegionSuite extends TestNGSuite {
       assert(operations(4) == (("free", 0L)))
       assert(operations(5) == (("free", 0L)))
       assert(operations.length == 6)
-
     }
   }
 }

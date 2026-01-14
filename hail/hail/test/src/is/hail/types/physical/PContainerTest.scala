@@ -5,6 +5,8 @@ import is.hail.asm4s._
 import is.hail.expr.ir.EmitFunctionBuilder
 import is.hail.utils._
 
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.Test
 
 class PContainerTest extends PhysicalTestUtils {
@@ -21,10 +23,13 @@ class PContainerTest extends PhysicalTestUtils {
     val srcRegion = Region(pool = pool)
     val src = ScalaToRegionValue(ctx.stateManager, srcRegion, sourceType, data)
 
-    log.info(s"Testing $data")
+    logger.info(s"Testing $data")
 
     val res =
-      Region.containsNonZeroBits(src + sourceType.missingBytesOffset, sourceType.loadLength(src))
+      Region.containsNonZeroBits(
+        src + sourceType.missingBytesOffset,
+        sourceType.loadLength(src).toLong,
+      )
     res
   }
 
@@ -32,7 +37,7 @@ class PContainerTest extends PhysicalTestUtils {
     val srcRegion = Region(pool = pool)
     val src = ScalaToRegionValue(ctx.stateManager, srcRegion, sourceType, data)
 
-    log.info(s"Testing $data")
+    logger.info(s"Testing $data")
 
     val fb = EmitFunctionBuilder[Long, Boolean](ctx, "not_empty")
     val value = fb.getCodeParam[Long](1)
@@ -50,7 +55,7 @@ class PContainerTest extends PhysicalTestUtils {
     val srcRegion = Region(pool = pool)
     val src = ScalaToRegionValue(ctx.stateManager, srcRegion, sourceType, data)
 
-    log.info(s"\nTesting $data")
+    logger.info(s"\nTesting $data")
 
     val fb = EmitFunctionBuilder[Long, Boolean](ctx, "not_empty")
     val value = fb.getCodeParam[Long](1)
@@ -117,10 +122,11 @@ class PContainerTest extends PhysicalTestUtils {
     assert(testHasMissingValues(sourceType, nullInByte(1, 1)) == true)
     assert(testHasMissingValues(sourceType, nullInByte(2, 1)) == true)
 
-    for {
-      num <- Seq(2, 16, 31, 32, 33, 50, 63, 64, 65, 90, 127, 128, 129)
-      missing <- 1 to num
-    } assert(testHasMissingValues(sourceType, nullInByte(num, missing)) == true)
+    forAll(Seq(2, 16, 31, 32, 33, 50, 63, 64, 65, 90, 127, 128, 129)) { num =>
+      forAll(1 to num) { missing =>
+        assert(testHasMissingValues(sourceType, nullInByte(num, missing)) == true)
+      }
+    }
   }
 
   @Test def arrayCopyTest(): Unit = {

@@ -1,6 +1,8 @@
 package is.hail.linalg
 
 import org.scalacheck.Arbitrary.arbitrary
+import org.scalatest
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.scalatestplus.testng.TestNGSuite
 import org.testng.annotations.Test
@@ -35,9 +37,12 @@ class RowPartitionerSuite extends TestNGSuite with ScalaCheckDrivenPropertyCheck
 
     forAll(arbitrary[Array[Long]] map { _.sorted }) { a =>
       whenever(a.nonEmpty) {
-        for (key <- a ++ moreKeys)
-          if (key > a.head && key < a.last)
-            assert(RowPartitioner.findInterval(a, key) == naiveFindInterval(a, key))
+        scalatest.Inspectors.forAll(a ++ moreKeys) { key =>
+          assert(
+            !(key > a.head && key < a.last) ||
+              RowPartitioner.findInterval(a, key) == naiveFindInterval(a, key)
+          )
+        }
       }
     }
   }

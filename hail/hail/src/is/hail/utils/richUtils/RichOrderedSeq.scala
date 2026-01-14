@@ -1,10 +1,13 @@
 package is.hail.utils.richUtils
 
-class RichOrderedSeq[T: Ordering](s: Seq[T]) {
+import scala.collection.compat._
+
+class RichOrderedSeq[T](val s: Seq[T]) extends AnyVal {
 
   import scala.math.Ordering.Implicits._
 
-  def isIncreasing: Boolean = s.isEmpty || (s, s.tail).zipped.forall(_ < _)
+  def isIncreasing(implicit ord: Ordering[T]): Boolean =
+    s.isEmpty || s.lazyZip(s.tail).forall(_ < _)
 
-  def isSorted: Boolean = s.isEmpty || (s, s.tail).zipped.forall(_ <= _)
+  def isSorted(implicit ord: Ordering[T]): Boolean = s.isEmpty || s.lazyZip(s.tail).forall(_ <= _)
 }

@@ -5,9 +5,10 @@ import is.hail.asm4s.{Code, Value}
 import is.hail.io.{InputBuffer, OutputBuffer, RichContextRDDLong, RichContextRDDRegionValue}
 import is.hail.sparkextras._
 import is.hail.utils.{HailIterator, MultiArray2, Truncatable, WithContext}
+import is.hail.utils.compat.immutable.ArraySeq
 
-import scala.collection.{mutable, TraversableOnce}
-import scala.language.implicitConversions
+import scala.collection.compat._
+import scala.collection.mutable
 import scala.reflect.ClassTag
 import scala.util.matching.Regex
 
@@ -21,6 +22,9 @@ import org.apache.spark.sql.Row
 
 trait Implicits {
   implicit def toRichArray[T](a: Array[T]): RichArray[T] = new RichArray(a)
+
+  implicit def toRichArraySeqCompanion(a: ArraySeq.type): RichArraySeqCompanion.type =
+    RichArraySeqCompanion
 
   implicit def toRichIndexedSeq[T](s: IndexedSeq[T]): RichIndexedSeq[T] = new RichIndexedSeq(s)
 
@@ -39,10 +43,6 @@ trait Implicits {
 
   implicit def toRichIndexedRowMatrix(irm: IndexedRowMatrix): RichIndexedRowMatrix =
     new RichIndexedRowMatrix(irm)
-
-  implicit def toRichIntPairTraversableOnce[V](t: TraversableOnce[(Int, V)])
-    : RichIntPairTraversableOnce[V] =
-    new RichIntPairTraversableOnce[V](t)
 
   implicit def toRichIterable[T](i: Iterable[T]): RichIterable[T] = new RichIterable(i)
 
@@ -82,6 +82,8 @@ trait Implicits {
   implicit def toRichPairRDD[K, V](r: RDD[(K, V)])(implicit kct: ClassTag[K], vct: ClassTag[V])
     : RichPairRDD[K, V] = new RichPairRDD(r)
 
+  implicit def toRichPredicate[A](f: A => Boolean): RichPredicate[A] = new RichPredicate[A](f)
+
   implicit def toRichRDD[T](r: RDD[T])(implicit tct: ClassTag[T]): RichRDD[T] = new RichRDD(r)
 
   implicit def toRichContextRDDRegionValue(r: ContextRDD[RegionValue]): RichContextRDDRegionValue =
@@ -97,9 +99,6 @@ trait Implicits {
   implicit def toRichSC(sc: SparkContext): RichSparkContext = new RichSparkContext(sc)
 
   implicit def toRichString(str: String): RichString = new RichString(str)
-
-  implicit def toRichStringBuilder(sb: mutable.StringBuilder): RichStringBuilder =
-    new RichStringBuilder(sb)
 
   implicit def toTruncatable(s: String): Truncatable = s.truncatable()
 

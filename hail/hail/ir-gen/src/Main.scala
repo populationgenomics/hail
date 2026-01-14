@@ -1,5 +1,5 @@
 import scala.annotation.nowarn
-import scala.language.{higherKinds, implicitConversions}
+import scala.collection.compat._
 
 import mainargs.{main, ParserForMethods}
 
@@ -282,7 +282,7 @@ object IRDSL_Impl extends IRDSL {
       else {
         assert(n.hasStaticValue(1))
         SeqRepr.Dynamic(
-          s"($this, $newChildren).zipped.map { (x, newChild) => ${eltType.repr("x").copyWithNewChildren(
+          s"$this.lazyZip($newChildren).map { (x, newChild) => ${eltType.repr("x").copyWithNewChildren(
               SeqRepr.Static(Seq(ChildRepr(Child_("BaseIR"), "newChild")), Att_("BaseIR"))
             )} }",
           eltType,
@@ -509,7 +509,7 @@ object IRDSL_Impl extends IRDSL {
     private def copyMethod: String = {
       val decl = s"override def copyWithNewChildren(newChildren: IndexedSeq[BaseIR]): $name = "
       val assertion = s"assert(newChildren.length == $nChildren)"
-      val body = name + (attsAndChildren, childrenOffsets).zipped.map { case (x, offset) =>
+      val body = name + attsAndChildren.lazyZip(childrenOffsets).map { case (x, offset) =>
         val newChildren = SeqRepr.Dynamic("newChildren", Child_("BaseIR"))
         x.repr.copyWithNewChildren(
           if (x.nChildren.hasStaticValue(0)) SeqRepr.empty(Child_("BaseIR"))
@@ -991,14 +991,14 @@ object Main {
       "ApplyAggOp",
       in("initOpArgs", child.*),
       in("seqOpArgs", child.*),
-      in("aggSig", att("AggSignature")),
+      in("op", att("AggOp")),
     )
-      .withClassExtension.withCompanionExtension
+      .withCompanionExtension
     r += node(
       "ApplyScanOp",
       in("initOpArgs", child.*),
       in("seqOpArgs", child.*),
-      in("aggSig", att("AggSignature")),
+      in("op", att("AggOp")),
     )
       .withClassExtension.withCompanionExtension
     r += node(
@@ -1209,15 +1209,15 @@ object Main {
   }
 
   @main
-  def main(path: String) = {
+  def main(path: String): Unit = {
     val pack = "package is.hail.expr.ir.defs"
     val imports = Seq(
       "is.hail.annotations.Annotation",
       "is.hail.io.{AbstractTypedCodecSpec, BufferSpec}",
       "is.hail.types.virtual.{Type, TArray, TStream, TVoid, TStruct, TTuple}",
       "is.hail.utils.{FastSeq, StringEscapeUtils}",
-      "is.hail.expr.ir.{BaseIR, IR, TableIR, MatrixIR, BlockMatrixIR, Name, UnaryOp, BinaryOp, " +
-        "ComparisonOp, CanEmit, AggSignature, EmitParamType, TableWriter, " +
+      "is.hail.expr.ir.{AggOp, BaseIR, IR, TableIR, MatrixIR, BlockMatrixIR, Name, UnaryOp, BinaryOp, " +
+        "ComparisonOp, CanEmit, EmitParamType, TableWriter, " +
         "WrappedMatrixNativeMultiWriter, MatrixWriter, MatrixNativeMultiWriter, BlockMatrixWriter, " +
         "BlockMatrixMultiWriter, ValueReader, ValueWriter}",
       "is.hail.expr.ir.lowering.TableStageDependency",
@@ -1226,6 +1226,7 @@ object Main {
         "UnseededMissingnessObliviousJVMFunction, TableToValueFunction, MatrixToValueFunction, " +
         "BlockMatrixToValueFunction}",
       "is.hail.expr.ir.defs.exts._",
+      "scala.collection.compat._",
     )
     val gen = pack + "\n\n" + imports.map(i => s"import $i").mkString("\n") + "\n\n" + allNodes.map(
       _.generateDef
@@ -1233,5 +1234,7 @@ object Main {
     os.write(os.Path(path) / "IR_gen.scala", gen)
   }
 
-  def main(args: Array[String]): Unit = ParserForMethods(this).runOrExit(args)
+  def main(args: Array[String]): Unit = {
+    val _ = ParserForMethods(this).runOrExit(args)
+  }
 }

@@ -22,6 +22,7 @@ import is.hail.types.physical.stypes.concrete.{SJavaArrayString, SStackStruct}
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 import scala.io.Source
@@ -59,12 +60,12 @@ case class BgenFileMetadata(
   def path: String = header.path
 }
 
-object LoadBgen {
+object LoadBgen extends Logging {
   def readSamples(fs: FS, file: String): Array[String] = {
     val bState = readState(fs, file)
     if (bState.hasIds) {
       using(new HadoopFSDataBinaryReader(fs.openNoCompression(file))) { is =>
-        is.seek(bState.headerLength + 4)
+        is.seek(bState.headerLength.toLong + 4)
         val sampleIdSize = is.readInt()
         val nSamples = is.readInt()
 
@@ -79,7 +80,7 @@ object LoadBgen {
         (0 until nSamples).map(i => is.readLengthAndString(2)).toArray
       }
     } else {
-      warn(s"BGEN file '$file' contains no sample ID block and no sample ID file given.\n" +
+      logger.warn(s"BGEN file '$file' contains no sample ID block and no sample ID file given.\n" +
         s"  Using _0, _1, ..., _N as sample IDs.")
       (0 until bState.nSamples).map(i => s"_$i").toArray
     }
@@ -120,7 +121,7 @@ object LoadBgen {
       fatal(s"expected magic number [0000] or [bgen], got [${magicNumber.mkString}]")
 
     if (headerLength > 20)
-      is.skipBytes(headerLength - 20)
+      is.skipBytes(headerLength.toLong - 20): Unit
 
     val flags = is.readInt()
     val compressType = flags & 3
@@ -156,7 +157,7 @@ object LoadBgen {
   }
 
   def getAllFileListEntries(fs: FS, files: Array[String]): Array[FileListEntry] = {
-    val badFiles = new BoxedArrayBuilder[String]()
+    val badFiles = ArraySeq.newBuilder[String]
 
     val fileListEntries = files.flatMap { file =>
       val matches = fs.glob(file)
@@ -166,13 +167,13 @@ object LoadBgen {
       matches.flatMap { fileListEntry =>
         val file = fileListEntry.getPath
         if (!file.endsWith(".bgen"))
-          warn(s"input file does not have .bgen extension: $file")
+          logger.warn(s"input file does not have .bgen extension: $file")
 
         if (fileListEntry.isDirectory)
           fs.listDirectory(file)
             .filter(fileListEntry =>
               ".*part-[0-9]+(-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?".r.matches(
-                fileListEntry.getPath.toString
+                fileListEntry.getPath
               )
             )
         else
@@ -180,11 +181,13 @@ object LoadBgen {
       }
     }
 
-    if (!badFiles.isEmpty)
-      fatal(
-        s"""The following paths refer to no files:
-           |  ${badFiles.result().mkString("\n  ")}""".stripMargin
-      )
+    badFiles.result() match {
+      case Seq() =>
+      case badFiles => fatal(
+          s"""The following paths refer to no files:
+             |  ${badFiles.mkString("\n  ")}""".stripMargin
+        )
+    }
 
     fileListEntries
   }
@@ -318,7 +321,7 @@ object LoadBgen {
   }
 }
 
-object MatrixBGENReader {
+object MatrixBGENReader extends Logging {
   def fullMatrixTypeWithoutUIDs(rg: Option[String]): MatrixType = {
     MatrixType(
       globalType = TStruct.empty,
@@ -421,9 +424,11 @@ object MatrixBGENReader {
 
     val nVariants = fileMetadata.map(_.nVariants).sum
 
-    info(s"Number of BGEN files parsed: ${fileMetadata.length}")
-    info(s"Number of samples in BGEN files: $nSamples")
-    info(s"Number of variants across all BGEN files: $nVariants")
+    logger.info(
+      s"""Number of BGEN files parsed: ${fileMetadata.length}
+         |Number of samples in BGEN files: $nSamples
+         |Number of variants across all BGEN files: $nVariants""".stripMargin
+    )
 
     val referenceGenome = LoadBgen.getReferenceGenome(fileMetadata)
 
@@ -554,7 +559,7 @@ class MatrixBGENReader(
         val ta = f.typ.asInstanceOf[TArray]
         MakeStruct(FastSeq((
           LowerMatrixIR.colsFieldName, {
-            val arraysToZip = new BoxedArrayBuilder[IndexedSeq[Any]]()
+            val arraysToZip = ArraySeq.newBuilder[IndexedSeq[Any]]
             val colType = ta.elementType.asInstanceOf[TStruct]
             if (colType.hasField("s"))
               arraysToZip += sampleIds
@@ -587,8 +592,8 @@ class MatrixBGENReader(
       case Some(v) =>
         val t0 = TableNativeReader.read(ctx.fs, v, None)
 
-        val contexts = new BoxedArrayBuilder[Row]()
-        val rangeBounds = new BoxedArrayBuilder[Interval]()
+        val contexts = ArraySeq.newBuilder[Row]
+        val rangeBounds = ArraySeq.newBuilder[Interval]
         filePartitionInfo.zipWithIndex.foreach { case (file, fileIdx) =>
           val filePartitioner =
             new RVDPartitioner(ctx.stateManager, tcoerce[TStruct](indexKeyType), file.intervals)
@@ -615,7 +620,7 @@ class MatrixBGENReader(
           globals = globals,
           partitioner = partitioner,
           dependency = TableStageDependency.none,
-          contexts = ToStream(Literal(TArray(reader.contextType), contexts.result().toFastSeq)),
+          contexts = ToStream(Literal(TArray(reader.contextType), contexts.result())),
           (ref: Ref) => ReadPartition(ref, requestedType.rowType, reader),
         )
 
@@ -630,7 +635,7 @@ class MatrixBGENReader(
           referenceGenome,
         )
 
-        val contexts = new BoxedArrayBuilder[Row]()
+        val contexts = ArraySeq.newBuilder[Row]
 
         var partIdx = 0
         var fileIdx = 0
@@ -649,7 +654,7 @@ class MatrixBGENReader(
           globals = globals,
           partitioner = partitioner,
           dependency = TableStageDependency.none,
-          contexts = ToStream(Literal(TArray(reader.contextType), contexts.result().toFastSeq)),
+          contexts = ToStream(Literal(TArray(reader.contextType), contexts.result())),
           (ref: Ref) => ReadPartition(ref, requestedType.rowType, reader),
         )
     }

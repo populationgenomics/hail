@@ -4,6 +4,8 @@ import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.HailStateManager
 import is.hail.utils._
 
+import scala.collection.compat._
+
 import org.apache.spark.sql.Row
 
 object TTuple {
@@ -47,7 +49,7 @@ final case class TTuple(_types: IndexedSeq[TupleField]) extends TBaseStruct {
   override def unify(concrete: Type): Boolean = concrete match {
     case TTuple(ctypes) =>
       size == ctypes.length &&
-      (types, ctypes).zipped.forall { case (t, ct) =>
+      types.lazyZip(ctypes).forall { case (t, ct) =>
         t.unify(ct.typ)
       }
     case _ => false
@@ -57,33 +59,31 @@ final case class TTuple(_types: IndexedSeq[TupleField]) extends TBaseStruct {
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
     if (!_isCanonical) {
-      sb.append("TupleSubset[")
+      sb ++= "TupleSubset["
       fields.foreachBetween { fd =>
-        sb.append(fd.name)
-        sb.append(':')
+        sb ++= fd.name += ':': Unit
         fd.typ.pretty(sb, indent, compact)
       }(sb += ',')
       sb += ']'
     } else {
-      sb.append("Tuple[")
+      sb ++= "Tuple["
       _types.foreachBetween(fd => fd.typ.pretty(sb, indent, compact))(sb += ',')
       sb += ']'
     }
   }
 
   override def pyString(sb: StringBuilder): Unit = {
-    sb.append("tuple(")
+    sb ++= "tuple("
     if (!_isCanonical) {
       fields.foreachBetween({ field =>
-        sb.append(field.name)
-        sb.append(':')
+        sb ++= field.name += ':': Unit
         field.typ.pyString(sb)
-      })(sb.append(", "))
-      sb.append(')')
+      })(sb ++= ", ")
+      sb += ')'
     } else {
-      fields.foreachBetween({ field => field.typ.pyString(sb) })(sb.append(", "))
+      fields.foreachBetween({ field => field.typ.pyString(sb) })(sb ++= ", ")
     }
-    sb.append(')')
+    sb += ')'
   }
 
   override def valueSubsetter(subtype: Type): Any => Any = {

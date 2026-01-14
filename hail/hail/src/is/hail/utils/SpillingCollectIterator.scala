@@ -16,7 +16,7 @@ object SpillingCollectIterator {
     val nPartitions = rdd.partitions.length
     val x = new SpillingCollectIterator(localTmpdir, fs, nPartitions, sizeLimit)
     val ctc = classTag[T]
-    SparkBackend.sparkContext("SpillingCollectIterator.apply").runJob(
+    SparkBackend.sparkContext.runJob(
       rdd,
       (_, it: Iterator[T]) => it.toArray(ctc),
       0 until nPartitions,
@@ -31,7 +31,7 @@ class SpillingCollectIterator[T: ClassTag] private (
   fs: FS,
   nPartitions: Int,
   sizeLimit: Int,
-) extends Iterator[T] {
+) extends Iterator[T] with Logging {
   private[this] val files: Array[(String, Long)] = new Array(nPartitions)
   private[this] val buf: Array[Array[T]] = new Array(nPartitions)
   private[this] var _size: Long = 0L
@@ -45,7 +45,7 @@ class SpillingCollectIterator[T: ClassTag] private (
     if (_size > sizeLimit) {
       val file =
         ExecuteContext.createTmpPathNoCleanup(localTmpdir, s"spilling-collect-iterator-$partition")
-      log.info(s"spilling partition $partition to $file")
+      logger.info(s"spilling partition $partition to $file")
       using(fs.createNoCompression(file)) { os =>
         var k = 0
         while (k < buf.length) {
@@ -100,8 +100,8 @@ class SpillingCollectIterator[T: ClassTag] private (
     it.hasNext
   }
 
-  def next: T = {
-    hasNext
-    it.next
+  def next(): T = {
+    hasNext: Unit
+    it.next()
   }
 }

@@ -37,7 +37,7 @@ final case class PCanonicalLocus(rgName: String, required: Boolean = false) exte
   def _asIdent = s"locus_$rgName"
 
   override def _pretty(sb: StringBuilder, indent: Call, compact: Boolean): Unit =
-    sb.append(s"PCLocus($rgName)")
+    sb ++= "PCLocus(" ++= rgName += ')': Unit
 
   def setRequired(required: Boolean): PCanonicalLocus =
     if (required == this.required) this else PCanonicalLocus(this.rgName, required)

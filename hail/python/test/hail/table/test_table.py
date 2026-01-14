@@ -678,6 +678,7 @@ class Tests(unittest.TestCase):
         ht = hl.Table.multi_way_zip_join(vcfs, 'data', 'new_globals')
         assert exp_count == ht._force_count()
 
+    @test_timeout(3 * 60)
     def test_multi_way_zip_join_highly_unbalanced_partitions__issue_14245(self):
         def import_vcf(file: str, partitions: int):
             return (
@@ -1222,7 +1223,7 @@ class Tests(unittest.TestCase):
     def test_nested_union_100(self):
         self.nested_union(10, 100)
 
-    @pytest.mark.skip('causes intermitted stack overflow in compiler due ')
+    @pytest.mark.xfail(reason='causes intermittent stack overflow in compiler', strict=False)
     def test_nested_union_200(self):
         self.nested_union(10, 200)
 

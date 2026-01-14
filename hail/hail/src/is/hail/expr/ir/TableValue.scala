@@ -1,12 +1,11 @@
 package is.hail.expr.ir
 
-import is.hail.HailContext
 import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.backend.spark.{SparkBackend, SparkTaskContext}
 import is.hail.expr.TableAnnotationImpex
-import is.hail.expr.ir.agg.Aggs
+import is.hail.expr.ir.agg.IndependentExtractedAggs
 import is.hail.expr.ir.compile.{Compile, CompileWithAggregators}
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.{RVDToTableStage, TableStage, TableStageToRVD}
@@ -23,6 +22,7 @@ import is.hail.types.physical.stypes.interfaces.NoBoxLongIterator
 import is.hail.types.tcoerce
 import is.hail.types.virtual.{Field, MatrixType, TArray, TInt32, TStream, TStruct, TableType}
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.reflect.ClassTag
 
@@ -68,7 +68,7 @@ case class TableStageIntermediate(ts: TableStage) extends TableExecuteIntermedia
   def partitioner: RVDPartitioner = ts.partitioner
 }
 
-object TableValue {
+object TableValue extends Logging {
   def apply(ctx: ExecuteContext, rowType: PStruct, key: IndexedSeq[String], rdd: ContextRDD[Long])
     : TableValue = {
     assert(rowType.required)
@@ -105,7 +105,7 @@ object TableValue {
     def newGlobalType = TStruct(globalName -> TArray(childValues.head.typ.globalType))
     def newValueType = TStruct(fieldName -> TArray(childValues.head.typ.valueType))
     def newRowType = childValues.head.typ.keyType ++ newValueType
-    val typ = childValues.head.typ.copy(
+    val typ: TableType = childValues.head.typ.copy(
       rowType = newRowType,
       globalType = newGlobalType,
     )
@@ -122,7 +122,7 @@ object TableValue {
       )
         childRVDs.map(_.truncateKey(typ.key.length))
       else {
-        info("TableMultiWayZipJoin: repartitioning children")
+        logger.info("TableMultiWayZipJoin: repartitioning children")
         val childRanges = childRVDs.flatMap(_.partitioner.coarsenedRangeBounds(typ.key.length))
         val newPartitioner = RVDPartitioner.generate(ctx.stateManager, typ.keyType, childRanges)
         childRVDs.map(_.repartition(ctx, newPartitioner))
@@ -147,7 +147,7 @@ object TableValue {
       )): _*
     )
     val localDataLength = childValues.length
-    val rvMerger = { (ctx: RVDContext, it: Iterator[BoxedArrayBuilder[(RegionValue, Int)]]) =>
+    val rvMerger = { (ctx: RVDContext, it: Iterator[collection.IndexedSeq[(RegionValue, Int)]]) =>
       val rvb = new RegionValueBuilder(sm)
       val newRegionValue = RegionValue()
 
@@ -193,8 +193,10 @@ object TableValue {
 
   def parallelize(ctx: ExecuteContext, rowsAndGlobal: IR, nPartitions: Option[Int]): TableValue = {
     val (ptype: PStruct, res) =
-      CompileAndEvaluate._apply(ctx, rowsAndGlobal, optimize = false) match {
-        case Right((t, off)) => (t.fields(0).typ, t.loadField(off, 0))
+      ctx.local(flags = ctx.flags - Optimize.Flags.Optimize) { ctx =>
+        CompileAndEvaluate._apply(ctx, rowsAndGlobal) match {
+          case Right((t, off)) => (t.fields(0).typ, t.loadField(off, 0))
+        }
       }
 
     val globalsT = ptype.types(1).setRequired(true).asInstanceOf[PStruct]
@@ -238,7 +240,7 @@ object TableValue {
         s"\n  res=${resultRowType.virtualType}\n  typ=$rowType",
     )
 
-    log.info(s"parallelized $nRows rows in $nSplits partitions")
+    logger.info(s"parallelized $nRows rows in $nSplits partitions")
 
     val rvd = ContextRDD.parallelize(encRows, encRows.length)
       .cmapPartitions { (ctx, it) =>
@@ -300,7 +302,8 @@ object TableValue {
   }
 }
 
-case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow, rvd: RVD) {
+case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow, rvd: RVD)
+    extends Logging {
   if (typ.rowType != rvd.rowType)
     throw new RuntimeException(
       s"row mismatch:\n  typ: ${typ.rowType.parsableString()}\n  rvd: ${rvd.rowType.parsableString()}"
@@ -323,7 +326,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
   def persist(ctx: ExecuteContext, level: StorageLevel) =
     TableValue(ctx, typ, globals, rvd.persist(ctx, level))
 
-  def export(
+  def `export`(
     ctx: ExecuteContext,
     path: String,
     typesFile: String = null,
@@ -351,7 +354,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         val ur = new UnsafeRow(localSignature, ctx.r, ptr)
         sb.clear()
         localTypes.indices.foreachBetween { i =>
-          sb.append(TableAnnotationImpex.exportAnnotation(ur.get(i), localTypes(i)))
+          sb ++= TableAnnotationImpex.exportAnnotation(ur.get(i), localTypes(i))
         }(sb.append(localDelim))
 
         sb.result()
@@ -364,8 +367,8 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     )
   }
 
-  def toDF(): DataFrame =
-    HailContext.sparkBackend("toDF").sparkSession.createDataFrame(
+  def toDF(ctx: ExecuteContext): DataFrame =
+    ctx.backend.asSpark.spark.createDataFrame(
       rvd.toRows,
       typ.rowType.schema.asInstanceOf[StructType],
     )
@@ -429,14 +432,16 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     )
   }
 
-  def aggregateByKey(extracted: Aggs): TableValue = {
+  def aggregateByKey(extracted: IndependentExtractedAggs): TableValue = {
     val prevRVD = rvd.truncateKey(typ.key)
     val fsBc = ctx.fsBc
     val sm = ctx.stateManager
 
+    val aggSigs = extracted.sigs
+
     val (_, makeInit) = CompileWithAggregators[AsmFunction2RegionLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq((
         TableIR.globalName,
         SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(globals.t)),
@@ -448,7 +453,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
 
     val (_, makeSeq) = CompileWithAggregators[AsmFunction3RegionLongLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq(
         (
           TableIR.globalName,
@@ -464,15 +469,13 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
       extracted.seqPerElt,
     )
 
-    val valueIR = Let(FastSeq(extracted.resultRef.name -> extracted.results), extracted.postAggIR)
     val keyType = prevRVD.typ.kType
 
     val key = Ref(freshName(), keyType.virtualType)
-    val value = Ref(freshName(), valueIR.typ)
     val (Some(PTypeReferenceSingleCodeType(rowType: PStruct)), makeRow) =
       CompileWithAggregators[AsmFunction3RegionLongLongLong](
         ctx,
-        extracted.states,
+        aggSigs.states,
         FastSeq(
           (
             TableIR.globalName,
@@ -482,13 +485,12 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         ),
         FastSeq(classInfo[Region], LongInfo, LongInfo),
         LongInfo,
-        Let(
-          FastSeq(value.name -> valueIR),
+        bindIR(extracted.result) { value =>
           InsertFields(
             key,
-            tcoerce[TStruct](valueIR.typ).fieldNames.map(n => n -> GetField(value, n)),
-          ),
-        ),
+            tcoerce[TStruct](value.typ).fieldNames.map(n => n -> GetField(value, n)),
+          )
+        },
       )
 
     val resultType = typ.copy(rowType = rowType.virtualType)
@@ -778,12 +780,14 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
   def keyByAndAggregate(
     ctx: ExecuteContext,
     newKey: IR,
-    extracted: Aggs,
+    extracted: IndependentExtractedAggs,
     nPartitions: Option[Int],
     bufferSize: Int,
   ): TableValue = {
     val fsBc = ctx.fsBc
     val sm = ctx.stateManager
+
+    val aggSigs = extracted.sigs
 
     val (Some(PTypeReferenceSingleCodeType(localKeyPType: PStruct)), makeKeyF) =
       Compile[AsmFunction3RegionLongLongLong](
@@ -812,7 +816,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
 
     val (_, makeInit) = CompileWithAggregators[AsmFunction2RegionLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq((
         TableIR.globalName,
         SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(globals.t)),
@@ -824,7 +828,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
 
     val (_, makeSeq) = CompileWithAggregators[AsmFunction3RegionLongLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq(
         (
           TableIR.globalName,
@@ -843,19 +847,19 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     val (Some(PTypeReferenceSingleCodeType(rTyp: PStruct)), makeAnnotate) =
       CompileWithAggregators[AsmFunction2RegionLongLong](
         ctx,
-        extracted.states,
+        aggSigs.states,
         FastSeq((
           TableIR.globalName,
           SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(globals.t)),
         )),
         FastSeq(classInfo[Region], LongInfo),
         LongInfo,
-        Let(FastSeq(extracted.resultRef.name -> extracted.results), extracted.postAggIR),
+        extracted.result,
       )
 
-    val serialize = extracted.serialize(ctx, spec)
-    val deserialize = extracted.deserialize(ctx, spec)
-    val combOp = extracted.combOpFSerializedWorkersOnly(ctx, spec)
+    val serialize = aggSigs.serialize(ctx, spec)
+    val deserialize = aggSigs.deserialize(ctx, spec)
+    val combOp = aggSigs.combOpFSerializedWorkersOnly(ctx, spec)
 
     val hcl = theHailClassLoaderForSparkWorkers
     val tc = ctx.taskContext
@@ -1052,11 +1056,13 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     )
   }
 
-  def mapRows(extracted: Aggs): TableValue = {
+  def mapRows(extracted: IndependentExtractedAggs): TableValue = {
     val fsBc = ctx.fsBc
-    val newType = typ.copy(rowType = extracted.postAggIR.typ.asInstanceOf[TStruct])
+    val aggSigs = extracted.sigs
 
-    if (extracted.aggs.isEmpty) {
+    val newType = typ.copy(rowType = extracted.result.typ.asInstanceOf[TStruct])
+
+    if (aggSigs.isEmpty) {
       val (Some(PTypeReferenceSingleCodeType(rTyp)), f) =
         Compile[AsmFunction3RegionLongLongLong](
           ctx,
@@ -1073,12 +1079,12 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
           FastSeq(classInfo[Region], LongInfo, LongInfo),
           LongInfo,
           Coalesce(FastSeq(
-            extracted.postAggIR,
-            Die("Internal error: TableMapRows: row expression missing", extracted.postAggIR.typ),
+            extracted.result,
+            Die("Internal error: TableMapRows: row expression missing", extracted.result.typ),
           )),
         )
 
-      val rowIterationNeedsGlobals = Mentions(extracted.postAggIR, TableIR.globalName)
+      val rowIterationNeedsGlobals = Mentions(extracted.result, TableIR.globalName)
       val globalsBc =
         if (rowIterationNeedsGlobals)
           globals.broadcast(ctx.theHailClassLoader)
@@ -1098,7 +1104,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         it.map(ptr => newRow(ctx.r, globals, ptr))
       }
 
-      copy(
+      return copy(
         typ = newType,
         rvd = rvd.mapPartitionsWithIndex(RVDType(rTyp.asInstanceOf[PStruct], typ.key))(itF),
       )
@@ -1106,7 +1112,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
 
     val scanInitNeedsGlobals = Mentions(extracted.init, TableIR.globalName)
     val scanSeqNeedsGlobals = Mentions(extracted.seqPerElt, TableIR.globalName)
-    val rowIterationNeedsGlobals = Mentions(extracted.postAggIR, TableIR.globalName)
+    val rowIterationNeedsGlobals = Mentions(extracted.result, TableIR.globalName)
 
     val globalsBc =
       if (rowIterationNeedsGlobals || scanInitNeedsGlobals || scanSeqNeedsGlobals)
@@ -1124,21 +1130,19 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
 
     val (_, initF) = CompileWithAggregators[AsmFunction2RegionLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq((
         TableIR.globalName,
         SingleCodeEmitParamType(true, PTypeReferenceSingleCodeType(globals.t)),
       )),
       FastSeq(classInfo[Region], LongInfo),
       UnitInfo,
-      Begin(FastSeq(extracted.init)),
+      extracted.init,
     )
-
-    val serializeF = extracted.serialize(ctx, spec)
 
     val (_, eltSeqF) = CompileWithAggregators[AsmFunction3RegionLongLongUnit](
       ctx,
-      extracted.states,
+      aggSigs.states,
       FastSeq(
         (
           TableIR.globalName,
@@ -1154,14 +1158,14 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
       extracted.seqPerElt,
     )
 
-    val read = extracted.deserialize(ctx, spec)
-    val write = extracted.serialize(ctx, spec)
-    val combOpFNeedsPool = extracted.combOpFSerializedFromRegionPool(ctx, spec)
+    val read = aggSigs.deserialize(ctx, spec)
+    val write = aggSigs.serialize(ctx, spec)
+    val combOpFNeedsPool = aggSigs.combOpFSerializedFromRegionPool(ctx, spec)
 
     val (Some(PTypeReferenceSingleCodeType(rTyp)), f) =
       CompileWithAggregators[AsmFunction3RegionLongLongLong](
         ctx,
-        extracted.states,
+        aggSigs.states,
         FastSeq(
           (
             TableIR.globalName,
@@ -1174,13 +1178,10 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         ),
         FastSeq(classInfo[Region], LongInfo, LongInfo),
         LongInfo,
-        Let(
-          FastSeq(extracted.resultRef.name -> extracted.results),
-          Coalesce(FastSeq(
-            extracted.postAggIR,
-            Die("Internal error: TableMapRows: row expression missing", extracted.postAggIR.typ),
-          )),
-        ),
+        Coalesce(FastSeq(
+          extracted.result,
+          Die("Internal error: TableMapRows: row expression missing", extracted.result.typ),
+        )),
       )
 
     // 1. init op on all aggs and write out to initPath
@@ -1189,16 +1190,16 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         val init = initF(ctx.theHailClassLoader, fsBc.value, ctx.taskContext, fRegion)
         init.newAggState(aggRegion)
         init(fRegion, globals.value.offset)
-        serializeF(ctx.theHailClassLoader, ctx.taskContext, aggRegion, init.getAggOffset())
+        write(ctx.theHailClassLoader, ctx.taskContext, aggRegion, init.getAggOffset())
       }
     }
 
-    if (ctx.getFlag("distributed_scan_comb_op") != null && extracted.shouldTreeAggregate) {
-      val fsBc = ctx.fs.broadcast
+    if (ctx.getFlag("distributed_scan_comb_op") != null && extracted.sigs.shouldTreeAggregate) {
+      val fsBc = ctx.fsBc
       val tmpBase = ctx.createTmpPath("table-map-rows-distributed-scan")
       val d = digitsNeeded(rvd.getNumPartitions)
       val files = rvd.mapPartitionsWithIndex { (i, ctx, it) =>
-        val path = tmpBase + "/" + partFile(d, i, TaskContext.get)
+        val path = tmpBase + "/" + partFile(d, i, TaskContext.get())
         val globalRegion = ctx.freshRegion()
         val globals = if (scanSeqNeedsGlobals)
           globalsBc.value.readRegionValue(globalRegion, theHailClassLoaderForSparkWorkers)
@@ -1225,11 +1226,11 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         }
       }.collect()
 
-      val fileStack = new BoxedArrayBuilder[Array[String]]()
+      val fileStack = ArraySeq.newBuilder[IndexedSeq[String]]
       var filesToMerge: Array[String] = files
       while (filesToMerge.length > 1) {
         val nToMerge = filesToMerge.length / 2
-        log.info(s"Running distributed combine stage with $nToMerge tasks")
+        logger.info(s"Running distributed combine stage with $nToMerge tasks")
         fileStack += filesToMerge
 
         filesToMerge =
@@ -1240,7 +1241,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
             .cmapPartitions { (ctx, it) =>
               val i = it.next()
               assert(it.isEmpty)
-              val path = tmpBase + "/" + partFile(d, i, TaskContext.get)
+              val path = tmpBase + "/" + partFile(d, i, TaskContext.get())
               val file1 = filesToMerge(i * 2)
               val file2 = filesToMerge(i * 2 + 1)
 
@@ -1272,18 +1273,16 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         else
           0
         val partitionAggs = {
-          var j = 0
           var x = i
-          val ab = new BoxedArrayBuilder[String]
-          while (j < fileStack.length) {
-            assert(x <= fileStack(j).length)
+          val ab = ArraySeq.newBuilder[String]
+          fileStack.result().foreach { files =>
+            assert(x <= files.length)
             if (x % 2 != 0) {
               x -= 1
-              ab += fileStack(j)(x)
+              ab += files(x)
             }
             assert(x % 2 == 0)
             x = x / 2
-            j += 1
           }
           assert(x == 0)
           var b = initAgg
@@ -1320,7 +1319,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
         }
         res
       }
-      copy(
+      return copy(
         typ = newType,
         rvd = rvd.mapPartitionsWithIndex(RVDType(rTyp.asInstanceOf[PStruct], typ.key))(itF),
       )
@@ -1362,7 +1361,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
     using(ctx.fs.createNoCompression(scanAggsPerPartitionFile)) { os =>
       partAggs.zipWithIndex.foreach { case (x, i) =>
         if (i < scanAggCount) {
-          log.info(s"TableMapRows scan: serializing combined agg $i")
+          logger.info(s"TableMapRows scan: serializing combined agg $i")
           partitionIndices(i) = os.getPosition
           os.writeInt(x.length)
           os.write(x, 0, x.length)

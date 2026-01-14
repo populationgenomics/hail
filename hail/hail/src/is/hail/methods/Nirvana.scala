@@ -12,8 +12,8 @@ import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.variant.{Locus, RegionValueVariant}
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 import java.io.{FileInputStream, IOException}
 import java.util.Properties
@@ -22,7 +22,7 @@ import org.apache.spark.sql.Row
 import org.apache.spark.storage.StorageLevel
 import org.json4s.jackson.JsonMethods
 
-object Nirvana {
+object Nirvana extends Logging {
 
   // For Nirnava v2.0.8
 
@@ -410,7 +410,7 @@ object Nirvana {
 
     val rowKeyOrd = tv.typ.keyType.ordering(ctx.stateManager)
 
-    info("Running Nirvana")
+    logger.info("Running Nirvana")
 
     val prev = tv.rvd
 

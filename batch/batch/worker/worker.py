@@ -320,15 +320,17 @@ class NetworkAllocator:
         self.internet_interface = INTERNET_INTERFACE
 
     async def reserve(self):
-        public_ip_count = N_SLOTS + N_JVM_CONTAINERS
-        log.info(f'ipallocdebug: Reserving public ip addresses: {public_ip_count}')
-        for subnet_index in range(public_ip_count):
+        N_PUBLIC_INTERFACES = min(255, N_SLOTS + N_JVM_CONTAINERS)
+        log.info(f'ipallocdebug: Reserving public ip addresses: {N_PUBLIC_INTERFACES}')
+        for subnet_index in range(N_PUBLIC_INTERFACES):
             public = NetworkNamespace(subnet_index, private=False, internet_interface=self.internet_interface)
             await public.init()
             log.info(f'ipallocdebug: Adding public network: {public.network_ns_name} (subnet index: {subnet_index} job ip: {public.job_ip}, host ip {public.host_ip}) to list')
             self.public_networks.put_nowait(public)
-        log.info(f'ipallocdebug: Reserving private ip addresses: {N_SLOTS}')
-        for subnet_index in range(N_SLOTS):
+
+        N_PRIVATE_INTERFACES = min(255, N_SLOTS)
+        log.info(f'ipallocdebug: Reserving private ip addresses: {N_PRIVATE_INTERFACES}')
+        for subnet_index in range(N_PRIVATE_INTERFACES):
             private = NetworkNamespace(subnet_index, private=True, internet_interface=self.internet_interface)
 
             await private.init()
@@ -1445,7 +1447,8 @@ def copy_container(
     assert job.worker.fs is not None
 
     command = [
-        '/usr/bin/python3',
+        '/usr/bin/env',
+        'python3',
         '-m',
         'hailtop.aiotools.copy',
         json.dumps(requester_pays_project),
@@ -2549,11 +2552,8 @@ class JVMContainer:
             CLOUD, INSTANCE_CONFIG["machine_type"]
         )
         total_memory_bytes = int((n_cores / total_machine_cores) * total_machine_memory_bytes)
-        # We allocate 60% of memory per core to off heap memory
-
         memory_mib = total_memory_bytes // (1024**2)
-        heap_memory_mib = int(0.4 * memory_mib)
-        off_heap_memory_per_core_mib = memory_mib - heap_memory_mib
+        heap_memory_mib = int(0.9 * memory_mib)
 
         command = [
             'java',
@@ -2613,7 +2613,7 @@ class JVMContainer:
             cpu_in_mcpu=n_cores * 1000,
             memory_in_bytes=total_memory_bytes,
             user_credentials=None,
-            env=[f'HAIL_WORKER_OFF_HEAP_MEMORY_PER_CORE_MB={off_heap_memory_per_core_mib}', f'HAIL_CLOUD={CLOUD}'],
+            env=[f'HAIL_CLOUD={CLOUD}'],
             volume_mounts=volume_mounts,
             log_path=f'/batch/jvm-container-logs/jvm-{index}.log',
         )
@@ -2990,17 +2990,11 @@ class JVMPool:
         log.info(f'killed {jvm} and recreated a new jvm')
 
     async def create_jvm(self):
-        try:
-            log.info(f'JVMPool.create_jvm: {self.n_cores=}: {self.queue.qsize()=} {self.total_jvms_including_borrowed=} {self.max_jvms=}')
-            assert self.queue.qsize() < self.max_jvms
-            assert self.total_jvms_including_borrowed < self.max_jvms
-            self.queue.put_nowait(await JVM.create(JVMPool.global_jvm_index, self.n_cores, self.worker))
-            log.info(f'JVMPool.create_jvm: created JVM-{JVMPool.global_jvm_index} for {self.n_cores=}')
-            self.total_jvms_including_borrowed += 1
-            JVMPool.global_jvm_index += 1
-        except Exception:
-            log.error(f'JVMPool.create_jvm: create failed: {traceback.format_exc()}')
-            raise
+        assert self.queue.qsize() < self.max_jvms
+        assert self.total_jvms_including_borrowed < self.max_jvms
+        self.queue.put_nowait(await JVM.create(JVMPool.global_jvm_index, self.n_cores, self.worker))
+        self.total_jvms_including_borrowed += 1
+        JVMPool.global_jvm_index += 1
 
     def full(self) -> bool:
         return self.total_jvms_including_borrowed == self.max_jvms
@@ -3008,17 +3002,6 @@ class JVMPool:
     def __repr__(self):
         return f'JVMPool({self.queue!r}, {self.total_jvms_including_borrowed!r}, {self.max_jvms!r}, {self.n_cores!r})'
 
-def _jvm_initializer_task_callback(future: asyncio.Future):
-    # Check if cancelled, otherwise calling .exception will raise an exception
-    if future.cancelled():
-        return
-    exception = future.exception()
-    if exception is None:
-        log.info('JVM Initializer completed successfully')
-    else:
-        log.error(f'JVM Initializer failed with {type(exception)}')
-        dump = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
-        log.error(f'JVM Initializer failed with exception: {dump}')
 
 class Worker:
     def __init__(self):
@@ -3058,7 +3041,6 @@ class Worker:
         while True:
             try:
                 requested_n_cores = self._waiting_for_jvm_with_n_cores.get_nowait()
-                log.info(f'Worker._initialize_jvms woke up for {requested_n_cores=}')
                 if not self._jvmpools_by_cores[requested_n_cores].full():
                     await self._jvmpools_by_cores[requested_n_cores].create_jvm()
             except asyncio.QueueEmpty:
@@ -3070,16 +3052,10 @@ class Worker:
 
                 if next_unfull_jvmpool is None:
                     break
-                log.info(f'Worker._initialize_jvms hunted for {next_unfull_jvmpool.n_cores=}')
                 await next_unfull_jvmpool.create_jvm()
-                log.info(f'Worker._initialize_jvms after unfull JVM creation: {next_unfull_jvmpool!r}')
 
         assert self._waiting_for_jvm_with_n_cores.empty()
-        all_full = all(jvmpool.full() for jvmpool in self._jvmpools_by_cores.values())
-        if not all_full:
-            non_full_jvm_pools = ','.join([str(jvmpool) for jvmpool in self._jvmpools_by_cores.values() if not jvmpool.full()])
-            log.info(f'JVM Pools were not all full: {non_full_jvm_pools}')
-        assert all_full
+        assert all(jvmpool.full() for jvmpool in self._jvmpools_by_cores.values())
         log.info(f'JVMs initialized {self._jvmpools_by_cores}')
 
     @staticmethod
@@ -3094,27 +3070,18 @@ class Worker:
         if instance_config.worker_type() not in ('standard', 'D', 'highmem', 'E'):
             raise ValueError(f'no JVMs available on {instance_config.worker_type()}')
 
-        log.info(f'Worker.borrow_jvm {n_cores=}')
         jvmpool = self._jvmpools_by_cores[n_cores]
         try:
-            jj = jvmpool.borrow_jvm_nowait()
-            log.info(f'Borrowed {jj} without waiting')
-            return jj
+            return jvmpool.borrow_jvm_nowait()
         except asyncio.QueueEmpty:
-            log.info(f'QueueEmpty hence waiting to borrow: putting {n_cores} on queue')
             self._waiting_for_jvm_with_n_cores.put_nowait(n_cores)
-            log.info('Done put_nowait, awating JVMPool.borrow_jvm')
-            jj = await jvmpool.borrow_jvm()
-            log.info(f'Borrowed {jj} after a wait')
-            return jj
+            return await jvmpool.borrow_jvm()
 
     def return_jvm(self, jvm: JVM):
         jvm.reset()
-        log.info(f'Returning {jvm} after use')
         self._jvmpools_by_cores[jvm.n_cores].return_jvm(jvm)
 
     async def return_broken_jvm(self, jvm: JVM):
-        log.info(f'Returning borked {jvm} after use')
         return await self._jvmpools_by_cores[jvm.n_cores].return_broken_jvm(jvm)
 
     async def headers(self) -> Dict[str, str]:

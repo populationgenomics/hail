@@ -9,7 +9,7 @@ import java.io.DataOutputStream
 
 import org.json4s.jackson
 
-object MatrixWriteBlockMatrix {
+object MatrixWriteBlockMatrix extends Logging {
   def apply(
     ctx: ExecuteContext,
     mv: MatrixValue,
@@ -40,9 +40,9 @@ object MatrixWriteBlockMatrix {
 
     // write blocks
     fs.mkDir(path + "/parts")
-    val gp = GridPartitioner(blockSize, nRows, localNCols)
+    val gp = GridPartitioner(blockSize, nRows, localNCols.toLong)
     val blockPartFiles =
-      new WriteBlocksRDD(fs.broadcast, ctx.localTmpdir, path, rvd, partStarts, entryField, gp)
+      new WriteBlocksRDD(ctx.fsBc, ctx.localTmpdir, path, rvd, partStarts, entryField, gp)
         .collect()
 
     val blockCount = blockPartFiles.length
@@ -53,13 +53,21 @@ object MatrixWriteBlockMatrix {
     using(new DataOutputStream(fs.create(path + BlockMatrix.metadataRelativePath))) { os =>
       implicit val formats = defaultJSONFormats
       jackson.Serialization.write(
-        BlockMatrixMetadata(blockSize, nRows, localNCols, gp.partitionIndexToBlockIndex, partFiles),
+        BlockMatrixMetadata(
+          blockSize,
+          nRows,
+          localNCols.toLong,
+          gp.partitionIndexToBlockIndex,
+          partFiles,
+        ),
         os,
       )
     }
 
     assert(blockCount == gp.numPartitions)
-    info(s"Wrote all $blockCount blocks of $nRows x $localNCols matrix with block size $blockSize.")
+    logger.info(
+      s"Wrote all $blockCount blocks of $nRows x $localNCols matrix with block size $blockSize."
+    )
 
     using(fs.create(path + "/_SUCCESS"))(out => ())
   }

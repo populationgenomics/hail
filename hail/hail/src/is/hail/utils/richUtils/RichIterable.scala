@@ -1,6 +1,8 @@
 package is.hail.utils.richUtils
 
 import is.hail.utils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.{mutable, AbstractIterable}
 import scala.reflect.ClassTag
@@ -98,14 +100,9 @@ class RichIterable[T](val i: Iterable[T]) extends Serializable {
   def counter(): Map[T, Int] = {
     val m = new mutable.HashMap[T, Int]()
     i.foreach(elem => m.updateValue(elem, 0, _ + 1))
-
     m.toMap
   }
 
-  def toFastSeq(implicit tct: ClassTag[T]): IndexedSeq[T] =
-    i match {
-      case i: mutable.WrappedArray[T] => i
-      case i: mutable.ArrayBuffer[T] => i
-      case _ => i.toArray[T]
-    }
+  def toFastSeq(implicit tct: ClassTag[T]): ArraySeq[T] =
+    i.to(ArraySeq)
 }

@@ -100,7 +100,7 @@ final case class EArray(val elementType: EType, override val required: Boolean =
 
   override def _buildEncoder(cb: EmitCodeBuilder, v: SValue, out: Value[OutputBuffer]): Unit = {
     val ind = v.asInstanceOf[SIndexableValue]
-    buildPrefixEncoder(cb, ind, out, ind.loadLength())
+    buildPrefixEncoder(cb, ind, out, ind.loadLength)
   }
 
   override def _buildDecoder(
@@ -216,9 +216,9 @@ final case class EArray(val elementType: EType, override val required: Boolean =
   def _toPretty = s"EArray[$elementType]"
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("EArray[")
+    sb ++= "EArray["
     elementType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   def setRequired(newRequired: Boolean): EArray = EArray(elementType, newRequired)

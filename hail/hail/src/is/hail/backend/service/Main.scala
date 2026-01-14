@@ -1,5 +1,7 @@
 package is.hail.backend.service
 
+import is.hail.backend.driver.BatchQueryDriver
+
 import com.fasterxml.jackson.core.StreamReadConstraints
 
 object Main {
@@ -15,11 +17,12 @@ object Main {
     StreamReadConstraints.builder().maxStringLength(Integer.MAX_VALUE).build()
   )
 
+  is.hail.linalg.registerImplOpMulMatrix_DMD_DVD_eq_DVD
+
   def main(argv: Array[String]): Unit =
     argv(3) match {
       case WORKER => Worker.main(argv)
-      case DRIVER => ServiceBackendAPI.main(argv)
-
+      case DRIVER => BatchQueryDriver.main(argv)
       // Batch's "JvmJob" is a special kind of job that can only call `Main.main`.
       // TEST is used for integration testing the `BatchClient` to verify that we
       // can create JvmJobs without having to mock the payload to a `Worker` job.

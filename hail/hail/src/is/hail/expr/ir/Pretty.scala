@@ -8,9 +8,11 @@ import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.RelationalFunctions
 import is.hail.types.virtual.{MatrixType, TArray, TInterval, TStream, TableType, Type}
 import is.hail.utils.{space => _, _}
+import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.utils.prettyPrint._
 import is.hail.utils.richUtils.RichIterable
 
+import scala.collection.compat._
 import scala.collection.mutable
 
 import org.json4s.DefaultFormats
@@ -170,7 +172,7 @@ class Pretty(
           case None => text(Pretty.prettyClass(state)) +: state.t.view.map(typ =>
               text(typ.canonicalPType.toString)
             )
-          case Some(nested) => text(Pretty.prettyClass(state)) +: state.t.view.map(typ =>
+          case Some(nested) => text(Pretty.prettyClass(state)) +: state.t.map(typ =>
               text(typ.canonicalPType.toString)
             ) :+ prettyAggStateSignatures(nested)
         })
@@ -196,8 +198,8 @@ class Pretty(
   def single(d: Doc): Iterable[Doc] = RichIterable.single(d)
 
   def header(ir: BaseIR, elideBindings: Boolean = false): Iterable[Doc] = ir match {
-    case ApplyAggOp(_, _, aggSig) => single(Pretty.prettyClass(aggSig.op))
-    case ApplyScanOp(_, _, aggSig) => single(Pretty.prettyClass(aggSig.op))
+    case ApplyAggOp(_, _, op) => single(Pretty.prettyClass(op))
+    case ApplyScanOp(_, _, op) => single(Pretty.prettyClass(op))
     case InitOp(i, _, aggSig) => FastSeq(i.toString, prettyPhysicalAggSig(aggSig))
     case SeqOp(i, _, aggSig) => FastSeq(i.toString, prettyPhysicalAggSig(aggSig))
     case CombOp(i1, i2, aggSig) => FastSeq(i1.toString, i2.toString, prettyPhysicalAggSig(aggSig))
@@ -350,7 +352,9 @@ class Pretty(
           joinType,
         )
     case StreamLeftIntervalJoin(_, _, lKeyFieldName, rIntrvlName, lEltName, rEltName, _) =>
-      val builder = new BoxedArrayBuilder[Doc](if (elideBindings) 2 else 4)
+      val builder = ArraySeq.newBuilder[Doc]
+      builder.sizeHint(if (elideBindings) 2 else 4)
+
       builder += prettyIdentifier(lKeyFieldName)
       builder += prettyIdentifier(rIntrvlName)
 
@@ -359,7 +363,7 @@ class Pretty(
         builder += prettyName(rEltName)
       }
 
-      builder.underlying()
+      builder.result()
     case StreamFor(_, valueName, _) if !elideBindings => single(prettyName(valueName))
     case StreamAgg(_, name, _) if !elideBindings => single(prettyName(name))
     case StreamAggScan(_, name, _) if !elideBindings => single(prettyName(name))
@@ -621,7 +625,6 @@ class Pretty(
       )
     case RelationalLetTable(name, _, _) => single(prettyName(name))
     case RelationalLetMatrixTable(name, _, _) => single(prettyName(name))
-    case RelationalLetBlockMatrix(name, _, _) => single(prettyName(name))
     case ReadPartition(_, rowType, reader) =>
       FastSeq(rowType.parsableString(), prettyStringLiteral(JsonMethods.compact(reader.toJValue)))
     case WritePartition(_, _, writer) =>
@@ -941,12 +944,8 @@ class Pretty(
         val (valueDoc, valueIdent) = prettyWithIdent(value, bindings, "%", Some(name))
         val (bodyPre, bodyHead) = pretty(body, bindings.bind(name, valueIdent))
         (concat(valueDoc, bodyPre), bodyHead)
-      case RelationalLetBlockMatrix(name, value, body) =>
-        val (valueDoc, valueIdent) = prettyWithIdent(value, bindings, "%", Some(name))
-        val (bodyPre, bodyHead) = pretty(body, bindings.bind(name, valueIdent))
-        (concat(valueDoc, bodyPre), bodyHead)
       case _ =>
-        val strictChildBodies = mutable.ArrayBuilder.make[Doc]()
+        val strictChildBodies = mutable.ArrayBuilder.make[Doc]
         val strictChildIdents = for {
           (child, i) <- ir.children.zipWithIndex
           if childIsStrict(ir, i)
@@ -983,12 +982,12 @@ class Pretty(
 
         val head = ir match {
           case MakeStruct(fields) =>
-            val args = (fields.map(_._1), strictChildIdents).zipped.map { (field, value) =>
+            val args = fields.map(_._1).lazyZip(strictChildIdents).map { (field, value) =>
               s"$field: $value"
             }.mkString("(", ", ", ")")
             hsep(text(Pretty.prettyClass(ir) + args) +: (attributes ++ nestedBlocks))
           case InsertFields(_, fields, _) =>
-            val newFields = (fields.map(_._1), strictChildIdents.tail).zipped.map {
+            val newFields = fields.map(_._1).lazyZip(strictChildIdents.tail).map {
               (field, value) => s"$field: $value"
             }.mkString("(", ", ", ")")
             val args = s" ${strictChildIdents.head} $newFields"

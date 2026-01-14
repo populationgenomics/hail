@@ -4,7 +4,7 @@ import is.hail.expr.Parser
 import is.hail.utils._
 
 import scala.annotation.switch
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 import java.io.Serializable
 
@@ -343,19 +343,17 @@ object Call extends Serializable {
         if (phased)
           throw new UnsupportedOperationException("VCF spec does not support phased haploid calls.")
         else
-          sb.append(alleleByIndex(c, 0))
+          sb ++= alleleByIndex(c, 0).toString
       case 2 =>
         val p = allelePair(c)
-        sb.append(AllelePair.j(p))
-        sb.append(sep)
-        sb.append(AllelePair.k(p))
+        sb ++= AllelePair.j(p).toString ++= sep ++= AllelePair.k(p).toString: Unit
       case _ =>
         var i = 0
         val nAlleles = ploidy(c)
         while (i < nAlleles) {
-          sb.append(alleleByIndex(c, i))
+          sb ++= alleleByIndex(c, i).toString
           if (i != nAlleles - 1)
-            sb.append(sep)
+            sb ++= sep
           i += 1
         }
     }

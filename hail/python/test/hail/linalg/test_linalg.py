@@ -496,6 +496,25 @@ def test_block_matrix_elementwise_arithmetic(block_matrix_bindings, x, y):
 
 @pytest.mark.parametrize(
     'x, y',
+    [
+        (
+            np.array([[7.0], [15.0], [19.0]]),
+            np.array([[7.0, 8.0, 9.0]]),
+        ),
+        (
+            np.array([[7.0, 8.0, 9.0]]),
+            np.array([[7.0], [15.0], [19.0]]),
+        ),
+    ],
+)
+def test_sparse_broadcast_add(x, y):
+    bmx = BlockMatrix.from_ndarray(x, block_size=2)._sparsify_blocks([0, 1])
+    bmy = BlockMatrix.from_ndarray(y, block_size=2)
+    _assert_eq(bmx + bmy, x + y)
+
+
+@pytest.mark.parametrize(
+    'x, y',
     [  # division
         ('x / e', 'nx / e'),
         ('c / e', 'nc / e'),
@@ -577,21 +596,12 @@ def test_matrix_sums(block_matrix_bindings, x, y):
     _assert_eq(lhs, rhs)
 
 
-@fails_service_backend()
-@fails_local_backend()
 @pytest.mark.parametrize(
     'x, y',
     [
-        ('s.sum(axis=0).T', 'np.array([[9.0], [10.0], [10.0], [12.0]])'),
-        ('s.sum(axis=1).T', 'np.array([[7.0, 15.0, 19.0]])'),
-        (
-            's.sum(axis=0).T + row',
-            'np.array([[16.0, 17.0, 18.0],[17.0, 18.0, 19.0],[17.0, 18.0, 19.0],[19.0, 20.0, 21.0]])',
-        ),
-        (
-            's.sum(axis=0) + row.T',
-            'np.array([[16.0, 17.0, 17.0, 19.0],[17.0, 18.0, 18.0, 20.0],[18.0, 19.0, 19.0, 21.0]])',
-        ),
+        ('s.sum()', '41.0'),
+        ('s.sum(axis=0)', 'np.array([[9.0, 10.0, 10.0, 12.0]])'),
+        ('s.sum(axis=1)', 'np.array([[7.0], [15.0], [19.0]])'),
     ],
 )
 def test_sparse_matrix_sums(block_matrix_bindings, x, y):
@@ -1386,3 +1396,11 @@ def test_write_from_entry_expr_simple():
         BlockMatrix.write_from_entry_expr(mt.x, path, block_size=32)
         actual = hl.eval(BlockMatrix.read(path).to_ndarray())
         assert np.array_equal(expected, actual)
+
+
+def test_write_block_matrix_with_block_size_eq_n_cols():
+    n_cols = 10
+    mt = hl.utils.range_matrix_table(10, n_cols)
+    mt = mt.annotate_entries(x=mt.row_idx * mt.col_idx)
+    bm = hl.linalg.BlockMatrix.from_entry_expr(mt.x, block_size=n_cols)
+    assert bm.shape == bm.to_numpy().shape

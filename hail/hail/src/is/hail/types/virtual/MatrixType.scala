@@ -155,52 +155,38 @@ case class MatrixType(
   )
 
   def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
-    var indent = indent0
 
     val space: String = if (compact) "" else " "
+    val newline: String = if (compact) "" else "\n"
+    val padding: String = if (compact) "" else "\n" + (" " * indent0)
 
-    def newline(): Unit =
-      if (!compact) {
-        sb += '\n'
-        sb.append(" " * indent)
-      }
+    val indent = indent0 + 4
 
-    sb.append(s"Matrix$space{")
-    indent += 4
-    newline()
+    sb ++= "Matrix" ++= space += '{' ++= newline: Unit
 
-    sb.append(s"global:$space")
+    sb ++= padding ++= "global:" ++= space: Unit
     globalType.pretty(sb, indent, compact)
-    sb += ','
-    newline()
+    sb += ',' ++= newline: Unit
 
-    sb.append(s"col_key:$space[")
-    colKey.foreachBetween(k => sb.append(prettyIdentifier(k)))(sb.append(s",$space"))
-    sb += ']'
-    sb += ','
-    newline()
+    sb ++= padding ++= "col_key:" ++= space += '[': Unit
+    colKey.foreachBetween(k => sb ++= prettyIdentifier(k))(sb += ',' ++= space: Unit)
+    sb ++= "]," ++= newline: Unit
 
-    sb.append(s"col:$space")
+    sb ++= padding ++= "col:" ++= space: Unit
     colType.pretty(sb, indent, compact)
-    sb += ','
-    newline()
+    sb += ',' ++= newline: Unit
 
-    sb.append(s"row_key:$space[[")
-    rowKey.foreachBetween(k => sb.append(prettyIdentifier(k)))(sb.append(s",$space"))
-    sb ++= "]]"
-    sb += ','
-    newline()
+    sb ++= padding ++= "row_key:" ++= space ++= "[[": Unit
+    rowKey.foreachBetween(k => sb ++= prettyIdentifier(k))(sb += ',' ++= space: Unit)
+    sb ++= "]]," ++= newline: Unit
 
-    sb.append(s"row:$space")
+    sb ++= padding ++= "row:" ++= space: Unit
     rowType.pretty(sb, indent, compact)
-    sb += ','
-    newline()
+    sb += ',' ++= newline: Unit
 
-    sb.append(s"entry:$space")
+    sb ++= padding ++= "entry:" ++= space: Unit
     entryType.pretty(sb, indent, compact)
-
-    indent -= 4
-    newline()
+    sb ++= newline
     sb += '}'
   }
 

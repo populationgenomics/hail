@@ -7,6 +7,8 @@ import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils.Interval
 
+import scala.collection.compat._
+
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions.GenericRow
 import org.scalacheck.{Arbitrary, Gen}
@@ -15,8 +17,8 @@ import org.scalacheck.Gen._
 
 private[scalacheck] trait GenVal {
 
-  def genNonMissing(ctx: ExecuteContext, typ: Type): Gen[An] =
-    genVal(ctx, PType.canonical(typ, required = true, innerRequired = true))
+  def genNonMissing(ctx: ExecuteContext, typ: Type, innerRequired: Boolean = true): Gen[An] =
+    genVal(ctx, PType.canonical(typ, required = true, innerRequired = innerRequired))
 
   def genNullable(ctx: ExecuteContext, typ: Type): Gen[An] =
     genVal(ctx, PType.canonical(typ))
@@ -36,7 +38,7 @@ private[scalacheck] trait GenVal {
         case t: PBaseStruct =>
           for {
             sizes <- partition(t.types.length)
-            values <- sequence((sizes, t.types).zipped.map { case (s, t) =>
+            values <- sequence(sizes.lazyZip(t.types).map { case (s, t) =>
               resize(s, genVal(ctx, t))
             })
           } yield new GenericRow(values)
@@ -85,8 +87,8 @@ private[scalacheck] trait GenVal {
   def genNullableT[A <: Null](ctx: ExecuteContext, typ: Type): Gen[A] =
     genNullable(ctx, typ).asInstanceOf[Gen[A]]
 
-  def genNonMissingT[A](ctx: ExecuteContext, typ: Type): Gen[A] =
-    genNonMissing(ctx, typ).asInstanceOf[Gen[A]]
+  def genNonMissingT[A](ctx: ExecuteContext, typ: Type, innerRequired: Boolean = true): Gen[A] =
+    genNonMissing(ctx, typ, innerRequired).asInstanceOf[Gen[A]]
 
   def genTypeVal[T <: Type: Arbitrary](ctx: ExecuteContext): Gen[(T, An)] =
     genTypeValImpl[T](genNullable(ctx, _))

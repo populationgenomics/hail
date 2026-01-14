@@ -6,7 +6,7 @@ import is.hail.types.physical.{
   PFloat64, PInt32, PInt64, PType,
 }
 import is.hail.types.virtual._
-import is.hail.utils.{Interval, _}
+import is.hail.utils._
 import is.hail.variant._
 
 import scala.collection.mutable
@@ -74,11 +74,11 @@ case class JSONExtractContig(name: String, length: Int)
 
 case class JSONExtractReferenceGenome(
   name: String,
-  contigs: Array[JSONExtractContig],
+  contigs: IndexedSeq[JSONExtractContig],
   xContigs: Set[String],
   yContigs: Set[String],
   mtContigs: Set[String],
-  par: Array[JSONExtractIntervalLocus],
+  par: IndexedSeq[JSONExtractIntervalLocus],
 ) {
 
   def toReferenceGenome: ReferenceGenome = ReferenceGenome(
@@ -92,7 +92,7 @@ case class JSONExtractReferenceGenome(
   )
 }
 
-object JSONAnnotationImpex {
+object JSONAnnotationImpex extends Logging {
   implicit val serializationFormats: json4s.Formats = Serialization.formats(NoTypeHints)
 
   def exportType(t: Type): Type = t
@@ -131,7 +131,7 @@ object JSONAnnotationImpex {
         case TBoolean => JBool(a.asInstanceOf[Boolean])
         case TInt32 => JInt(a.asInstanceOf[Int])
         case TInt64 => JInt(a.asInstanceOf[Long])
-        case TFloat32 => JDouble(a.asInstanceOf[Float])
+        case TFloat32 => JDouble(a.asInstanceOf[Float].toDouble)
         case TFloat64 => JDouble(a.asInstanceOf[Double])
         case TString => JString(a.asInstanceOf[String])
         case TVoid =>
@@ -143,13 +143,15 @@ object JSONAnnotationImpex {
           val arr = a.asInstanceOf[Set[Any]]
           JArray(arr.map(elem => exportAnnotation(elem, elementType)).toList)
         case TDict(keyType, valueType) =>
-          val m = a.asInstanceOf[Map[_, _]]
-          JArray(m.map { case (k, v) =>
-            JObject(
-              "key" -> exportAnnotation(k, keyType),
-              "value" -> exportAnnotation(v, valueType),
-            )
-          }.toList)
+          a match {
+            case m: Map[_, _] =>
+              JArray(m.map { case (k, v) =>
+                JObject(
+                  "key" -> exportAnnotation(k, keyType),
+                  "value" -> exportAnnotation(v, valueType),
+                )
+              }.toList)
+          }
         case TCall => JString(Call.toString(a.asInstanceOf[Call]))
         case TLocus(_) => a.asInstanceOf[Locus].toJSON
         case TInterval(pointType) => a.asInstanceOf[Interval].toJSON(pointType.export)
@@ -207,7 +209,7 @@ object JSONAnnotationImpex {
       importAnnotationInternal(jv, t, parent, padNulls, warnContext)
     def warnOnce(msg: String, path: String): Unit =
       if (!warnContext.contains(path)) {
-        warn(msg)
+        logger.warn(msg)
         warnContext += path
       }
 

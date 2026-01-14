@@ -12,37 +12,30 @@ import is.hail.shadedazure.com.azure.storage.blob.models.{
   BlobItem, BlobRange, BlobStorageException, ListBlobsOptions,
 }
 import is.hail.shadedazure.com.azure.storage.blob.specialized.BlockBlobClient
-import is.hail.utils.FastSeq
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.jdk.CollectionConverters._
 
-import java.io.{ByteArrayOutputStream, FileNotFoundException, OutputStream}
+import java.io.{FileNotFoundException, OutputStream}
 import java.nio.file.{Path, Paths}
 import java.time.Duration
 
 class AzureStorageFSURL(
   val account: String,
   val container: String,
-  val path: String,
+  override val path: String,
   val sasToken: Option[String],
-) extends FSURL {
+) extends FSURL[AzureStorageFSURL] {
 
-  def addPathComponent(c: String): AzureStorageFSURL =
-    if (path == "")
-      withPath(c)
-    else
-      withPath(s"$path/$c")
-
-  def fromString(s: String): AzureStorageFSURL = AzureStorageFS.parseUrl(s)
+  override def /(c: String): AzureStorageFSURL =
+    if (path == "") withPath(c)
+    else withPath(s"$path/$c")
 
   def withPath(newPath: String): AzureStorageFSURL =
     new AzureStorageFSURL(account, container, newPath, sasToken)
 
   def prefix: String = s"https://$account.blob.core.windows.net/$container"
-
-  def getPath: String = path
 
   def base: String = {
     val pathPart = if (path == "") "" else s"/$path"
@@ -59,8 +52,8 @@ object AzureStorageFS {
   private val AZURE_HTTPS_URI_REGEX =
     "^https:\\/\\/([a-z0-9_\\-\\.]+)\\.blob\\.core\\.windows\\.net\\/([a-z0-9_\\-\\.]+)(\\/.*)?".r
 
-  val RequiredOAuthScopes: IndexedSeq[String] =
-    FastSeq("https://storage.azure.com/.default")
+  val RequiredOAuthScopes: Array[String] =
+    Array("https://storage.azure.com/.default")
 
   def parseUrl(filename: String): AzureStorageFSURL = {
     AZURE_HTTPS_URI_REGEX
@@ -152,13 +145,11 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
 
   override def validUrl(filename: String): Boolean =
     try {
-      parseUrl(filename)
+      parseUrl(filename): Unit
       true
     } catch {
       case _: IllegalArgumentException => false
     }
-
-  def urlAddPathComponent(url: URL, component: String): URL = url.addPathComponent(component)
 
   def getConfiguration(): Unit = ()
 
@@ -204,8 +195,10 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
 
     val is: SeekableInputStream = new FSSeekableInputStream {
       val bbOS = new OutputStream {
-        override def write(b: Array[Byte]): Unit = bb.put(b)
-        override def write(b: Int): Unit = bb.put(b.toByte)
+        override def write(b: Array[Byte]): Unit =
+          bb.put(b): Unit
+        override def write(b: Int): Unit =
+          bb.put(b.toByte): Unit
       }
 
       override def physicalSeek(newPos: Long): Unit = ()
@@ -213,7 +206,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
       override def fill(): Int = {
         val pos = getPosition
         val numBytesRemainingInBlob = blobSize - pos
-        val count = Math.min(numBytesRemainingInBlob, bb.capacity())
+        val count = Math.min(numBytesRemainingInBlob, bb.capacity().toLong)
         if (count <= 0) {
           return -1
         }
@@ -245,22 +238,6 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     new WrappedSeekableDataInputStream(is)
   }
 
-  override def readNoCompression(url: URL): Array[Byte] = handlePublicAccessError(url) {
-    val client = getBlobClient(url)
-    val size = client.getProperties.getBlobSize
-    if (size < 2 * 1024 * 1024 * 1024) { // https://learn.microsoft.com/en-us/java/api/com.azure.storage.blob.specialized.blobclientbase?view=azure-java-stable#com-azure-storage-blob-specialized-blobclientbase-downloadcontent()
-      retryTransientErrors {
-        client.downloadContent().toBytes()
-      }
-    } else {
-      val baos = new ByteArrayOutputStream()
-      retryTransientErrors {
-        client.downloadStream(baos)
-      }
-      baos.toByteArray()
-    }
-  }
-
   def createNoCompression(url: URL): PositionedDataOutputStream = retryTransientErrors {
     val blockBlobClient = getBlobClient(url).getBlockBlobClient
 
@@ -269,13 +246,13 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
       private[this] val blobOutputStream = client.getBlobOutputStream(true)
 
       override def flush(): Unit = {
-        bb.flip()
+        bb.flip(): Unit
 
         if (bb.limit() > 0) {
           blobOutputStream.write(bb.array(), 0, bb.limit())
         }
 
-        bb.clear()
+        bb.clear(): Unit
       }
 
       override def close(): Unit = {
@@ -356,12 +333,12 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
   }
 
   override def fileListEntry(url: URL): FileListEntry = {
-    if (url.getPath == "")
+    if (url.path == "")
       return AzureStorageFileListEntry.dir(url)
 
     val it = {
       val containerClient = getContainerClient(url)
-      val options = new ListBlobsOptions().setPrefix(dropTrailingSlash(url.getPath))
+      val options = new ListBlobsOptions().setPrefix(dropTrailingSlash(url.path))
       val prefixMatches = containerClient.listBlobsByHierarchy("/", options, timeout)
       prefixMatches.iterator()
     }.asScala.map(AzureStorageFileListEntry.apply(url, _))
@@ -375,7 +352,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     }
 
   def makeQualified(filename: String): String = {
-    parseUrl(filename)
+    parseUrl(filename): Unit
     filename
   }
 }

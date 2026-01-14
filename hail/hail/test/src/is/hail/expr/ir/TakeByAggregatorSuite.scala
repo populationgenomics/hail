@@ -9,11 +9,13 @@ import is.hail.types.physical._
 import is.hail.types.physical.stypes.primitives.SInt32Value
 import is.hail.utils._
 
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.Test
 
 class TakeByAggregatorSuite extends HailSuite {
   @Test def testPointers(): Unit = {
-    for ((size, n) <- Array((1000, 100), (1, 10), (100, 10000), (1000, 10000))) {
+    forAll(Array((1000, 100), (1, 10), (100, 10000), (1000, 10000))) { case (size, n) =>
       val fb = EmitFunctionBuilder[Region, Long](ctx, "test_pointers")
       val cb = fb.ecb
       val stringPT = PCanonicalString(true)
@@ -88,8 +90,8 @@ class TakeByAggregatorSuite extends HailSuite {
     }
   }
 
-  @Test def testRandom(): Unit = {
-    for (n <- Array(1, 2, 10, 100, 1000, 10000, 100000, 1000000)) {
+  @Test def testRandom(): Unit =
+    forAll(Array(1, 2, 10, 100, 1000, 10000, 100000, 1000000)) { n =>
       val nToTake = 1025
       val fb = EmitFunctionBuilder[Region, Long](ctx, "take_by_test_random")
       val kb = fb.ecb
@@ -137,5 +139,4 @@ class TakeByAggregatorSuite extends HailSuite {
         assert(pq == minValues, s"n=$n")
       }
     }
-  }
 }

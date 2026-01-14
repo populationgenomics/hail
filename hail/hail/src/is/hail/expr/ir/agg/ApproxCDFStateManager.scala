@@ -6,6 +6,8 @@ import is.hail.expr.ir.{DoubleArrayBuilder, IntArrayBuilder, LongArrayBuilder}
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical.{PCanonicalArray, PCanonicalStruct, PFloat64, PInt32}
 import is.hail.utils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 
 object ApproxCDFHelper {
   def sort(a: Array[Double], begin: Int, end: Int): Unit = java.util.Arrays.sort(a, begin, end)
@@ -207,11 +209,11 @@ class ApproxCDFCombiner(
 
   def capacity = items.length
 
-  def n: Int = {
-    var n = 0
+  def n: Long = {
+    var n: Long = 0
     var i = 0
     while (i < numLevels) {
-      n += (levels(i + 1) - levels(i)) << i
+      n += (levels(i + 1) - levels(i)).toLong << i
       i += 1
     }
     n
@@ -471,11 +473,12 @@ class ApproxCDFCombiner(
   }
 
   def computeCDF(): (Array[Double], Array[Long]) = {
-    val builder: BoxedArrayBuilder[(Long, Double)] = new BoxedArrayBuilder(size)
+    val builder = ArraySeq.newSortedByBuilder[(Long, Double)](_._2)
+    builder.sizeHint(size)
 
     var level = 0
     while (level < numLevels) {
-      val weight: Long = 1 << level
+      val weight: Long = 1L << level
       var i = levels(level)
       while (i < levels(level + 1)) {
         builder += (weight -> items(i))
@@ -484,7 +487,7 @@ class ApproxCDFCombiner(
       level += 1
     }
 
-    val sorted = builder.result().sortBy(_._2)
+    val sorted = builder.result()
 
     val values = new DoubleArrayBuilder(16)
     val ranks = new LongArrayBuilder(16)
@@ -538,7 +541,7 @@ object ApproxCDFStateManager {
       val newItems = Array.ofDim[Double](minCapacity)
       val offset = newItems.length - items.length
       System.arraycopy(items, 0, newItems, offset, items.length)
-      paddedLevels.transform(_ + offset)
+      paddedLevels.transform(_ + offset): Unit
       newItems
     } else items
     val combiner: ApproxCDFCombiner = new ApproxCDFCombiner(
@@ -616,7 +619,7 @@ class ApproxCDFStateManager(val k: Int, var combiner: ApproxCDFCombiner) {
 
   def levelsCapacity = combiner.maxNumLevels
 
-  def n: Int = combiner.n
+  def n: Long = combiner.n
 
   private[agg] def capacity: Int = combiner.capacity
 
@@ -706,7 +709,7 @@ class ApproxCDFStateManager(val k: Int, var combiner: ApproxCDFCombiner) {
     val level = findFullLevel()
     if (level == numLevels - 1) growSketch()
 
-    combiner.compactLevel(level)
+    combiner.compactLevel(level): Unit
   }
 
   /* If we are following the eager compacting strategy, level 0 must be full when starting a
@@ -726,7 +729,7 @@ class ApproxCDFStateManager(val k: Int, var combiner: ApproxCDFCombiner) {
         assert(combiner.capacity >= computeTotalCapacity(numLevels + 1))
         grew = true
       }
-      combiner.compactLevel(level)
+      combiner.compactLevel(level): Unit
       desiredFreeCapacity += levelCapacity(level)
       level += 1
     } while (levels(level) < desiredFreeCapacity && !grew)

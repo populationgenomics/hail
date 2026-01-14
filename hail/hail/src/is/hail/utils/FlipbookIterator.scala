@@ -1,9 +1,12 @@
 package is.hail.utils
 
-import scala.collection.GenTraversableOnce
-import scala.collection.generic.Growable
-import scala.collection.mutable.PriorityQueue
+import is.hail.utils.compat.mutable.Growable
+
+import scala.collection.{mutable, BufferedIterator}
+import scala.collection.compat._
 import scala.reflect.ClassTag
+
+import org.typelevel.scalaccompat.annotation.nowarn213
 
 /** A StateMachine has the same primary interface as FlipbookIterator, but the implementations are
   * not expected to be checked (for instance, value does not need to assert isValid). The only
@@ -90,23 +93,24 @@ object FlipbookIterator {
   def multiZipJoin[A: ClassTag](
     its: Array[FlipbookIterator[A]],
     ord: (A, A) => Int,
-  ): FlipbookIterator[BoxedArrayBuilder[(A, Int)]] = {
+  ): FlipbookIterator[collection.IndexedSeq[(A, Int)]] = {
     object TmpOrd extends Ordering[(A, Int)] {
       def compare(x: (A, Int), y: (A, Int)): Int = ord(y._1, x._1)
     }
-    val sm = new StateMachine[BoxedArrayBuilder[(A, Int)]] {
-      val q: PriorityQueue[(A, Int)] = new PriorityQueue()(TmpOrd)
-      val value = new BoxedArrayBuilder[(A, Int)](its.length)
+    val sm = new StateMachine[collection.IndexedSeq[(A, Int)]] {
+      val q: mutable.PriorityQueue[(A, Int)] = new mutable.PriorityQueue()(TmpOrd)
+      val value = mutable.ArrayBuffer.empty[(A, Int)]
+      value.sizeHint(its.length)
       var isValid = true
 
-      var i = 0;
+      var i = 0
       while (i < its.length) {
         if (its(i).isValid) q.enqueue(its(i).value -> i)
         i += 1
       }
 
       def advance(): Unit = {
-        var i = 0;
+        var i = 0
         while (i < value.length) {
           val j = value(i)._2
           its(j).advance()
@@ -179,18 +183,19 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
     }
   )
 
-  override def flatMap[B](f: A => GenTraversableOnce[B]): FlipbookIterator[B] =
+  @nowarn213("msg=GenTraversableOnce in package collection is deprecated")
+  override def flatMap[B](f: A => scala.collection.GenTraversableOnce[B]): FlipbookIterator[B] =
     FlipbookIterator(
       new StateMachine[B] {
         var it: FlipbookIterator[B] = _
         if (self.isValid) it = f(self.value).toIterator.toFlipbookIterator
-        findNextValid
+        findNextValid()
         def value: B = it.value
         def isValid = self.isValid
 
         def advance(): Unit = {
           it.advance()
-          findNextValid
+          findNextValid()
         }
 
         def findNextValid(): Unit =
@@ -211,7 +216,7 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
     def calculateValidity: Boolean
     def value: A
     def advance(): Unit
-    refreshValidity
+    refreshValidity()
   }
 
   def staircased(ord: OrderingView[A]): StagingIterator[FlipbookIterator[A]] = {
@@ -221,7 +226,7 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
       def calculateValidity: Boolean = self.isValid && ord.isEquivalent(self.value)
       def advance() = {
         self.advance()
-        refreshValidity
+        refreshValidity()
       }
     }
     val stepIterator: FlipbookIterator[A] = FlipbookIterator(stepSM)
@@ -232,10 +237,10 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
         stepIterator.exhaust()
         if (self.isValid) {
           ord.setValue(self.value)
-          stepSM.refreshValidity
+          stepSM.refreshValidity()
         } else {
           ord.setBottom()
-          stepSM.refreshValidity
+          stepSM.refreshValidity()
           isValid = false
         }
       }
@@ -286,12 +291,10 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
             return
           }
         }
-        if (c == 0)
-          value.set(left.consume(), right.consume())
-        else if (c < 0)
-          value.set(left.consume(), rightDefault)
-        else // c > 0
-          value.set(leftDefault, right.consume())
+
+        if (c == 0) value.set(left.consume(), right.consume())
+        else if (c < 0) value.set(left.consume(), rightDefault)
+        else value.set(leftDefault, right.consume())
       }
     }
 
@@ -326,18 +329,18 @@ abstract class FlipbookIterator[A] extends BufferedIterator[A] { self =>
       val value = Muple(leftDefault, rightDefault)
       var isValid = true
       def setValue(): Unit = {
-        if (!left.isValid)
-          isValid = false
-        else {
+        isValid = left.isValid && {
           var c = 0
           while (right.isValid && { c = mixedOrd(left.value, right.value); c > 0 })
             right.advance()
-          if (!right.isValid || c < 0)
-            value.set(left.value, rightDefault)
-          else // c == 0
-            value.set(left.value, right.value)
+
+          if (!right.isValid || c < 0) value.set(left.value, rightDefault)
+          else value.set(left.value, right.value)
+
+          true
         }
       }
+
       def advance(): Unit = {
         left.advance()
         setValue()

@@ -3,12 +3,15 @@ package is.hail.utils
 import is.hail.scalacheck._
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
 import org.scalacheck.Arbitrary._
 import org.scalacheck.Gen
 import org.scalacheck.Gen._
+import org.scalatest
 import org.scalatest.matchers.should.Matchers._
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
@@ -25,8 +28,8 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
     assert(bh.contains(1) === false)
     assert(bh.size === 0)
 
-    intercept[Exception](bh.max())
-    intercept[Exception](bh.extractMax())
+    assertThrows[Exception](bh.max())
+    assertThrows[Exception](bh.extractMax())
   }
 
   @Test
@@ -253,32 +256,34 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
   }
 
   @Test
-  def successivelyMoreInserts(): Unit = {
-    for (count <- Seq(2, 4, 8, 16, 32)) {
+  def successivelyMoreInserts(): Unit =
+    scalatest.Inspectors.forAll(Seq(2, 4, 8, 16, 32)) { count =>
       val bh = new BinaryHeap[Int](8)
-      val trace = new BoxedArrayBuilder[String]()
+      val trace = ArrayBuffer.empty[String]
       trace += bh.toString()
       bh.checkHeapProperty()
+
       for (i <- 0 until count) {
-        bh.insert(i, i)
+        bh.insert(i, i.toLong)
         trace += bh.toString()
         bh.checkHeapProperty()
       }
       assert(bh.size === count)
       assert(bh.max() === count - 1)
-      for (i <- 0 until count) {
+
+      scalatest.Inspectors.forAll(0 until count) { i =>
         val actual = bh.extractMax()
         trace += bh.toString()
         bh.checkHeapProperty()
         val expected = count - i - 1
         assert(
           actual === expected,
-          s"[$count] $actual did not equal $expected, heap: $bh; trace ${trace.result().mkString("\n")}",
+          s"[$count] $actual did not equal $expected, heap: $bh; trace ${trace.mkString("\n")}",
         )
       }
+
       assert(bh.isEmpty)
     }
-  }
 
   @Test
   def growPastCapacity4(): Unit = {
@@ -288,7 +293,6 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
     bh.insert(3, 0)
     bh.insert(4, 0)
     bh.insert(5, 0)
-    assert(true)
   }
 
   @Test
@@ -296,35 +300,34 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
     val bh = new BinaryHeap[Int](32)
     for (i <- 0 to 32)
       bh.insert(i, 0)
-    assert(true)
   }
 
   @Test
   def shrinkCapacity(): Unit = {
     val bh = new BinaryHeap[Int](8)
-    val trace = new BoxedArrayBuilder[String]()
+    val trace = ArrayBuffer.empty[String]
     trace += bh.toString()
     bh.checkHeapProperty()
-    for (i <- 0 until 64) {
-      bh.insert(i, i)
+    scalatest.Inspectors.forAll(0 until 64) { i =>
+      bh.insert(i, i.toLong)
       trace += bh.toString()
       bh.checkHeapProperty()
     }
-    assert(bh.size === 64, s"trace: ${trace.result().mkString("\n")}")
-    assert(bh.max() === 63, s"trace: ${trace.result().mkString("\n")}")
+    assert(bh.size === 64, s"trace: ${trace.mkString("\n")}")
+    assert(bh.max() === 63, s"trace: ${trace.mkString("\n")}")
     // shrinking happens when size is <1/4 of capacity
-    for (i <- 0 until (32 + 16 + 1)) {
+    scalatest.Inspectors.forAll(0 until (32 + 16 + 1)) { i =>
       val actual = bh.extractMax()
       val expected = 64 - i - 1
       trace += bh.toString()
       bh.checkHeapProperty()
       assert(
         actual === expected,
-        s"$actual did not equal $expected, trace: ${trace.result().mkString("\n")}",
+        s"$actual did not equal $expected, trace: ${trace.mkString("\n")}",
       )
     }
-    assert(bh.size === 15, s"trace: ${trace.result().mkString("\n")}")
-    assert(bh.max() === 14, s"trace: ${trace.result().mkString("\n")}")
+    assert(bh.size === 15, s"trace: ${trace.mkString("\n")}")
+    assert(bh.max() === 14, s"trace: ${trace.mkString("\n")}")
   }
 
   sealed trait HeapOp
@@ -341,10 +344,10 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
 
     val m = new mutable.HashMap[Long, Long]()
 
-    def isEmpty() =
+    def isEmpty =
       m.size == 0
 
-    def size() =
+    def size =
       m.size
 
     def max(): Long =
@@ -356,8 +359,7 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
       max
     }
 
-    def insert(t: Long, rank: Long): Unit =
-      m += (t -> rank)
+    def insert(t: Long, rank: Long): Unit = m += (t -> rank)
   }
 
   @Test
@@ -372,35 +374,36 @@ class BinaryHeapSuite extends ScalaCheckDrivenPropertyChecks {
     forAll(ops) { opList =>
       val bh = new BinaryHeap[Long]()
       val ref = new LongPriorityQueueReference()
-      val trace = new BoxedArrayBuilder[String]()
+      val trace = ArrayBuffer.empty[String]
       trace += bh.toString()
-      opList.foreach {
+      scalatest.Inspectors.forAll(opList) {
         case Max() =>
           if (bh.isEmpty && ref.isEmpty)
-            assert(true, s"trace; ${trace.result().mkString("\n")}")
+            assert(true, s"trace; ${trace.mkString("\n")}")
           else
-            assert(bh.max() === ref.max(), s"trace; ${trace.result().mkString("\n")}")
+            assert(bh.max() === ref.max(), s"trace; ${trace.mkString("\n")}")
           trace += bh.toString()
           bh.checkHeapProperty()
+          succeed
         case ExtractMax() =>
           if (bh.isEmpty && ref.isEmpty)
-            assert(true, s"trace; ${trace.result().mkString("\n")}")
+            assert(true, s"trace; ${trace.mkString("\n")}")
           else
-            assert(bh.max() === ref.max(), s"trace; ${trace.result().mkString("\n")}")
+            assert(bh.max() === ref.max(), s"trace; ${trace.mkString("\n")}")
           trace += bh.toString()
           bh.checkHeapProperty()
+          succeed
         case Insert(t, rank) =>
           bh.insert(t, rank)
           ref.insert(t, rank)
           trace += bh.toString()
           bh.checkHeapProperty()
-          assert(bh.size === ref.size, s"trace; ${trace.result().mkString("\n")}")
+          assert(bh.size === ref.size, s"trace; ${trace.mkString("\n")}")
       }
-      true
     }
   }
 
-  private def evensFirst(a: Int, b: Int): Int = {
+  private def evensFirst(a: Int, b: Int): Double = {
     if (a % 2 == 0 && b % 2 == 1)
       1
     else if (a % 2 == 1 && b % 2 == 0)

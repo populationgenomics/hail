@@ -66,7 +66,7 @@ class TStructSuite extends HailSuite {
     assert(base.structInsert(signature, path) == expected)
 
   @Test def testInsertEmptyPath(): Unit =
-    intercept[IllegalArgumentException] {
+    assertThrows[IllegalArgumentException] {
       TStruct.empty.insert(TInt32, FastSeq())
     }
 

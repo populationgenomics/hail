@@ -15,6 +15,31 @@ versions. In particular, Hail officially supports:
 Change Log
 ==========
 
+**Version 0.2.137**
+
+- (`#15199 <https://github.com/hail-is/hail/pull/15199>`__)
+  Upgrade dataproc to image version 2.3.17
+- (`#15195 <https://github.com/hail-is/hail/pull/15195>`__)
+  Updates hailgenetics images base to ubuntu:noble-20251013
+- (`#15152 <https://github.com/hail-is/hail/pull/15152>`__)
+  For security purposes, hailgenetics docker images no longer contain gcc and g++.
+  Please run `hail-apt-get-install gcc g++` within containers if you depend on these compilers.
+- (`#15128 <https://github.com/hail-is/hail/pull/15128>`__)
+  New interface for `hailctl batch submit`.
+- (`#15102 <https://github.com/hail-is/hail/pull/15102>`__)
+  Adds `slim` flag to `hailtop.batch.docker.build_python_image` to build from non-slim images.
+
+**Version 0.2.136**
+
+- (`#14980 <https://github.com/hail-is/hail/pull/14980>`__)
+  Update dataproc image version to 2.2.60
+- (`#14970 <https://github.com/hail-is/hail/pull/14970>`__)
+  Fix dry-run and docs for dataproc submit
+- (`#14918 <https://github.com/hail-is/hail/pull/14918>`__)
+  Upgrade default Python version to 3.11
+- (`#14937 <https://github.com/hail-is/hail/pull/14937>`__)
+  Fix a bug that caused randomisation of user-defined tmpdirs
+
 **Version 0.2.135**
 
 - (`#14927 <https://github.com/hail-is/hail/pull/14927>`__)

@@ -8,15 +8,19 @@ import is.hail.types._
 import is.hail.types.virtual._
 import is.hail.types.virtual.TIterable.elementType
 import is.hail.utils._
+import is.hail.utils.compat.immutable.ArraySeq
 
+import scala.collection.compat._
 import scala.collection.mutable
 
-object PruneDeadFields {
+object PruneDeadFields extends Logging {
 
-  case class ComputeMutableState(
-    requestedType: Memo[BaseType],
-    relationalRefs: mutable.HashMap[Name, BoxedArrayBuilder[Type]],
-  ) {
+  class ComputeMutableState {
+    val requestedType: Memo[BaseType] = Memo.empty
+
+    val relationalRefs: mutable.Map[Name, mutable.Builder[Type, IndexedSeq[Type]]] =
+      mutable.HashMap.empty.withDefault((_: Name) => ArraySeq.newBuilder[Type])
+
     def rebuildState: RebuildMutableState =
       RebuildMutableState(requestedType, mutable.HashMap.empty)
   }
@@ -36,7 +40,7 @@ object PruneDeadFields {
     def newStructType: TStruct = newType.asInstanceOf[TStruct]
     def isUndefined: Boolean = _newType == null
 
-    def union(requestedType: Type): TypeState = {
+    def union(requestedType: Type): this.type = {
       _newType = if (_newType == null) requestedType else unify(origType, _newType, requestedType)
       this
     }
@@ -113,34 +117,35 @@ object PruneDeadFields {
     }
   }
 
-  def apply(ctx: ExecuteContext, ir: BaseIR): BaseIR = {
-    try {
-      val irCopy = ir.deepCopy()
-      val ms = ComputeMutableState(Memo.empty[BaseType], mutable.HashMap.empty)
-      irCopy match {
-        case mir: MatrixIR =>
-          memoizeMatrixIR(ctx, mir, mir.typ, ms)
-          rebuild(ctx, mir, ms.rebuildState)
-        case tir: TableIR =>
-          memoizeTableIR(ctx, tir, tir.typ, ms)
-          rebuild(ctx, tir, ms.rebuildState)
-        case bmir: BlockMatrixIR =>
-          memoizeBlockMatrixIR(ctx, bmir, bmir.typ, ms)
-          rebuild(ctx, bmir, ms.rebuildState)
-        case vir: IR =>
-          memoizeValueIR(ctx, vir, vir.typ, ms)
-          rebuildIR(
-            ctx,
-            vir,
-            BindingEnv(Env.empty, Some(Env.empty), Some(Env.empty)),
-            ms.rebuildState,
-          )
+  def apply(ctx: ExecuteContext, ir: BaseIR): BaseIR =
+    ctx.time {
+      try {
+        val irCopy = ir.deepCopy()
+        val ms = new ComputeMutableState
+        irCopy match {
+          case mir: MatrixIR =>
+            memoizeMatrixIR(ctx, mir, mir.typ, ms)
+            rebuild(ctx, mir, ms.rebuildState)
+          case tir: TableIR =>
+            memoizeTableIR(ctx, tir, tir.typ, ms)
+            rebuild(ctx, tir, ms.rebuildState)
+          case bmir: BlockMatrixIR =>
+            memoizeBlockMatrixIR(ctx, bmir, bmir.typ, ms)
+            rebuild(ctx, bmir, ms.rebuildState)
+          case vir: IR =>
+            memoizeValueIR(ctx, vir, vir.typ, ms)
+            rebuildIR(
+              ctx,
+              vir,
+              BindingEnv(Env.empty, Some(Env.empty), Some(Env.empty)),
+              ms.rebuildState,
+            )
+        }
+      } catch {
+        case e: Throwable =>
+          fatal(s"error trying to rebuild IR:\n${Pretty(ctx, ir, allowUnboundRefs = true)}", e)
       }
-    } catch {
-      case e: Throwable =>
-        fatal(s"error trying to rebuild IR:\n${Pretty(ctx, ir, allowUnboundRefs = true)}", e)
     }
-  }
 
   def selectKey(t: TStruct, k: IndexedSeq[String]): TStruct = t.filterSet(k.toSet)._1
 
@@ -213,7 +218,7 @@ object PruneDeadFields {
           t match {
             case ts: TStruct =>
               val subStructs = children.map(_.asInstanceOf[TStruct])
-              val fieldArrays = Array.fill(ts.fields.length)(new BoxedArrayBuilder[Type])
+              val fieldArrays = ArraySeq.fill(ts.fields.length)(ArraySeq.newBuilder[Type])
 
               var nPresent = 0
               ts.fields.foreach { f =>
@@ -237,11 +242,11 @@ object PruneDeadFields {
               var newIdx = 0
               var oldIdx = 0
               while (oldIdx < fieldArrays.length) {
-                val ab = fieldArrays(oldIdx)
-                if (ab.nonEmpty) {
+                val fields = fieldArrays(oldIdx).result()
+                if (fields.nonEmpty) {
                   val oldField = ts.fields(oldIdx)
                   subFields(newIdx) =
-                    Field(oldField.name, unifySeq(oldField.typ, ab.result()), newIdx)
+                    Field(oldField.name, unifySeq(oldField.typ, fields), newIdx)
                   newIdx += 1
                 }
                 oldIdx += 1
@@ -250,7 +255,7 @@ object PruneDeadFields {
             case tt: TTuple =>
               val subTuples = children.map(_.asInstanceOf[TTuple])
 
-              val fieldArrays = Array.fill(tt.size)(new BoxedArrayBuilder[Type])
+              val fieldArrays = ArraySeq.fill(tt.size)(ArraySeq.newBuilder[Type])
 
               var nPresent = 0
 
@@ -276,11 +281,11 @@ object PruneDeadFields {
               var newIdx = 0
               var oldIdx = 0
               while (oldIdx < fieldArrays.length) {
-                val ab = fieldArrays(oldIdx)
-                if (ab.nonEmpty) {
+                val fields = fieldArrays(oldIdx).result()
+                if (fields.nonEmpty) {
                   val oldField = tt._types(oldIdx)
                   subFields(newIdx) =
-                    TupleField(oldField.index, unifySeq(oldField.typ, ab.result()))
+                    TupleField(oldField.index, unifySeq(oldField.typ, fields))
                   newIdx += 1
                 }
                 oldIdx += 1
@@ -332,9 +337,6 @@ object PruneDeadFields {
     BindingEnv(e, Some(e), Some(e))
   }
 
-  def uses(name: Name, env: Env[BoxedArrayBuilder[Type]]): Array[Type] =
-    env.lookupOption(name).map(_.result()).getOrElse(Array.empty)
-
   def memoizeTableIR(
     ctx: ExecuteContext,
     tir: TableIR,
@@ -348,7 +350,7 @@ object PruneDeadFields {
       case tir: TableParallelize =>
         val typ =
           TStruct("rows" -> TArray(requestedType.rowType), "global" -> requestedType.globalType)
-        createTypeStatesAndMemoize(ctx, tir, 0, typ, memo)
+        createTypeStatesAndMemoize(ctx, tir, 0, typ, memo): Unit
       case _: TableRange =>
       case TableRepartition(child, _, _) => memoizeTableIR(ctx, child, requestedType, memo)
       case TableHead(child, _) => memoizeTableIR(
@@ -387,8 +389,9 @@ object PruneDeadFields {
         val contextsElemType = contextState.newType
         // Globals are exported and used in body, so keep the union of the used fields
         val globalsType = globalState.union(requestedType.globalType).newType
-        createTypeStatesAndMemoize(ctx, tir, 0, TStream(contextsElemType), memo)
-        createTypeStatesAndMemoize(ctx, tir, 1, globalsType, memo)
+
+        createTypeStatesAndMemoize(ctx, tir, 0, TStream(contextsElemType), memo): Unit
+        createTypeStatesAndMemoize(ctx, tir, 1, globalsType, memo): Unit
 
       case TableJoin(left, right, _, joinKey) =>
         val lk =
@@ -767,7 +770,7 @@ object PruneDeadFields {
       case BlockMatrixToTable(child) => memoizeBlockMatrixIR(ctx, child, child.typ, memo)
       case RelationalLetTable(name, value, body) =>
         memoizeTableIR(ctx, body, requestedType, memo)
-        val usages = memo.relationalRefs.get(name).map(_.result()).getOrElse(Array())
+        val usages = memo.relationalRefs(name).result()
         memoizeValueIR(ctx, value, unifySeq(value.typ, usages), memo)
     }
   }
@@ -1124,7 +1127,7 @@ object PruneDeadFields {
         memoizeMatrixIR(ctx, child, childDep, memo)
       case RelationalLetMatrixTable(name, value, body) =>
         memoizeMatrixIR(ctx, body, requestedType, memo)
-        val usages = memo.relationalRefs.get(name).map(_.result()).getOrElse(Array())
+        val usages = memo.relationalRefs(name).result()
         memoizeValueIR(ctx, value, unifySeq(value.typ, usages), memo)
     }
   }
@@ -1136,18 +1139,11 @@ object PruneDeadFields {
     memo: ComputeMutableState,
   ): Unit = {
     memo.requestedType.bind(bmir, requestedType)
-    bmir match {
-      case RelationalLetBlockMatrix(name, value, body) =>
-        memoizeBlockMatrixIR(ctx, body, requestedType, memo)
-        val usages = memo.relationalRefs.get(name).map(_.result()).getOrElse(Array())
-        memoizeValueIR(ctx, value, unifySeq(value.typ, usages), memo)
-      case _ =>
-        bmir.children.zipWithIndex.foreach {
-          case (mir: MatrixIR, _) => memoizeMatrixIR(ctx, mir, mir.typ, memo)
-          case (tir: TableIR, _) => memoizeTableIR(ctx, tir, tir.typ, memo)
-          case (bmir: BlockMatrixIR, _) => memoizeBlockMatrixIR(ctx, bmir, bmir.typ, memo)
-          case (ir: IR, i) => createTypeStatesAndMemoize(ctx, bmir, i, ir.typ, memo)
-        }
+    bmir.children.zipWithIndex.foreach {
+      case (mir: MatrixIR, _) => memoizeMatrixIR(ctx, mir, mir.typ, memo)
+      case (tir: TableIR, _) => memoizeTableIR(ctx, tir, tir.typ, memo)
+      case (bmir: BlockMatrixIR, _) => memoizeBlockMatrixIR(ctx, bmir, bmir.typ, memo)
+      case (ir: IR, i) => createTypeStatesAndMemoize(ctx, bmir, i, ir.typ, memo)
     }
   }
 
@@ -1290,14 +1286,29 @@ object PruneDeadFields {
     memo: ComputeMutableState,
     env: BindingEnv[TypeState] = BindingEnv.empty.createAgg.createScan,
   ): Unit = {
-    def recurMax(ir: IR, childIdx: Int): IndexedSeq[TypeState] =
+    def recurMax(ir: IR, childIdx: Int): Unit =
       recur(ir, childIdx, ir.getChild(childIdx).asInstanceOf[IR].typ)
 
-    def recurMin(ir: IR, childIdx: Int): IndexedSeq[TypeState] =
+    def recurMaxWithBindings(ir: IR, childIdx: Int): IndexedSeq[TypeState] =
+      recurWithBindings(ir, childIdx, ir.getChild(childIdx).asInstanceOf[IR].typ)
+
+    def recurMin(ir: IR, childIdx: Int): Unit =
       recur(ir, childIdx, minimal(ir.getChild(childIdx).asInstanceOf[IR].typ))
 
-    def recur(ir: IR, childIdx: Int, requestedType: Type): IndexedSeq[TypeState] =
+    def recurWithBindings(ir: IR, childIdx: Int, requestedType: Type): IndexedSeq[TypeState] =
       createTypeStatesAndMemoize(ctx, ir, childIdx, requestedType, memo, env)
+
+    def recur(ir: IR, childIdx: Int, requestedType: Type): Unit = {
+      val bindings = Bindings.get(ir, childIdx)
+      val bindingsStates = bindings.map((_, typ) => TypeState(typ))
+      memoizeValueIR(
+        ctx,
+        ir.getChild(childIdx).asInstanceOf[IR],
+        requestedType,
+        memo,
+        env.extend(bindingsStates),
+      )
+    }
 
     def recurMaxWithTypeStates(ir: IR, childIdx: Int, bindingsMap: mutable.Map[Name, TypeState])
       : Unit =
@@ -1381,15 +1392,15 @@ object PruneDeadFields {
 
       case Ref(name, _) =>
 //        env.eval.lookupOption(name).foreach(_.union(requestedType))
-        env.eval(name).union(requestedType)
+        env.eval(name).union(requestedType): Unit
 
       case RelationalLet(name, value, _) =>
         recur(ir, 1, requestedType)
-        val usages = memo.relationalRefs.get(name).map(_.result()).getOrElse(Array())
+        val usages = memo.relationalRefs(name).result()
         recur(ir, 0, unifySeq(value.typ, usages))
 
       case RelationalRef(name, _) =>
-        memo.relationalRefs.getOrElseUpdate(name, new BoxedArrayBuilder[Type]) += requestedType
+        memo.relationalRefs(name) += requestedType
 
       case MakeArray(args, _) =>
         val eltType = TIterable.elementType(requestedType)
@@ -1423,10 +1434,6 @@ object PruneDeadFields {
         )
         recur(ir, 0, TStream(unifiedStructType))
 
-      case ir: StreamMap =>
-        val Seq(eltState) = recur(ir, 1, TIterable.elementType(requestedType))
-        recur(ir, 0, TStream(eltState.newType))
-
       case ir: StreamGrouped =>
         recur(ir, 0, TIterable.elementType(requestedType))
         recurMax(ir, 1)
@@ -1443,28 +1450,29 @@ object PruneDeadFields {
         )
 
       case StreamZip(as, _, _, behavior, _) =>
-        val bodyBindings = recur(ir, as.length, TIterable.elementType(requestedType))
+        val bodyBindings = recurWithBindings(ir, as.length, TIterable.elementType(requestedType))
         if (behavior == ArrayZipBehavior.AssumeSameLength && bodyBindings.forall(_.isUndefined)) {
           recurMin(ir, 0)
         } else {
-          as.indices.map { i =>
+          as.indices.foreach { i =>
             val state = bodyBindings(i)
-            if (behavior != ArrayZipBehavior.AssumeSameLength || !state.isUndefined)
+            if (behavior != ArrayZipBehavior.AssumeSameLength || !state.isUndefined) {
               recur(ir, i, TStream(state.newType))
+            }
           }
         }
 
       case StreamZipJoin(as, key, _, _, _) =>
         val requestedEltType = tcoerce[TStream](requestedType).elementType
-        val Seq(_, valsState) = recur(ir, as.length, requestedEltType)
+        val Seq(_, valsState) = recurWithBindings(ir, as.length, requestedEltType)
         val childRequestedEltType = elementType(valsState.requireFieldsInElt(key).newType)
         as.indices.foreach(recur(ir, _, TStream(childRequestedEltType)))
 
       case StreamZipJoinProducers(_, _, _, key, _, _, _) =>
         val requestedEltType = tcoerce[TStream](requestedType).elementType
-        val Seq(_, valsState) = recur(ir, 2, requestedEltType)
+        val Seq(_, valsState) = recurWithBindings(ir, 2, requestedEltType)
         val producerRequestedEltType = elementType(valsState.requireFieldsInElt(key).newType)
-        val Seq(ctxState) = recur(ir, 1, TStream(producerRequestedEltType))
+        val Seq(ctxState) = recurWithBindings(ir, 1, TStream(producerRequestedEltType))
         recur(ir, 0, TArray(ctxState.newType))
 
       case StreamMultiMerge(as, key) =>
@@ -1473,27 +1481,17 @@ object PruneDeadFields {
         val childRequestedEltType = unify(eltType, requestedEltType, selectKey(eltType, key))
         as.indices.foreach(recur(ir, _, TStream(childRequestedEltType)))
 
-      case StreamFilter(_, _, _) =>
-        val Seq(eltState) = recurMax(ir, 1)
-        val valueType = eltState.union(TIterable.elementType(requestedType)).newType
-        recur(ir, 0, TStream(valueType))
-
-      case StreamTakeWhile(_, _, _) =>
-        val Seq(eltState) = recurMax(ir, 1)
-        val valueType = eltState.union(TIterable.elementType(requestedType)).newType
-        recur(ir, 0, TStream(valueType))
-
-      case StreamDropWhile(_, _, _) =>
-        val Seq(eltState) = recurMax(ir, 1)
+      case _: StreamFilter | _: StreamTakeWhile | _: StreamDropWhile =>
+        val Seq(eltState) = recurMaxWithBindings(ir, 1)
         val valueType = eltState.union(TIterable.elementType(requestedType)).newType
         recur(ir, 0, TStream(valueType))
 
       case StreamFlatMap(_, _, _) =>
-        val Seq(eltState) = recur(ir, 1, requestedType)
+        val Seq(eltState) = recurWithBindings(ir, 1, requestedType)
         recur(ir, 0, TStream(eltState.newType))
 
-      case StreamFold(_, _, _, _, _) =>
-        val Seq(_, valueState) = recurMax(ir, 2)
+      case _: StreamFold | _: StreamScan =>
+        val Seq(_, valueState) = recurMaxWithBindings(ir, 2)
         recurMax(ir, 1)
         recur(ir, 0, TStream(valueState.newType))
 
@@ -1504,20 +1502,15 @@ object PruneDeadFields {
         accum.indices.foreach(i => recurMax(ir, i + 1))
         recur(ir, 0, TStream(seqBindings(valueName).newType))
 
-      case StreamScan(_, _, _, _, _) =>
-        val Seq(_, valueState) = recurMax(ir, 2)
-        recurMax(ir, 1)
-        recur(ir, 0, TStream(valueState.newType))
-
       case StreamJoinRightDistinct(_, _, lKey, rKey, _, _, _, _) =>
-        val Seq(lState, rState) = recur(ir, 2, TIterable.elementType(requestedType))
+        val Seq(lState, rState) = recurWithBindings(ir, 2, TIterable.elementType(requestedType))
         val lRequested = lState.requireFields(lKey).newType
         val rRequested = rState.requireFields(rKey).newType
         recur(ir, 0, TStream(lRequested))
         recur(ir, 1, TStream(rRequested))
 
       case StreamLeftIntervalJoin(_, _, keyFieldName, intervalFieldName, _, _, _) =>
-        val Seq(lState, rState) = recur(ir, 2, elementType(requestedType))
+        val Seq(lState, rState) = recurWithBindings(ir, 2, elementType(requestedType))
         val lRequestedType = lState.requireFields(FastSeq(keyFieldName)).newType
         val rEltType = elementType(rState.origType).asInstanceOf[TStruct]
         val rRequestedType =
@@ -1526,7 +1519,7 @@ object PruneDeadFields {
         recur(ir, 1, TStream(elementType(rRequestedType)))
 
       case ArraySort(_, _, _, _) =>
-        val Seq(lState, rState) = recurMax(ir, 1)
+        val Seq(lState, rState) = recurMaxWithBindings(ir, 1)
         val requestedElementType = lState
           .union(rState.newType)
           .union(TIterable.elementType(requestedType))
@@ -1539,30 +1532,33 @@ object PruneDeadFields {
 
       case StreamFor(_, _, _) =>
         assert(requestedType == TVoid)
-        val Seq(eltState) = recurMax(ir, 1)
+        val Seq(eltState) = recurMaxWithBindings(ir, 1)
         recur(ir, 0, TStream(eltState.newType))
 
       case MakeNDArray(data, _, _, _) =>
         val elementType = requestedType.asInstanceOf[TNDArray].elementType
         val dataType =
-          if (data.typ.isInstanceOf[TArray]) TArray(elementType) else TStream(elementType)
+          if (data.typ.isInstanceOf[TArray]) TArray(elementType)
+          else TStream(elementType)
         recur(ir, 0, dataType)
         recurMax(ir, 1)
         recurMax(ir, 2)
 
       case NDArrayMap(nd, _, _) =>
-        val Seq(eltState) = recur(ir, 1, requestedType.asInstanceOf[TNDArray].elementType)
+        val Seq(eltState) =
+          recurWithBindings(ir, 1, requestedType.asInstanceOf[TNDArray].elementType)
         val eltType =
           nd.typ.asInstanceOf[TNDArray].copy(elementType = eltState.newType)
         recur(ir, 0, eltType)
 
       case NDArrayMap2(left, right, _, _, _, _) =>
-        val Seq(lState, rState) = recur(ir, 2, requestedType.asInstanceOf[TNDArray].elementType)
+        val Seq(lState, rState) =
+          recurWithBindings(ir, 2, requestedType.asInstanceOf[TNDArray].elementType)
         recur(ir, 0, left.typ.asInstanceOf[TNDArray].copy(elementType = lState.newType))
         recur(ir, 1, right.typ.asInstanceOf[TNDArray].copy(elementType = rState.newType))
 
       case AggExplode(_, _, _, _) =>
-        val Seq(eltState) = recur(ir, 1, requestedType)
+        val Seq(eltState) = recurWithBindings(ir, 1, requestedType)
         recur(ir, 0, TStream(eltState.newType))
 
       case AggFilter(_, _, _) =>
@@ -1570,43 +1566,40 @@ object PruneDeadFields {
         recurMax(ir, 0)
 
       case AggGroupBy(_, _, _) =>
-        recur(ir, 1, requestedType.asInstanceOf[TDict].valueType)
-        recur(ir, 0, requestedType.asInstanceOf[TDict].keyType)
+        val tdict = requestedType.asInstanceOf[TDict]
+        recur(ir, 1, tdict.valueType)
+        recur(ir, 0, tdict.keyType)
 
       case AggArrayPerElement(_, _, _, _, knownLength, _) =>
-        val Seq(eltState, _) = recur(ir, 1, TIterable.elementType(requestedType))
+        val Seq(eltState, _) = recurWithBindings(ir, 1, TIterable.elementType(requestedType))
         recur(ir, 0, TArray(eltState.newType))
         if (knownLength.nonEmpty) recurMax(ir, 2)
 
-      case ApplyAggOp(initOpArgs, _, sig) =>
-        val prunedSig = AggSignature.prune(sig, requestedType)
-        prunedSig.initOpArgs.zipWithIndex.foreach { case (req, i) =>
-          recur(ir, i, req)
-        }
-        prunedSig.seqOpArgs.zipWithIndex.foreach { case (req, i) =>
-          recur(ir, initOpArgs.length + i, req)
+      case a @ (_: ApplyAggOp | _: ApplyScanOp) =>
+        val (initOpArgs, seqOpArgs, op) = a match {
+          case ApplyAggOp(initOpArgs, seqOpArgs, op) =>
+            (initOpArgs.map(_.typ), seqOpArgs.map(_.typ), op)
+          case ApplyScanOp(initOpArgs, seqOpArgs, op) =>
+            (initOpArgs.map(_.typ), seqOpArgs.map(_.typ), op)
         }
 
-      case ApplyScanOp(initOpArgs, _, sig) =>
-        val prunedSig = AggSignature.prune(sig, requestedType)
-        prunedSig.initOpArgs.zipWithIndex.foreach { case (req, i) =>
+        val prunedSeqOpArgs = AggOp.prune(op, seqOpArgs, requestedType)
+        initOpArgs.zipWithIndex.foreach { case (req, i) =>
           recur(ir, i, req)
         }
-        prunedSig.seqOpArgs.zipWithIndex.foreach { case (req, i) =>
+        prunedSeqOpArgs.zipWithIndex.foreach { case (req, i) =>
           recur(ir, initOpArgs.length + i, req)
         }
 
       case ir: AggFold =>
-        recurMax(ir, 0)
-        recurMax(ir, 1)
-        recurMax(ir, 2)
+        (0 until 3).foreach(i => recurMax(ir, i))
 
       case StreamAgg(_, _, _) =>
-        val Seq(eltState) = recur(ir, 1, requestedType)
+        val Seq(eltState) = recurWithBindings(ir, 1, requestedType)
         recur(ir, 0, TStream(eltState.newType))
 
-      case StreamAggScan(_, _, _) =>
-        val Seq(eltState) = recur(ir, 1, TIterable.elementType(requestedType))
+      case _: StreamMap | _: StreamAggScan =>
+        val Seq(eltState) = recurWithBindings(ir, 1, TIterable.elementType(requestedType))
         recur(ir, 0, TStream(eltState.newType))
 
       case ir: RunAgg =>
@@ -1615,6 +1608,7 @@ object PruneDeadFields {
 
       case RunAggScan(_, name, _, _, _, _) =>
         val bindings = mutable.AnyRefMap.empty[Name, TypeState]
+
         recurWithTypeStates(ir, 3, TIterable.elementType(requestedType), bindings)
         recurMaxWithTypeStates(ir, 2, bindings)
         recurMax(ir, 1)
@@ -1708,7 +1702,7 @@ object PruneDeadFields {
         memoizeBlockMatrixIR(ctx, child, child.typ, memo)
 
       case TableAggregate(child, _) =>
-        val Seq(globalState, rowState) = recurMax(ir, 1)
+        val Seq(globalState, rowState) = recurMaxWithBindings(ir, 1)
         val dep = TableType(
           key = child.typ.key,
           rowType = rowState.requireFields(child.typ.key).newStructType,
@@ -1717,7 +1711,7 @@ object PruneDeadFields {
         memoizeTableIR(ctx, child, dep, memo)
 
       case MatrixAggregate(child, _) =>
-        val Seq(globalState, colState, rowState, entryState) = recurMax(ir, 1)
+        val Seq(globalState, colState, rowState, entryState) = recurMaxWithBindings(ir, 1)
         val dep = MatrixType(
           rowKey = child.typ.rowKey,
           colKey = FastSeq(),
@@ -1729,7 +1723,7 @@ object PruneDeadFields {
         memoizeMatrixIR(ctx, child, dep, memo)
 
       case TailLoop(_, params, _, _) =>
-        val paramStates = recurMax(ir, params.length)
+        val paramStates = recurMaxWithBindings(ir, params.length)
         paramStates.view.zipWithIndex.take(params.length).foreach { case (paramState, i) =>
           recur(ir, i, paramState.newType)
         }
@@ -1737,7 +1731,7 @@ object PruneDeadFields {
       case CollectDistributedArray(_, _, _, _, _, _, _, _) =>
         recur(ir, 3, TString)
         val Seq(contextState, globalState) =
-          recur(ir, 2, requestedType.asInstanceOf[TArray].elementType)
+          recurWithBindings(ir, 2, requestedType.asInstanceOf[TArray].elementType)
         recur(ir, 1, globalState.newType)
         recur(ir, 0, TStream(contextState.newType))
 
@@ -1913,8 +1907,8 @@ object PruneDeadFields {
         val child2 = rebuild(ctx, child, memo)
         TableRename(
           child2,
-          rowMap.filterKeys(child2.typ.rowType.hasField),
-          globalMap.filterKeys(child2.typ.globalType.hasField),
+          rowMap.view.filterKeys(child2.typ.rowType.hasField).toMap,
+          globalMap.view.filterKeys(child2.typ.globalType.hasField).toMap,
         )
       case TableUnion(children) =>
         val requestedType = memo.requestedType.lookup(tir).asInstanceOf[TableType]
@@ -2104,10 +2098,10 @@ object PruneDeadFields {
         val child2 = rebuild(ctx, child, memo)
         MatrixRename(
           child2,
-          globalMap.filterKeys(child2.typ.globalType.hasField),
-          colMap.filterKeys(child2.typ.colType.hasField),
-          rowMap.filterKeys(child2.typ.rowType.hasField),
-          entryMap.filterKeys(child2.typ.entryType.hasField),
+          globalMap.view.filterKeys(child2.typ.globalType.hasField).toMap,
+          colMap.view.filterKeys(child2.typ.colType.hasField).toMap,
+          rowMap.view.filterKeys(child2.typ.rowType.hasField).toMap,
+          entryMap.view.filterKeys(child2.typ.entryType.hasField).toMap,
         )
       case RelationalLetMatrixTable(name, value, body) =>
         val value2 = rebuildIR(ctx, value, BindingEnv.empty, memo)
@@ -2132,19 +2126,13 @@ object PruneDeadFields {
     ctx: ExecuteContext,
     bmir: BlockMatrixIR,
     memo: RebuildMutableState,
-  ): BlockMatrixIR = bmir match {
-    case RelationalLetBlockMatrix(name, value, body) =>
-      val value2 = rebuildIR(ctx, value, BindingEnv.empty, memo)
-      memo.relationalRefs += name -> value2.typ
-      RelationalLetBlockMatrix(name, value2, rebuild(ctx, body, memo))
-    case _ =>
-      bmir.mapChildren {
-        case tir: TableIR => rebuild(ctx, tir, memo)
-        case mir: MatrixIR => rebuild(ctx, mir, memo)
-        case ir: IR => rebuildIR(ctx, ir, BindingEnv.empty[Type], memo)
-        case bmir: BlockMatrixIR => rebuild(ctx, bmir, memo)
-      }.asInstanceOf[BlockMatrixIR]
-  }
+  ): BlockMatrixIR =
+    bmir.mapChildren {
+      case tir: TableIR => rebuild(ctx, tir, memo)
+      case mir: MatrixIR => rebuild(ctx, mir, memo)
+      case ir: IR => rebuildIR(ctx, ir, BindingEnv.empty[Type], memo)
+      case bmir: BlockMatrixIR => rebuild(ctx, bmir, memo)
+    }.asInstanceOf[BlockMatrixIR]
 
   def rebuildIR(
     ctx: ExecuteContext,
@@ -2222,8 +2210,7 @@ object PruneDeadFields {
           requestedType = TStream(dep.elementType),
         )
       case StreamZip(as, names, body, b, errorID) =>
-        val (newAs, newNames) = (as, names)
-          .zipped
+        val (newAs, newNames) = as.lazyZip(names)
           .flatMap { case (a, name) =>
             if (memo.requestedType.contains(a)) Some((rebuildIR(ctx, a, env, memo), name)) else None
           }
@@ -2260,7 +2247,7 @@ object PruneDeadFields {
           if (depFields.contains(f))
             Some(f -> rebuildIR(ctx, fir, env, memo))
           else {
-            log.info(s"Prune: MakeStruct: eliminating field '$f'")
+            logger.info(s"Prune: MakeStruct: eliminating field '$f'")
             None
           }
         })
@@ -2302,7 +2289,7 @@ object PruneDeadFields {
             if (depFields.contains(f))
               Some(f -> rebuildIR(ctx, fir, env, memo))
             else {
-              log.info(s"Prune: InsertFields: eliminating field '$f'")
+              logger.info(s"Prune: InsertFields: eliminating field '$f'")
               None
             }
           },
@@ -2339,29 +2326,13 @@ object PruneDeadFields {
           ))
         }
       case x: ApplyAggOp =>
-        val rewritten = x.mapChildrenWithEnv(env) { (child, childEnv) =>
+        x.mapChildrenWithEnv(env) { (child, childEnv) =>
           rebuildIR(ctx, child.asInstanceOf[IR], childEnv, memo)
         }.asInstanceOf[ApplyAggOp]
-        ApplyAggOp(
-          aggSig = rewritten.aggSig.copy(
-            initOpArgs = rewritten.initOpArgs.map(_.typ),
-            seqOpArgs = rewritten.seqOpArgs.map(_.typ),
-          ),
-          initOpArgs = rewritten.initOpArgs,
-          seqOpArgs = rewritten.seqOpArgs,
-        )
       case x: ApplyScanOp =>
-        val rewritten = x.mapChildrenWithEnv(env) { (child, childEnv) =>
+        x.mapChildrenWithEnv(env) { (child, childEnv) =>
           rebuildIR(ctx, child.asInstanceOf[IR], childEnv, memo)
         }.asInstanceOf[ApplyScanOp]
-        ApplyScanOp(
-          aggSig = rewritten.aggSig.copy(
-            initOpArgs = rewritten.initOpArgs.map(_.typ),
-            seqOpArgs = rewritten.seqOpArgs.map(_.typ),
-          ),
-          initOpArgs = rewritten.initOpArgs,
-          seqOpArgs = rewritten.seqOpArgs,
-        )
       case CollectDistributedArray(contexts, globals, cname, gname, body, dynamicID, staticID,
             tsd) =>
         val contexts2 = upcast(

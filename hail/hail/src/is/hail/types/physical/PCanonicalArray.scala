@@ -20,9 +20,9 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
   def _asIdent = s"array_of_${elementType.asIdent}"
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
-    sb.append("PCArray[")
+    sb ++= "PCArray["
     elementType.pretty(sb, indent, compact)
-    sb.append("]")
+    sb += ']'
   }
 
   def printDebug(cb: EmitCodeBuilder, addr: Value[Long]): Unit = {
@@ -114,7 +114,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
     aoff + lengthHeaderBytes + nMissingBytes(len).toL
 
   override def isElementDefined(aoff: Long, i: Int): Boolean =
-    elementRequired || !Region.loadBit(aoff + lengthHeaderBytes, i)
+    elementRequired || !Region.loadBit(aoff + lengthHeaderBytes, i.toLong)
 
   override def isElementDefined(aoff: Code[Long], i: Code[Int]): Code[Boolean] =
     if (elementRequired)
@@ -130,7 +130,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
 
   override def setElementMissing(aoff: Long, i: Int): Unit =
     if (!elementRequired)
-      Region.setBit(aoff + lengthHeaderBytes, i)
+      Region.setBit(aoff + lengthHeaderBytes, i.toLong)
 
   override def setElementMissing(cb: EmitCodeBuilder, aoff: Code[Long], i: Code[Int]): Unit = {
     assert(!elementRequired, s"Array elements of ptype '${elementType.asIdent}' cannot be missing.")
@@ -225,7 +225,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
     def value: Long =
       firstElementOffset + i * elementByteSize
 
-    def iterate: Unit = i += 1
+    def iterate(): Unit = i += 1
   }
 
   def elementIterator(aoff: Long, length: Int): Iterator = new Iterator(aoff, length)
@@ -237,7 +237,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
     region.allocate(contentsAlignment, contentsByteSize(length))
 
   private def writeMissingness(aoff: Long, length: Int, value: Byte): Unit =
-    Region.setMemory(aoff + lengthHeaderBytes, nMissingBytes(length), value)
+    Region.setMemory(aoff + lengthHeaderBytes, nMissingBytes(length).toLong, value)
 
   override def setAllMissingBits(aoff: Long, length: Int): Unit =
     if (!elementRequired)
@@ -453,7 +453,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
     indexable: SIndexableValue,
     deepCopy: Boolean,
   ): Unit = {
-    val length = indexable.loadLength()
+    val length = indexable.loadLength
     indexable.st match {
       case SIndexablePointer(PCanonicalArray(otherElementType, _))
           if otherElementType == elementType =>
@@ -472,7 +472,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
             cb._fatal("tried to copy array with missing values to array of required elements"),
           )
         }
-        stagedInitialize(cb, addr, indexable.loadLength(), setMissing = false)
+        stagedInitialize(cb, addr, indexable.loadLength, setMissing = false)
 
         cb += Region.copyFrom(
           otherType.firstElementOffset(indexable.asInstanceOf[SIndexablePointerValue].a),
@@ -516,7 +516,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
         value.asInstanceOf[SIndexablePointerValue].a
       case _ =>
         val idxValue = value.asIndexable
-        val newAddr = cb.memoize(allocate(region, idxValue.loadLength()))
+        val newAddr = cb.memoize(allocate(region, idxValue.loadLength))
         storeContentsAtAddress(cb, newAddr, region, idxValue, deepCopy)
         newAddr
     }
@@ -634,15 +634,13 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
     }
 
     def finish(cb: EmitCodeBuilder): SIndexablePointerValue = {
-      cb.if_(
-        currentElementIndex cne length,
-        cb._fatal(
-          "PCanonicalArray.constructFromFunctions push was called the wrong number of times",
-          ": len=",
-          length.toS,
-          ", calls=",
-          currentElementIndex.toS,
-        ),
+      cb._assert(
+        currentElementIndex ceq length,
+        "PCanonicalArray.constructFromFunctions push was called the wrong number of times",
+        ": len=",
+        length.toS,
+        ", calls=",
+        currentElementIndex.toS,
       )
       new SIndexablePointerValue(sType, addr, length, firstElementAddress)
     }
@@ -663,7 +661,7 @@ final case class PCanonicalArray(elementType: PType, required: Boolean = false)
   ) = {
 
     val addr = cb.newLocal[Long]("pcarray_construct2_addr", allocate(region, length))
-    stagedInitialize(cb, addr, length, setMissing = false)
+    stagedInitialize(cb, addr, length, setMissing = true)
     val firstElementAddress =
       cb.newLocal[Long]("pcarray_construct2_first_addr", firstElementOffset(addr, length))
 

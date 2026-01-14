@@ -7,6 +7,8 @@ import breeze.linalg.{DenseMatrix => BDM}
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.linalg.distributed.{IndexedRow, IndexedRowMatrix}
 import org.apache.spark.rdd.RDD
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.Test
 
 /** Testing RichIndexedRowMatrix. */
@@ -30,9 +32,7 @@ class RichIndexedRowMatrixSuite extends HailSuite {
     val irm = new IndexedRowMatrix(indexedRows)
     val irmLocal = irm.toBlockMatrix().toLocalMatrix()
 
-    for {
-      blockSize <- Seq(1, 2, 3, 4, 6, 7, 9, 10)
-    } {
+    forAll(Seq(1, 2, 3, 4, 6, 7, 9, 10)) { blockSize =>
       val blockMat = irm.toHailBlockMatrix(blockSize)
       assert(blockMat.nRows === nRows)
       assert(blockMat.nCols === nCols)
@@ -42,10 +42,10 @@ class RichIndexedRowMatrixSuite extends HailSuite {
       assert(blockMatAsBreeze.toArray.toIndexedSeq == irmLocal.toArray.toIndexedSeq)
     }
 
-    intercept[IllegalArgumentException] {
+    assertThrows[IllegalArgumentException] {
       irm.toHailBlockMatrix(-1)
     }
-    intercept[IllegalArgumentException] {
+    assertThrows[IllegalArgumentException] {
       irm.toHailBlockMatrix(0)
     }
   }
@@ -70,7 +70,7 @@ class RichIndexedRowMatrixSuite extends HailSuite {
     assert(blockMatAsBreeze.toArray.toIndexedSeq == irmLocal.toArray.toIndexedSeq)
     assert(m.blocks.count() == 5)
 
-    (m.dot(m.T)).toBreezeMatrix() // assert no exception
+    m.dot(m.T).toBreezeMatrix(): Unit // assert no exception
 
     assert(m.mapWithIndex { case (i, j, v) => i + 10 * j + v }.toBreezeMatrix() ===
       new BDM[Double](

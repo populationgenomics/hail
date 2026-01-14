@@ -39,7 +39,11 @@ class PCanonicalBinary(val required: Boolean) extends PBinary {
       val len = srcBinary.loadLength(srcAddress)
       val newAddr = allocate(region, len)
       storeLength(newAddr, len)
-      Region.copyFrom(srcAddress + srcBinary.lengthHeaderBytes, newAddr + lengthHeaderBytes, len)
+      Region.copyFrom(
+        srcAddress + srcBinary.lengthHeaderBytes,
+        newAddr + lengthHeaderBytes,
+        len.toLong,
+      )
       newAddr
     }
   }
@@ -47,13 +51,13 @@ class PCanonicalBinary(val required: Boolean) extends PBinary {
   override def containsPointers: Boolean = true
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit =
-    sb.append("PCBinary")
+    sb ++= "PCBinary"
 
   def contentAlignment: Long = 4
 
   def lengthHeaderBytes: Long = 4
 
-  def contentByteSize(length: Int): Long = 4 + length
+  def contentByteSize(length: Int): Long = 4L + length
 
   def contentByteSize(length: Code[Int]): Code[Long] = (const(4) + length).toL
 

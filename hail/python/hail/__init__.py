@@ -2,8 +2,8 @@ import importlib.resources
 from pathlib import Path
 from sys import version_info
 
-if version_info < (3, 9):
-    raise EnvironmentError(f'Hail requires Python 3.9 or later, found {version_info.major}.{version_info.minor}')
+if version_info < (3, 10):
+    raise EnvironmentError(f'Hail requires Python 3.10 or later, found {version_info.major}.{version_info.minor}')
 
 
 def __resource(name: str) -> Path:
@@ -70,7 +70,6 @@ from . import (
 from .context import (
     TemporaryDirectory,
     TemporaryFilename,
-    _async_current_backend,
     _get_flags,
     _set_flags,
     _with_flags,
@@ -120,7 +119,6 @@ __all__ = [
     '__pip_version__',
     '__revision__',
     '__version__',
-    '_async_current_backend',
     '_get_flags',
     '_set_flags',
     '_with_flags',

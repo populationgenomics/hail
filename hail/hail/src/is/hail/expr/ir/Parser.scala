@@ -5,6 +5,7 @@ import is.hail.expr.{JSONAnnotationImpex, Nat, ParserUtils}
 import is.hail.expr.ir.agg._
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.RelationalFunctions
+import is.hail.expr.ir.lowering.LoweringPipeline
 import is.hail.io.{BufferSpec, TypedCodecSpec}
 import is.hail.rvd.{RVDPartitioner, RVDType}
 import is.hail.types.{tcoerce, VirtualTypeWithReq}
@@ -15,6 +16,7 @@ import is.hail.utils._
 import is.hail.utils.StackSafe._
 import is.hail.utils.StringEscapeUtils._
 
+import scala.collection.compat._
 import scala.collection.mutable
 import scala.reflect.ClassTag
 import scala.util.parsing.combinator.JavaTokenParsers
@@ -147,9 +149,9 @@ object IRParser {
     it.next()
   }
 
-  def punctuation(it: TokenIterator, symbol: String): String =
+  def punctuation(it: TokenIterator, symbol: String): Unit =
     consumeToken(it) match {
-      case x: PunctuationToken if x.value == symbol => x.value
+      case x: PunctuationToken if x.value == symbol =>
       case x: Token =>
         error(x, s"Expected punctuation '$symbol' but found ${x.getName} '${x.value}'.")
     }
@@ -160,9 +162,9 @@ object IRParser {
       case x: Token => error(x, s"Expected identifier but found ${x.getName} '${x.value}'.")
     }
 
-  def identifier(it: TokenIterator, expectedId: String): String =
+  def identifier(it: TokenIterator, expectedId: String): Unit =
     consumeToken(it) match {
-      case x: IdentifierToken if x.value == expectedId => x.value
+      case x: IdentifierToken if x.value == expectedId =>
       case x: Token =>
         error(x, s"Expected identifier '$expectedId' but found ${x.getName} '${x.value}'.")
     }
@@ -245,7 +247,7 @@ object IRParser {
     new RVDPartitioner(
       ctx.stateManager,
       keyType,
-      rangeBounds.asInstanceOf[mutable.IndexedSeq[Interval]],
+      rangeBounds.asInstanceOf[IndexedSeq[Interval]],
     )
   }
 
@@ -277,7 +279,7 @@ object IRParser {
   def opt[T](it: TokenIterator, f: (TokenIterator) => T)(implicit tct: ClassTag[T]): Option[T] = {
     it.head match {
       case x: IdentifierToken if x.value == "None" =>
-        consumeToken(it)
+        consumeToken(it): Unit
         None
       case _ =>
         Some(f(it))
@@ -295,7 +297,7 @@ object IRParser {
     while (it.hasNext && it.head != end) {
       xs += f(it)
       if (it.head == sep)
-        consumeToken(it)
+        consumeToken(it): Unit
     }
     xs.toArray
   }
@@ -367,7 +369,7 @@ object IRParser {
     punctuation(it, ":")
     val typ = f(it)
     while (it.hasNext && it.head == PunctuationToken("@"))
-      decorator(it)
+      decorator(it): Unit
     (name, typ)
   }
 
@@ -385,7 +387,7 @@ object IRParser {
   def ptype_expr(it: TokenIterator): PType = {
     val req = it.head match {
       case x: PunctuationToken if x.value == "+" =>
-        consumeToken(it)
+        punctuation(it, "+")
         true
       case _ => false
     }
@@ -467,7 +469,7 @@ object IRParser {
     // skip requiredness token for back-compatibility
     it.head match {
       case x: PunctuationToken if x.value == "+" =>
-        consumeToken(it)
+        punctuation(it, "+")
       case _ =>
     }
 
@@ -739,18 +741,6 @@ object IRParser {
     sig
   }
 
-  def agg_signature(it: TokenIterator): AggSignature = {
-    punctuation(it, "(")
-    val op = agg_op(it)
-    val initArgs = type_exprs(it)
-    val seqOpArgs = type_exprs(it)
-    punctuation(it, ")")
-    AggSignature(op, initArgs, seqOpArgs)
-  }
-
-  def agg_signatures(it: TokenIterator): Array[AggSignature] =
-    base_seq_parser(agg_signature)(it)
-
   def ir_value(it: TokenIterator): (Type, Any) = {
     val typ = type_expr(it)
     val s = string_literal(it)
@@ -864,7 +854,7 @@ object IRParser {
           }
           body <- ir_value_expr(ctx)(it)
         } yield {
-          val bindings = (names, values).zipped.map { case ((bindType, name), value) =>
+          val bindings = names.lazyZip(values).map { case ((bindType, name), value) =>
             val scope = bindType match {
               case "eval" => Scope.EVAL
               case "agg" => Scope.AGG
@@ -1292,15 +1282,13 @@ object IRParser {
         for {
           initOpArgs <- ir_value_exprs(ctx)(it)
           seqOpArgs <- ir_value_exprs(ctx)(it)
-          aggSig = AggSignature(aggOp, null, null)
-        } yield ApplyAggOp(initOpArgs, seqOpArgs, aggSig)
+        } yield ApplyAggOp(initOpArgs, seqOpArgs, aggOp)
       case "ApplyScanOp" =>
         val aggOp = agg_op(it)
         for {
           initOpArgs <- ir_value_exprs(ctx)(it)
           seqOpArgs <- ir_value_exprs(ctx)(it)
-          aggSig = AggSignature(aggOp, null, null)
-        } yield ApplyScanOp(initOpArgs, seqOpArgs, aggSig)
+        } yield ApplyScanOp(initOpArgs, seqOpArgs, aggOp)
       case "AggFold" =>
         val accumName = name(it)
         val otherAccumName = name(it)
@@ -1482,7 +1470,7 @@ object IRParser {
       case "ReadPartition" =>
         val requestedTypeRaw = it.head match {
           case x: IdentifierToken if x.value == "None" || x.value == "DropRowUIDs" =>
-            consumeToken(it)
+            consumeToken(it): Unit
             Left(x.value)
           case _ =>
             Right(type_expr(it))
@@ -1523,11 +1511,6 @@ object IRParser {
           case Array(value, path, stagingFile) => WriteValue(value, path, writer, Some(stagingFile))
         }
       case "LiftMeOut" => ir_value_expr(ctx)(it).map(LiftMeOut)
-      case "ReadPartition" =>
-        val rowType = tcoerce[TStruct](type_expr(it))
-        import PartitionReader.formats
-        val reader = JsonMethods.parse(string_literal(it)).extract[PartitionReader]
-        ir_value_expr(ctx)(it).map(context => ReadPartition(context, rowType, reader))
     }
   }
 
@@ -1565,7 +1548,7 @@ object IRParser {
       case "TableRead" =>
         val requestedTypeRaw = it.head match {
           case x: IdentifierToken if x.value == "None" || x.value == "DropRowUIDs" =>
-            consumeToken(it)
+            consumeToken(it): Unit
             Left(x.value)
           case _ =>
             Right(table_type_expr(it))
@@ -1815,7 +1798,7 @@ object IRParser {
         val requestedTypeRaw = it.head match {
           case x: IdentifierToken
               if x.value == "None" || x.value == "DropColUIDs" || x.value == "DropRowUIDs" || x.value == "DropRowColUIDs" =>
-            consumeToken(it)
+            consumeToken(it): Unit
             Left(x.value)
           case _ =>
             Right(matrix_type_expr(it))
@@ -1937,6 +1920,7 @@ object IRParser {
   def blockmatrix_sparsifier(ctx: ExecuteContext)(it: TokenIterator)
     : StackFrame[BlockMatrixSparsifier] = {
     punctuation(it, "(")
+    val lower = LoweringPipeline.relationalLowerer
     identifier(it) match {
       case "PyRowIntervalSparsifier" =>
         val blocksOnly = boolean_literal(it)
@@ -1944,7 +1928,7 @@ object IRParser {
         ir_value_expr(ctx)(it).map { ir_ =>
           val ir = annotateTypes(ctx, ir_, BindingEnv.empty).asInstanceOf[IR]
           val Row(starts: IndexedSeq[Long @unchecked], stops: IndexedSeq[Long @unchecked]) =
-            CompileAndEvaluate[Row](ctx, ir)
+            CompileAndEvaluate[Row](ctx, ir, lower = lower)
           RowIntervalSparsifier(blocksOnly, starts, stops)
         }
       case "PyBandSparsifier" =>
@@ -1952,21 +1936,21 @@ object IRParser {
         punctuation(it, ")")
         ir_value_expr(ctx)(it).map { ir_ =>
           val ir = annotateTypes(ctx, ir_, BindingEnv.empty).asInstanceOf[IR]
-          val Row(l: Long, u: Long) = CompileAndEvaluate[Row](ctx, ir)
+          val Row(l: Long, u: Long) = CompileAndEvaluate[Row](ctx, ir, lower = lower)
           BandSparsifier(blocksOnly, l, u)
         }
       case "PyPerBlockSparsifier" =>
         punctuation(it, ")")
         ir_value_expr(ctx)(it).map { ir_ =>
           val ir = annotateTypes(ctx, ir_, BindingEnv.empty).asInstanceOf[IR]
-          val indices = CompileAndEvaluate[IndexedSeq[Int]](ctx, ir)
+          val indices = CompileAndEvaluate[IndexedSeq[Int]](ctx, ir, lower = lower)
           PerBlockSparsifier(indices)
         }
       case "PyRectangleSparsifier" =>
         punctuation(it, ")")
         ir_value_expr(ctx)(it).map { ir_ =>
           val ir = annotateTypes(ctx, ir_, BindingEnv.empty).asInstanceOf[IR]
-          val rectangles = CompileAndEvaluate[IndexedSeq[Long]](ctx, ir)
+          val rectangles = CompileAndEvaluate[IndexedSeq[Long]](ctx, ir, lower = lower)
           RectangleSparsifier(rectangles.grouped(4).toIndexedSeq)
         }
       case "RowIntervalSparsifier" =>
@@ -2058,12 +2042,6 @@ object IRParser {
         val shape = int64_literals(it)
         val blockSize = int32_literal(it)
         done(BlockMatrixRandom(staticUID, gaussian, shape, blockSize))
-      case "RelationalLetBlockMatrix" =>
-        val n = name(it)
-        for {
-          value <- ir_value_expr(ctx)(it)
-          body <- blockmatrix_ir(ctx)(it)
-        } yield RelationalLetBlockMatrix(n, value, body)
     }
   }
 
@@ -2078,17 +2056,6 @@ object IRParser {
           val TTuple(IndexedSeq(_, TupleField(_, rt))) = env.eval.lookup(x.name)
           x._typ = rt
           x
-        case x: ApplyAggOp =>
-          x.aggSig.initOpArgs = x.initOpArgs.map(_.typ)
-          x.aggSig.seqOpArgs = x.seqOpArgs.map(_.typ)
-          x
-        case x: ApplyScanOp =>
-          x.aggSig.initOpArgs = x.initOpArgs.map(_.typ)
-          x.aggSig.seqOpArgs = x.seqOpArgs.map(_.typ)
-          x
-        case x: ApplyComparisonOp =>
-          x.op = x.op.copy(x.l.typ, x.r.typ)
-          x
         case MakeArray(args, typ) =>
           MakeArray.unify(ctx, args, typ)
         case x @ InitOp(
@@ -2099,7 +2066,7 @@ object IRParser {
           run(
             combIR,
             BindingEnv.empty.bindEval(accumName -> t.virtualType, otherAccumName -> t.virtualType),
-          )
+          ): Unit
           x
         case x @ SeqOp(
               _,
@@ -2109,7 +2076,7 @@ object IRParser {
           run(
             combIR,
             BindingEnv.empty.bindEval(accumName -> t.virtualType, otherAccumName -> t.virtualType),
-          )
+          ): Unit
           x
         case x @ CombOp(
               _,
@@ -2119,7 +2086,7 @@ object IRParser {
           run(
             combIR,
             BindingEnv.empty.bindEval(accumName -> t.virtualType, otherAccumName -> t.virtualType),
-          )
+          ): Unit
           x
         case x @ ResultOp(
               _,
@@ -2128,7 +2095,7 @@ object IRParser {
           run(
             combIR,
             BindingEnv.empty.bindEval(accumName -> t.virtualType, otherAccumName -> t.virtualType),
-          )
+          ): Unit
           x
         case Apply(name, typeArgs, args, rt, errorID) =>
           invoke(name, rt, typeArgs, errorID, args: _*)

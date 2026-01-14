@@ -1,14 +1,12 @@
 package is.hail.utils
 
-import is.hail.{CancellingExecutorService, HailSuite}
+import is.hail.HailSuite
 import is.hail.io.fs.HadoopFS
 
-import java.util.concurrent.Executors
-
-import com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService
 import org.apache.spark.storage.StorageLevel
 import org.scalacheck.Gen
 import org.scalacheck.Gen.containerOf
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
@@ -61,19 +59,12 @@ class UtilsSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     assert(Array(1, 1).isSorted)
   }
 
-  @Test def testHadoopStripCodec(): Unit = {
-    assert(fs.stripCodecExtension("file.tsv") == "file.tsv")
-    assert(fs.stripCodecExtension("file.tsv.gz") == "file.tsv")
-    assert(fs.stripCodecExtension("file.tsv.bgz") == "file.tsv")
-    assert(fs.stripCodecExtension("file") == "file")
-  }
-
   @Test def testPairRDDNoDup(): Unit = {
     val answer1 =
       Array((1, (1, Option(1))), (2, (4, Option(2))), (3, (9, Option(3))), (4, (16, Option(4))))
     val pairRDD1 = sc.parallelize(Array(1, 2, 3, 4)).map(i => (i, i * i))
     val pairRDD2 = sc.parallelize(Array(1, 2, 3, 4, 1, 2, 3, 4)).map(i => (i, i))
-    val join = pairRDD1.leftOuterJoin(pairRDD2.distinct)
+    val join = pairRDD1.leftOuterJoin(pairRDD2.distinct())
 
     assert(join.collect().sortBy(t => t._1) sameElements answer1)
     assert(join.count() == 4)
@@ -127,7 +118,7 @@ class UtilsSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     forAll(containerOf[Array, Int](Gen.choose(-1000, 1000)), Gen.choose(1, 10)) {
       case (values, parts) =>
         val rdd = sc.parallelize(values, numSlices = parts)
-        rdd.collectAsSet() == rdd.collect().toSet
+        assert(rdd.collectAsSet() == rdd.collect().toSet)
     }
 
   @Test def testDigitsNeeded(): Unit = {
@@ -137,17 +128,6 @@ class UtilsSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     assert(digitsNeeded(9) == 1)
     assert(digitsNeeded(13) == 2)
     assert(digitsNeeded(30173) == 5)
-  }
-
-  @Test def testMangle(): Unit = {
-    val c1 = Array("a", "b", "c", "a", "a", "c", "a")
-    val (c2, diff) = mangle(c1)
-    assert(c2.toSeq == Seq("a", "b", "c", "a_1", "a_2", "c_1", "a_3"))
-    assert(diff.toSeq == Seq("a" -> "a_1", "a" -> "a_2", "c" -> "c_1", "a" -> "a_3"))
-
-    val (c4, diff2) = mangle(c1, "D" * _)
-    assert(c4.toSeq == Seq("a", "b", "c", "aD", "aDD", "cD", "aDDD"))
-    assert(diff2.toSeq == Seq("a" -> "aD", "a" -> "aDD", "c" -> "cD", "a" -> "aDDD"))
   }
 
   @Test def toMapUniqueEmpty(): Unit =
@@ -197,32 +177,6 @@ class UtilsSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     assert(treeAggDepth(400, 20) == 2)
     assert(treeAggDepth(401, 20) == 3)
     assert(treeAggDepth(0, 20) == 1)
-  }
-
-  @Test def testRunAll(): Unit = {
-    type F[_] = Null
-
-    val (_, successes) =
-      runAll[F, Int](newDirectExecutorService())((_, _) => null)(null)(
-        for { k <- 0 until 4 } yield (() => if (k % 2 == 0) k else throw new Exception(), k)
-      )
-
-    assert(successes == Seq(0 -> 0, 2 -> 2))
-  }
-
-  @Test def testRunAllWithCancellingExecutorService(): Unit = {
-    type F[_] = Null
-
-    val delegate = Executors.newSingleThreadExecutor()
-
-    try {
-      val (_, successes) =
-        runAll[F, Int](new CancellingExecutorService(delegate))((_, _) => null)(null)(
-          for { k <- 0 until 4 } yield (() => if (k % 2 == 0) k else throw new Exception(), k)
-        )
-
-      assert(successes == Seq(0 -> 0))
-    } finally delegate.shutdown()
   }
 
   @Test def testMerge(): Unit = {

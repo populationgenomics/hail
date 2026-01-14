@@ -72,7 +72,6 @@ from hailtop.utils import (
     time_msecs_str,
 )
 from web_common import (
-    api_security_headers,
     render_template,
     set_message,
     setup_aiohttp_jinja2,
@@ -243,34 +242,27 @@ def deprecated(fun):
 
 
 @routes.get('/healthcheck')
-@api_security_headers
 async def get_healthcheck(_) -> web.Response:
-    r = web.Response()
-    r.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains;'
-    return r
+    return web.Response()
 
 
 @routes.get('/api/v1alpha/version')
-@api_security_headers
 async def rest_get_version(_) -> web.Response:
     return web.Response(text=__version__)
 
 
 @routes.get('/api/v1alpha/cloud')
-@api_security_headers
 async def rest_cloud(_) -> web.Response:
     return web.Response(text=CLOUD)
 
 
 @routes.get('/api/v1alpha/supported_regions')
-@api_security_headers
 @auth.authenticated_users_only()
 async def rest_get_supported_regions(request: web.Request, _) -> web.Response:
     return json_response(list(request.app['regions'].keys()))
 
 
 @routes.get('/api/v1alpha/default_region')
-@api_security_headers
 @auth.authenticated_users_only()
 async def rest_get_default_region(request: web.Request, _) -> web.Response:
     return web.Response(text=request.app['default_region'])
@@ -422,7 +414,6 @@ async def _query_job_group_jobs(
 
 
 @routes.get('/api/v1alpha/batches/completed')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def get_completed_batches_ordered_by_completed_time(request, userdata):
@@ -536,7 +527,6 @@ WHERE job_groups.batch_id = %s AND
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch_jobs_v1(request: web.Request, _, batch_id: int) -> web.Response:
@@ -544,7 +534,6 @@ async def get_batch_jobs_v1(request: web.Request, _, batch_id: int) -> web.Respo
 
 
 @routes.get('/api/v2alpha/batches/{batch_id}/jobs')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch_jobs_v2(request: web.Request, _, batch_id: int) -> web.Response:
@@ -552,7 +541,6 @@ async def get_batch_jobs_v2(request: web.Request, _, batch_id: int) -> web.Respo
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/job-groups/{job_group_id}/jobs')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_job_group_jobs_v1(request: web.Request, _, batch_id: int) -> web.Response:
@@ -561,7 +549,6 @@ async def get_job_group_jobs_v1(request: web.Request, _, batch_id: int) -> web.R
 
 
 @routes.get('/api/v2alpha/batches/{batch_id}/job-groups/{job_group_id}/jobs')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_job_group_jobs_v2(request: web.Request, _, batch_id: int) -> web.Response:
@@ -581,7 +568,6 @@ async def _api_get_job_group_jobs(request, batch_id: int, job_group_id: int, ver
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/resources')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_jobs_for_billing(request, userdata, batch_id):
@@ -629,61 +615,6 @@ async def get_jobs_for_billing(request, userdata, batch_id):
         resp['last_job_id'] = last_job_id
 
     return web.json_response(resp)
-
-
-@routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
-@api_security_headers
-@billing_project_users_only()
-@add_metadata_to_request
-async def get_job_resource_usage(request: web.Request, _, batch_id: int) -> web.Response:
-    """
-    Get the resource_usage data for a job. The data is returned as a JSON object
-    transformed from a pandas DataFrame using the 'split' orientation.
-
-    Returns
-    -------
-    Example response:
-    {
-        // eg: input, main, output
-        "[job_stage]": {
-            "columns":[
-                "time_msecs",
-                "memory_in_bytes",
-                "cpu_usage",
-                "non_io_storage_in_bytes",
-                "io_storage_in_bytes",
-                "network_bandwidth_upload_in_bytes_per_second",
-                "network_bandwidth_download_in_bytes_per_second"
-            ],
-            "index":[0, 1, ...],
-            "data": [[<records>]],
-        }, ...
-    }
-    """
-
-    # pull this out separately as billing_project_users_only() does a permission
-    # check for us, but has a fixed signature
-    job_id = int(request.match_info['job_id'])
-
-    job_record = await _get_job_record(request.app, batch_id, job_id)
-
-    # effectively the auth check
-    if not job_record:
-        raise web.HTTPNotFound()
-
-    resources: Optional[Dict[str, Optional[pd.DataFrame]]] = await _get_job_resource_usage_from_record(
-        app=request.app, record=job_record, batch_id=batch_id, job_id=job_id
-    )
-
-    if not resources:
-        # empty response if not available yet
-        return web.json_response({})
-
-    return web.json_response({
-        stage: stage_resource.to_dict(orient='split')
-        for stage, stage_resource in resources.items()
-        if stage_resource is not None
-    })
 
 
 async def _get_job_record(app, batch_id, job_id):
@@ -964,7 +895,6 @@ async def _get_full_job_status(app, record):
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/log')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 @deprecated
@@ -995,7 +925,6 @@ async def get_job_container_log(request, batch_id):
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/log/{container}')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def rest_get_job_container_log(request, _, batch_id) -> web.Response:
@@ -1022,7 +951,6 @@ async def _query_batches(request, user: str, q: str, version: int, last_batch_id
 
 
 @routes.get('/api/v1alpha/batches')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def get_batches_v1(request, userdata):  # pylint: disable=unused-argument
@@ -1039,7 +967,6 @@ async def get_batches_v1(request, userdata):  # pylint: disable=unused-argument
 
 
 @routes.get('/api/v2alpha/batches')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def get_batches_v2(request, userdata):  # pylint: disable=unused-argument
@@ -1102,7 +1029,6 @@ async def _api_get_job_groups_v1(request: web.Request, batch_id: int, job_group_
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/job-groups')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_root_job_groups_v1(request: web.Request, _, batch_id: int):  # pylint: disable=unused-argument
@@ -1110,7 +1036,6 @@ async def get_root_job_groups_v1(request: web.Request, _, batch_id: int):  # pyl
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/job-groups/{job_group_id}/job-groups')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_job_groups_v1(request: web.Request, _, batch_id: int):  # pylint: disable=unused-argument
@@ -1119,7 +1044,6 @@ async def get_job_groups_v1(request: web.Request, _, batch_id: int):  # pylint: 
 
 
 @routes.post('/api/v1alpha/batches/{batch_id}/updates/{update_id}/job-groups/create')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def create_job_groups(request: web.Request, userdata: UserData) -> web.Response:
@@ -1156,7 +1080,6 @@ def check_service_account_permissions(user, sa):
 
 
 @routes.post('/api/v1alpha/batches/{batch_id}/jobs/create')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 @deprecated  # Use create_jobs_for_update instead
@@ -1173,7 +1096,6 @@ async def create_jobs(request: web.Request, userdata: UserData) -> web.Response:
 
 
 @routes.post('/api/v1alpha/batches/{batch_id}/updates/{update_id}/jobs/create')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def create_jobs_for_update(request: web.Request, userdata: UserData) -> web.Response:
@@ -1875,7 +1797,6 @@ VALUES (%s, %s, %s);
 
 
 @routes.post('/api/v1alpha/batches/create-fast')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def create_batch_fast(request, userdata):
@@ -1930,7 +1851,6 @@ async def create_batch_fast(request, userdata):
 
 
 @routes.post('/api/v1alpha/batches/create')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def create_batch(request, userdata):
@@ -2072,7 +1992,6 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
 
 
 @routes.post('/api/v1alpha/batches/{batch_id}/update-fast')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def update_batch_fast(request, userdata):
@@ -2133,7 +2052,6 @@ async def update_batch_fast(request, userdata):
 
 
 @routes.post('/api/v1alpha/batches/{batch_id}/updates/create')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def create_update(request, userdata):
@@ -2183,7 +2101,7 @@ FOR UPDATE;
         )
 
         if record:
-            return (record['update_id'], record['start_job_id'], record['start_job_group_id'])
+            return (record['update_id'], record['start_job_group_id'], record['start_job_id'])
 
         # We use FOR UPDATE so that we serialize batch update insertions
         # This is necessary to reserve job id and job group id ranges.
@@ -2373,7 +2291,6 @@ WHERE id = %s AND NOT deleted;
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2381,7 +2298,6 @@ async def get_batch(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.patch('/api/v1alpha/batches/{batch_id}/cancel')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def cancel_batch(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2390,7 +2306,6 @@ async def cancel_batch(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/job-groups/{job_group_id}')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_job_group(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2399,7 +2314,6 @@ async def get_job_group(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.patch('/api/v1alpha/batches/{batch_id}/job-groups/{job_group_id}/cancel')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def cancel_job_group(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2409,7 +2323,6 @@ async def cancel_job_group(request: web.Request, _, batch_id: int) -> web.Respon
 
 
 @routes.patch('/api/v1alpha/batches/{batch_id}/close')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 @deprecated
@@ -2455,7 +2368,6 @@ WHERE batch_id = %s AND update_id = 1;
 
 
 @routes.patch('/api/v1alpha/batches/{batch_id}/updates/{update_id}/commit')
-@api_security_headers
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def commit_update(request: web.Request, userdata):
@@ -2515,7 +2427,6 @@ async def _commit_update(app: web.Application, batch_id: int, update_id: int, us
 
 
 @routes.delete('/api/v1alpha/batches/{batch_id}')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def delete_batch(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2523,7 +2434,7 @@ async def delete_batch(request: web.Request, _, batch_id: int) -> web.Response:
     return web.Response()
 
 
-@routes.get('/batches/{batch_id}')
+@routes.get('/batches/{batch_id}', name='batch_details_page')
 @web_security_headers_unsafe_eval
 @billing_project_users_only()
 @catch_ui_error_in_dev
@@ -2584,7 +2495,7 @@ async def ui_cancel_batch(request: web.Request, _, batch_id: int) -> NoReturn:
         await _handle_ui_error(session, _cancel_job_group, request.app, batch_id, ROOT_JOB_GROUP_ID)
         set_message(session, f'Batch {batch_id} cancelled.', 'info')
     finally:
-        location = request.app.router['batches'].url_for().with_query(params)
+        location = request.app.router['batch_details_page'].url_for(batch_id=str(batch_id)).with_query(params)
         raise web.HTTPFound(location=location)  # pylint: disable=lost-exception
 
 
@@ -2736,7 +2647,6 @@ WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/attempts')
-@api_security_headers
 @billing_project_users_only()
 async def get_attempts(request: web.Request, _, batch_id: int) -> web.Response:
     job_id = int(request.match_info['job_id'])
@@ -2745,7 +2655,6 @@ async def get_attempts(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}')
-@api_security_headers
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_job(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2755,8 +2664,8 @@ async def get_job(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}/resource_usage')
-@api_security_headers
 @billing_project_users_only()
+@add_metadata_to_request
 async def get_job_resource_usage(request: web.Request, _, batch_id: int) -> web.Response:
     """
     Get the resource_usage data for a job. The data is returned as a JSON object
@@ -3207,7 +3116,6 @@ UPDATE billing_projects SET `limit` = %s WHERE name_cs = %s;
 
 
 @routes.post('/api/v1alpha/billing_limits/{billing_project}/edit')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def post_edit_billing_limits(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3368,7 +3276,6 @@ async def ui_get_billing_projects(request, userdata):
 
 
 @routes.get('/api/v1alpha/billing_projects')
-@api_security_headers
 @auth.authenticated_users_only()
 async def get_billing_projects(request, userdata):
     db: Database = request.app['db']
@@ -3383,7 +3290,6 @@ async def get_billing_projects(request, userdata):
 
 
 @routes.get('/api/v1alpha/billing_projects/{billing_project}')
-@api_security_headers
 @auth.authenticated_users_only()
 async def get_billing_project(request, userdata):
     db: Database = request.app['db']
@@ -3466,7 +3372,6 @@ async def post_billing_projects_remove_user(request: web.Request, _) -> NoReturn
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/users/{user}/remove')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_get_billing_projects_remove_user(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3550,7 +3455,6 @@ async def post_billing_projects_add_user(request: web.Request, _) -> NoReturn:
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/users/{user}/add')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_billing_projects_add_user(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3607,7 +3511,6 @@ async def post_create_billing_projects(request: web.Request, _) -> NoReturn:
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/create')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_get_create_billing_projects(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3668,7 +3571,6 @@ async def post_close_billing_projects(request: web.Request, _) -> NoReturn:
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/close')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_close_billing_projects(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3714,7 +3616,6 @@ async def post_reopen_billing_projects(request: web.Request, _) -> NoReturn:
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/reopen')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_reopen_billing_projects(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3745,7 +3646,6 @@ async def _delete_billing_project(db, billing_project):
 
 
 @routes.post('/api/v1alpha/billing_projects/{billing_project}/delete')
-@api_security_headers
 @authenticated_developers_or_auth_only
 async def api_delete_billing_projects(request: web.Request) -> web.Response:
     db: Database = request.app['db']
@@ -3785,7 +3685,7 @@ async def index(request: web.Request, _) -> NoReturn:
 @web_security_headers_swagger
 async def swagger(request):
     page_context = {'service': 'batch', 'base_path': deploy_config.base_path('batch')}
-    return await render_template('batch', request, None, 'swagger.html', page_context)
+    return await render_template('batch', request, None, 'swagger/index.html', page_context)
 
 
 @routes.get('/openapi.yaml')
@@ -3948,7 +3848,11 @@ def run():
 
     app = web.Application(
         client_max_size=HTTP_CLIENT_MAX_SIZE,
-        middlewares=[check_csrf_token, unavailable_if_frozen, monitor_endpoints_middleware],
+        middlewares=[
+            check_csrf_token,
+            unavailable_if_frozen,
+            monitor_endpoints_middleware,
+        ],
     )
     setup_aiohttp_session(app)
 

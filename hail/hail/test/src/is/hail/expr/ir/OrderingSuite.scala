@@ -2,7 +2,6 @@ package is.hail.expr.ir
 
 import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
-import is.hail.TestUtils._
 import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.expr.ir.defs.{
@@ -16,16 +15,21 @@ import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.interfaces.SBaseStructValue
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.compat._
+import is.hail.utils.compat.immutable.ArraySeq
 
+import is.hail
 import org.apache.spark.sql.Row
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
+import org.scalatest
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.{DataProvider, Test}
 
 class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
-  implicit val execStrats = ExecStrategy.values
+  implicit val execStrats: hail.ExecStrategy.ValueSet = ExecStrategy.values
 
   def sm = ctx.stateManager
 
@@ -229,8 +233,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         check(eordMNE.gteq(null, null), false)
         check(eordMNE.gteq(null, a), true)
         check(eordMNE.gteq(a, null), false)
-
-        true
       }
     }
   }
@@ -278,8 +280,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
         assert(fgteq(region, v1, v2) == gteq, s"gteq expected: $gteq")
       }
-
-      true
     }
 
   @Test def testReverseIsSwappedArgumentsOfExtendedOrdering(): Unit =
@@ -324,8 +324,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
         assert(fgteq(region, v1, v2) == gteq, s"gteq expected: $gteq")
       }
-
-      true
     }
 
   @Test def testSortOnRandomArray(): Unit = {
@@ -339,7 +337,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
           FastSeq(a -> tarray),
           expected = a.sorted((if (asc) ord else ord.reverse).toOrdering),
         )
-        true
     }
   }
 
@@ -353,7 +350,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         FastSeq(array -> tarray),
         expected = array.sorted(tarray.elementType.ordering(sm).toOrdering).distinct,
       )
-      true
     }
   }
 
@@ -377,14 +373,12 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         FastSeq(array -> TArray(telt)),
         expected =
           array
-            .view
             .filter(_ != null)
             .map { case Row(k, _) => k }
+            .to(ArraySeq)
             .distinct
-            .sorted(telt.types(0).ordering(sm).toOrdering)
-            .toFastSeq,
+            .sorted(telt.types(0).ordering(sm).toOrdering),
       )
-      true
     }
   }
 
@@ -393,7 +387,7 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     val ts = TStream(TStruct("key" -> TInt32, "value" -> TInt32))
     val irs: Array[IR => IR] = Array(ArraySort(_, True()), ToSet(_), ToDict(_))
 
-    for (irF <- irs) assertEvalsTo(IsNA(irF(NA(ts))), true)
+    scalatest.Inspectors.forAll(irs)(irF => assertEvalsTo(IsNA(irF(NA(ts))), true))
   }
 
   @Test def testSetContainsOnRandomSet(): Unit = {
@@ -422,7 +416,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         FastSeq(set -> tset, test1 -> telt),
         expected = set.contains(test1),
       )
-      true
     }
   }
 
@@ -444,7 +437,8 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         dict.getOrElse(testKey1, null),
       )
 
-      if (dict.nonEmpty) {
+      if (dict.isEmpty) scalatest.Succeeded
+      else {
         val testKey2 = dict.keys.toSeq.head
         assertEvalsTo(
           invoke("get", tdict.valueType, In(0, tdict), In(1, tdict.keyType)),
@@ -452,7 +446,6 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
           expected = dict(testKey2),
         )
       }
-      true
     }
   }
 
@@ -501,13 +494,13 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         val asArray = SafeIndexedSeq(pArray, soff)
 
         val f = fb.resultWithIndex()(theHailClassLoader, ctx.fs, ctx.taskContext, region)
-        val closestI = f(region, soff, eoff)
+        val i = f(region, soff, eoff)
+        val ordering = t.ordering(sm)
 
-        set.contains(elem) ==> {
-          val maybeEqual = asArray(closestI)
-          (elem == maybeEqual) &&
-          (t.ordering(sm).compare(elem, maybeEqual) <= 0 || (closestI == set.size - 1))
-        }
+        // if i-1 is in bounds, then asArray(i) < elem
+        // if i is in bounds, then elem <= asArray(i)
+        assert(((i - 1 < 0) || ordering.compare(asArray(i - 1), elem) < 0) &&
+          ((i >= set.size) || ordering.compare(elem, asArray(i)) <= 0))
       }
     }
   }
@@ -516,9 +509,8 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     val compareGen =
       for {
         tdict <- arbitrary[TDict]
-        dict: Map[Annotation, Annotation] <- genNullableT(ctx, tdict)
-        key <- genNullable(ctx, tdict.keyType)
-        if dict != null && key != null
+        dict: Map[Annotation, Annotation] <- genNonMissingT(ctx, tdict, innerRequired = false)
+        key <- genNonMissing(ctx, tdict.keyType, innerRequired = false)
       } yield (tdict, dict, key)
 
     forAll(compareGen) { case (tDict, dict, key) =>
@@ -556,36 +548,17 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
           )
         )
 
-        val asArray = SafeIndexedSeq(PCanonicalArray(pDict.elementType), soff)
+        val asArray =
+          SafeIndexedSeq(PCanonicalArray(pDict.elementType), soff).map(_.asInstanceOf[Row])
 
         val f = fb.resultWithIndex()(theHailClassLoader, ctx.fs, ctx.taskContext, region)
-        val closestI = f(region, soff, eoff)
+        val i = f(region, soff, eoff)
+        val ordering = pDict.keyType.virtualType.ordering(sm)
 
-        if (closestI == asArray.length) {
-          !dict.contains(key) ==> asArray.forall { keyI =>
-            val otherKey = keyI.asInstanceOf[Row].get(0)
-            pDict.keyType.virtualType.ordering(sm).compare(key, otherKey) > 0
-          }
-        } else {
-          def getKey(i: Int) = asArray(i).asInstanceOf[Row].get(0)
-          val maybeEqual = getKey(closestI)
-          val closestIIsClosest =
-            (pDict.keyType.virtualType.ordering(sm).compare(
-              key,
-              maybeEqual,
-            ) <= 0 || closestI == dict.size - 1) &&
-              (closestI == 0 || pDict.keyType.virtualType.ordering(sm).compare(
-                key,
-                getKey(closestI - 1),
-              ) > 0)
-
-          /* FIXME: -0.0 and 0.0 count as the same in scala Map, but not off-heap Hail data
-           * structures */
-          val kord = tDict.keyType.ordering(sm)
-          (dict.contains(key) && dict.keysIterator.exists(
-            kord.compare(_, key) == 0
-          )) ==> (key == maybeEqual) && closestIIsClosest
-        }
+        // if i-1 is in bounds, then asArray(i).getKey < key
+        // if i is in bounds, then key <= asArray(i).getKey
+        assert(((i - 1 < 0) || ordering.compare(asArray(i - 1).get(0), key) < 0) &&
+          ((i >= asArray.size) || ordering.compare(key, asArray(i).get(0)) <= 0))
       }
     }
   }
@@ -634,15 +607,15 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
     val args = FastSeq(a -> t, a2 -> t)
 
-    assertEvalSame(ApplyComparisonOp(EQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(EQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(Compare(t, t), In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(Compare, In(0, t), In(1, t)), args)
   }
 
   @Test(dataProvider = "arrayDoubleOrderingData")
@@ -656,15 +629,15 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     val s2 = if (a2 != null) a2.toSet else null
     val args = FastSeq(s -> t, s2 -> t)
 
-    assertEvalSame(ApplyComparisonOp(EQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(EQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(Compare(t, t), In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(Compare, In(0, t), In(1, t)), args)
   }
 
   @DataProvider(name = "rowDoubleOrderingData")
@@ -693,14 +666,14 @@ class OrderingSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
     val args = FastSeq(r -> t, r2 -> t)
 
-    assertEvalSame(ApplyComparisonOp(EQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(EQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(NEQWithNA(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(LTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GT(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(GTEQ(t, t), In(0, t), In(1, t)), args)
-    assertEvalSame(ApplyComparisonOp(Compare(t, t), In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(EQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(NEQWithNA, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(LTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GT, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(GTEQ, In(0, t), In(1, t)), args)
+    assertEvalSame(ApplyComparisonOp(Compare, In(0, t), In(1, t)), args)
   }
 }

@@ -1,3 +1,7 @@
+ifeq (3.82,$(lastword $(sort $(MAKE_VERSION) 3.82)))
+$(error requires gmake version at least 3.82)
+endif
+
 HAIL_HAIL_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 REVISION := $(shell git rev-parse HEAD)
@@ -11,13 +15,12 @@ $(error "git rev-parse --short=12 HEAD" failed to produce output)
 endif
 
 HAIL_MAJOR_MINOR_VERSION := 0.2
-HAIL_PATCH_VERSION := 135
+HAIL_PATCH_VERSION := 137
 HAIL_PIP_VERSION := $(HAIL_MAJOR_MINOR_VERSION).$(HAIL_PATCH_VERSION)
 HAIL_VERSION := $(HAIL_PIP_VERSION)-$(SHORT_REVISION)
 
-SCALA_VERSION ?= 2.12.18
-SPARK_VERSION ?= 3.5.0
-
+SCALA_VERSION ?= 2.12
+SPARK_VERSION ?= 3.5.3
 
 include env_var.mk
 
@@ -61,7 +64,7 @@ CLOUD_HAIL_DOCTEST_DATA_DIR = $(CLOUD_HAIL_TEST_RESOURCES_PREFIX)/doctest/data/
 
 # mill integration
 
-MILL := bash mill
+MILL := SCALA_VERSION=$(SCALA_VERSION) bash mill
 MILLOPTS ?=
 
 .PHONY: mill-clean
@@ -74,50 +77,50 @@ mill-clean:
 # be recomputed.
 FORCE:
 
-SHADOW_JAR := out/hail/assembly.dest/out.jar
+SHADOW_JAR := out/hail/$(SCALA_VERSION)/assembly.dest/out.jar
 ifdef HAIL_COMPILE_NATIVES
 $(SHADOW_JAR): native-lib-prebuilt
 endif
 $(SHADOW_JAR): FORCE
-	$(MILL) $(MILLOPTS) hail.assembly
+	$(MILL) $(MILLOPTS) hail[].assembly
 
 .PHONY: shadowJar
 shadowJar: $(SHADOW_JAR)
 
-NON_SHADOW_JAR := out/hail/jar.dest/out.jar
+NON_SHADOW_JAR := out/hail/$(SCALA_VERSION)/jar.dest/out.jar
 ifdef HAIL_COMPILE_NATIVES
 $(NON_SHADOW_JAR): native-lib-prebuilt
 endif
 $(NON_SHADOW_JAR): FORCE
-	$(MILL) $(MILLOPTS) hail.jar
+	$(MILL) $(MILLOPTS) hail[].jar
 
-SHADOW_TEST_JAR := out/hail/test/assembly.dest/out.jar
+SHADOW_TEST_JAR := out/hail/$(SCALA_VERSION)/test/assembly.dest/out.jar
 ifdef HAIL_COMPILE_NATIVES
 $(SHADOW_TEST_JAR): native-lib-prebuilt
 endif
 $(SHADOW_TEST_JAR): FORCE
-	$(MILL) $(MILLOPTS) hail.test.assembly
+	$(MILL) $(MILLOPTS) hail[].test.assembly
 
 .PHONY: shadowTestJar
 shadowTestJar: $(SHADOW_TEST_JAR)
 
-EXTRA_CLASSPATH := out/hail/writeRunClasspath.dest/runClasspath
+EXTRA_CLASSPATH := out/hail/$(SCALA_VERSION)/writeRunClasspath.dest/runClasspath
 $(EXTRA_CLASSPATH): FORCE
-	$(MILL) $(MILLOPTS) hail.writeRunClasspath
+	$(MILL) $(MILLOPTS) hail[].writeRunClasspath
 
 .PHONY: jvm-test
 ifdef HAIL_COMPILE_NATIVES
 jvm-test: native-lib-prebuilt
 endif
 jvm-test:
-	$(MILL) $(MILLOPTS) hail.test testng.xml
+	$(MILL) $(MILLOPTS) hail[].test testng.xml
 
 .PHONY: services-jvm-test
 ifdef HAIL_COMPILE_NATIVES
 services-jvm-test: native-lib-prebuilt
 endif
 services-jvm-test:
-	$(MILL) $(MILLOPTS) hail.test testng-services.xml
+	$(MILL) $(MILLOPTS) hail[].test testng-services.xml
 
 .PHONY: fs-jvm-test
 ifdef HAIL_COMPILE_NATIVES
@@ -130,7 +133,7 @@ fs-jvm-test: upload-remote-test-resources
 	HAIL_DEFAULT_NAMESPACE=$(NAMESPACE) \
 	HAIL_FS_TEST_CLOUD_RESOURCES_URI=$(CLOUD_HAIL_TEST_RESOURCES_DIR)fs \
 	HAIL_TEST_STORAGE_URI=$(TEST_STORAGE_URI) \
-	$(MILL) $(MILLOPTS) hail.test testng-fs.xml
+	$(MILL) $(MILLOPTS) hail[].test $(realpath testng-fs.xml)
 
 # end mill integration
 
@@ -329,15 +332,16 @@ check-pip-lockfile:
 	$(PIP) install 'pip-tools==7.4.0' && bash ../check_pip_requirements.sh python
 
 
-python/hailtop/hailctl/deploy.yaml: env/cloud_base env/wheel_cloud_path
+python/hailtop/hailctl/deploy.yaml: env/cloud_base env/wheel_cloud_path python/pinned-requirements.txt
 python/hailtop/hailctl/deploy.yaml: $(resources)
 	rm -f $@
 	echo "dataproc:" >> $@
 	for FILE in $(notdir $(resources)); do \
-	  echo "  $$FILE: $(cloud_base)/$$FILE" >> $@ || exit 1; done
+		echo "  $$FILE: $(cloud_base)/$$FILE" >> $@ || exit 1
+	done
 	echo "  wheel: $(wheel_cloud_path)" >> $@
-	printf "  pip_dependencies: " >> $@
-	cat python/pinned-requirements.txt | sed '/^[[:blank:]]*#/d;s/#.*//' | grep -v pyspark | tr "\n" "|||" | tr -d '[:space:]' >> $@
+	echo "  pip_dependencies:" >> $@
+	sed '/^[[:blank:]]*#/d;s/#.*//;s/^/    - /' python/pinned-requirements.txt | grep -v pyspark >> $@
 
 .PHONY: upload-artifacts
 upload-artifacts: $(WHEEL)
@@ -350,7 +354,7 @@ upload-artifacts: $(WHEEL)
 # target must be run at least once a day. To trigger this target to re-run,
 # > rm upload-remote-test-resources
 upload-remote-test-resources: install-editable
-upload-remote-test-resources: $(shell git ls-files src/test/resources)
+upload-remote-test-resources: $(shell git ls-files hail/test/resources)
 upload-remote-test-resources: $(shell git ls-files python/hail/docs/data)
 	# # If hailtop.aiotools.copy gives you trouble:
 	# gcloud storage cp -r src/test/resources/\* $(CLOUD_HAIL_TEST_RESOURCES_DIR)
@@ -359,7 +363,7 @@ upload-remote-test-resources: $(shell git ls-files python/hail/docs/data)
             -vvv \
             'null' \
             "[\
-              {\"from\":\"src/test/resources\",\"to\":\"$(CLOUD_HAIL_TEST_RESOURCES_DIR)\"}, \
+              {\"from\":\"hail/test/resources\",\"to\":\"$(CLOUD_HAIL_TEST_RESOURCES_DIR)\"}, \
               {\"from\":\"python/hail/docs/data\",\"to\":\"$(CLOUD_HAIL_DOCTEST_DATA_DIR)\"} \
              ]" \
             --timeout 600

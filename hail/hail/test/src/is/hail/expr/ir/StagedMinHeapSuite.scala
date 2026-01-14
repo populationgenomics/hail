@@ -16,7 +16,9 @@ import is.hail.variant.{Locus, ReferenceGenome}
 
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
+import org.scalatest
 import org.scalatest.matchers.should.Matchers.{be, convertToAnyShouldWrapper}
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
@@ -34,14 +36,16 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
   }
 
   @Test def testSorting(): Unit =
-    forAll((xs: IndexedSeq[Int]) => sort(xs) == xs.sorted)
+    forAll((xs: IndexedSeq[Int]) => assert(sort(xs) == xs.sorted))
 
   @Test def testHeapProperty(): Unit =
     forAll { (xs: IndexedSeq[Int]) =>
       val heap = heapify(xs)
-      (0 until heap.size / 2).forall { i =>
-        ((2 * i + 1) >= heap.size || heap(i) <= heap(2 * i + 1)) &&
-        ((2 * i + 2) >= heap.size || heap(i) <= heap(2 * i + 2))
+      scalatest.Inspectors.forAll(0 until heap.size / 2) { i =>
+        assert(
+          ((2 * i + 1) >= heap.size || heap(i) <= heap(2 * i + 1)) &&
+            ((2 * i + 2) >= heap.size || heap(i) <= heap(2 * i + 2))
+        )
       }
     }
 
@@ -72,7 +76,7 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
             IndexedSeq.fill(loci.size)(heap.pop())
           }
 
-        sortedLoci == loci.sorted(rg.locusOrdering)
+        assert(sortedLoci == loci.sorted(rg.locusOrdering))
       }
     }
 
@@ -112,7 +116,7 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
       mb.voidWithBuilder { cb =>
         MinHeap.push(cb, A.fromValue(cb, Main.partitionRegion, mb.getCodeParam[A](1)(A.ti)))
       }
-    }
+    }: Unit
 
     Main.defineEmitMethod("pop", FastSeq(), A.ti) { mb =>
       mb.emitWithBuilder[A] { cb =>
@@ -121,11 +125,11 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         MinHeap.realloc(cb)
         res
       }
-    }
+    }: Unit
 
     Main.defineEmitMethod("nonEmpty", FastSeq(), BooleanInfo) { mb =>
       mb.emitWithBuilder[Boolean](MinHeap.nonEmpty)
-    }
+    }: Unit
 
     Main.defineEmitMethod("toArray", FastSeq(typeInfo[Region]), LongInfo) { mb =>
       mb.emitWithBuilder { cb =>
@@ -133,7 +137,7 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         val arr = MinHeap.toArray(cb, region)
         arr.asInstanceOf[SIndexablePointerValue].a
       }
-    }
+    }: Unit
 
     trait Resource extends AutoCloseable { def init(): Unit }
 
@@ -145,8 +149,8 @@ class StagedMinHeapSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
         // initialise the heap with them.
         MinHeap.init(cb, Main.pool())
       }
-    }
-    Main.defineEmitMethod("close", FastSeq(), UnitInfo)(_.voidWithBuilder(MinHeap.close))
+    }: Unit
+    Main.defineEmitMethod("close", FastSeq(), UnitInfo)(_.voidWithBuilder(MinHeap.close)): Unit
 
     ctx.scopedExecution { (cl, fs, tc, r) =>
       val heap = Main

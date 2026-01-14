@@ -25,11 +25,8 @@ case class TLocus(rgName: String) extends Type {
 
   def rg: String = rgName
 
-  override def pyString(sb: StringBuilder): Unit = {
-    sb.append("locus<")
-    sb.append(prettyIdentifier(rgName))
-    sb.append('>')
-  }
+  override def pyString(sb: StringBuilder): Unit =
+    sb ++= "locus<" ++= prettyIdentifier(rgName) += '>': Unit
 
   def _typeCheck(a: Any): Boolean = a.isInstanceOf[Locus]
 

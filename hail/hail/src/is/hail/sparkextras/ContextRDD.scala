@@ -1,10 +1,11 @@
 package is.hail.sparkextras
 
-import is.hail.HailContext
+import is.hail.backend.ExecuteContext
 import is.hail.backend.spark.{SparkBackend, SparkTaskContext}
 import is.hail.rvd.RVDContext
 import is.hail.utils._
 
+import scala.collection.compat._
 import scala.reflect.ClassTag
 
 import org.apache.spark._
@@ -35,7 +36,7 @@ class CommutativeAndAssociativeCombiner[U](zero: => U, combine: (U, U) => U) ext
   def result(): U = state
 }
 
-class AssociativeCombiner[U](zero: => U, combine: (U, U) => U) extends Combiner[U] {
+class AssociativeCombiner[U](zero: => U, combine: (U, U) => U) extends Combiner[U] with Logging {
 
   case class TreeValue(var value: U, var end: Int)
 
@@ -44,7 +45,7 @@ class AssociativeCombiner[U](zero: => U, combine: (U, U) => U) extends Combiner[
   private val t = new java.util.TreeMap[Int, TreeValue]()
 
   def combine(i: Int, value0: U): Unit = {
-    log.info(s"at result $i, AssociativeCombiner contains ${t.size()} queued results")
+    logger.info(s"at result $i, AssociativeCombiner contains ${t.size()} queued results")
     var value = value0
     var end = i
 
@@ -86,7 +87,7 @@ object ContextRDD {
 
   def empty[T: ClassTag](): ContextRDD[T] =
     new ContextRDD(
-      SparkBackend.sparkContext("ContextRDD.empty").emptyRDD[RVDContext => Iterator[T]]
+      SparkBackend.sparkContext.emptyRDD[RVDContext => Iterator[T]]
     )
 
   def union[T: ClassTag](
@@ -101,13 +102,14 @@ object ContextRDD {
     new ContextRDD(rdd.mapPartitions(it => Iterator.single((ctx: RVDContext) => it)))
 
   def textFilesLines(
+    ctx: ExecuteContext,
     files: Array[String],
     nPartitions: Option[Int] = None,
     filterAndReplace: TextInputFilterAndReplace = TextInputFilterAndReplace(),
   ): ContextRDD[WithContext[String]] =
     textFilesLines(
       files,
-      nPartitions.getOrElse(HailContext.backend.defaultParallelism),
+      nPartitions.getOrElse(ctx.backend.defaultParallelism),
       filterAndReplace,
     )
 
@@ -117,7 +119,7 @@ object ContextRDD {
     filterAndReplace: TextInputFilterAndReplace,
   ): ContextRDD[WithContext[String]] =
     ContextRDD.weaken(
-      SparkBackend.sparkContext("ContxtRDD.textFilesLines").textFilesLines(
+      SparkBackend.sparkContext.textFilesLines(
         files,
         nPartitions,
       )
@@ -129,12 +131,12 @@ object ContextRDD {
     weaken(sc.parallelize(data, nPartitions.getOrElse(sc.defaultMinPartitions))).map(x => x)
 
   def parallelize[T: ClassTag](data: Seq[T], numSlices: Int): ContextRDD[T] =
-    weaken(SparkBackend.sparkContext("ContextRDD.parallelize").parallelize(data, numSlices)).map {
+    weaken(SparkBackend.sparkContext.parallelize(data, numSlices)).map {
       x => x
     }
 
   def parallelize[T: ClassTag](data: Seq[T]): ContextRDD[T] =
-    weaken(SparkBackend.sparkContext("ContextRDD.parallelize").parallelize(data)).map(x => x)
+    weaken(SparkBackend.sparkContext.parallelize(data)).map(x => x)
 
   type ElementType[T] = RVDContext => Iterator[T]
 
@@ -161,7 +163,7 @@ class ContextRDD[T: ClassTag](
 
   private[this] def sparkManagedContext[U](func: RVDContext => U): U = {
     val c = RVDContext.default(SparkTaskContext.get().getRegionPool())
-    TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => c.close())
+    TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => c.close()): Unit
     func(c)
   }
 
@@ -181,7 +183,7 @@ class ContextRDD[T: ClassTag](
   def filter(f: T => Boolean): ContextRDD[T] =
     mapPartitions(_.filter(f), preservesPartitioning = true)
 
-  def flatMap[U: ClassTag](f: T => TraversableOnce[U]): ContextRDD[U] =
+  def flatMap[U: ClassTag](f: T => IterableOnce[U]): ContextRDD[U] =
     mapPartitions(_.flatMap(f))
 
   def mapPartitions[U: ClassTag](
@@ -202,7 +204,7 @@ class ContextRDD[T: ClassTag](
   def cfilter(f: (RVDContext, T) => Boolean): ContextRDD[T] =
     cmapPartitions((c, it) => it.filter(f(c, _)), true)
 
-  def cflatMap[U: ClassTag](f: (RVDContext, T) => TraversableOnce[U]): ContextRDD[U] =
+  def cflatMap[U: ClassTag](f: (RVDContext, T) => IterableOnce[U]): ContextRDD[U] =
     cmapPartitions((c, it) => it.flatMap(f(c, _)))
 
   def cmapPartitions[U: ClassTag](

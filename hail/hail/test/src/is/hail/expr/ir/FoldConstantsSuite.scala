@@ -30,7 +30,7 @@ class FoldConstantsSuite extends HailSuite {
     ).map(x => Array[Any](x))
   }
 
-  @Test def testAggNodesConstruction(): Unit = aggNodes()
+  @Test def testAggNodesConstruction(): Unit = aggNodes(): Unit
 
   @Test(dataProvider = "aggNodes") def testAggNodesDoNotFold(node: IR): Unit =
     assert(FoldConstants(ctx, node) == node)

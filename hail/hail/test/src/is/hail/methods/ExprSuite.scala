@@ -13,6 +13,7 @@ import org.json4s._
 import org.json4s.jackson.JsonMethods._
 import org.scalacheck.Arbitrary._
 import org.scalacheck.Gen
+import org.scalatestplus.scalacheck.CheckerAsserting.assertingNatureOfAssertion
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.testng.annotations.Test
 
@@ -43,12 +44,12 @@ class ExprSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     forAll { (t: Type) =>
       val s = t.parsableString()
       val parsed = IRParser.parseType(s)
-      t == parsed
+      assert(t == parsed)
     }
   }
 
   @Test def testEscaping(): Unit =
-    forAll((s: String) => s == unescapeString(escapeString(s)))
+    forAll((s: String) => assert(s == unescapeString(escapeString(s))))
 
   @Test def testEscapingSimple(): Unit = {
     // a == 0x61, _ = 0x5f
@@ -63,10 +64,10 @@ class ExprSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     assert(unescapeStringSimple("my name is _u540d_u8c26", '_') == "my name is 名谦")
 
     forAll(Gen.asciiPrintableStr) { (s: String) =>
-      s == unescapeStringSimple(
+      assert(s == unescapeStringSimple(
         escapeStringSimple(s, '_', _.isLetterOrDigit, _.isLetterOrDigit),
         '_',
-      )
+      ))
     }
   }
 
@@ -100,12 +101,15 @@ class ExprSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
     } yield (t, a)
 
     forAll(g) { case (t, a) =>
-      JSONAnnotationImpex.importAnnotation(JSONAnnotationImpex.exportAnnotation(a, t), t) == a
+      assert(JSONAnnotationImpex.importAnnotation(
+        JSONAnnotationImpex.exportAnnotation(a, t),
+        t,
+      ) == a)
     }
 
     forAll(g) { case (t, a) =>
       val string = compact(JSONAnnotationImpex.exportAnnotation(a, t))
-      JSONAnnotationImpex.importAnnotation(parse(string), t) == a
+      assert(JSONAnnotationImpex.importAnnotation(parse(string), t) == a)
     }
   }
 
@@ -126,7 +130,7 @@ class ExprSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
 
     forAll(g) { case (t, a, b) =>
       val ord = t.ordering(ctx.stateManager)
-      ord.compare(a, b) == -ord.compare(b, a)
+      assert(ord.compare(a, b) == -ord.compare(b, a))
     }
   }
 }

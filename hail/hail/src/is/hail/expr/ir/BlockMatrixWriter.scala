@@ -8,7 +8,7 @@ import is.hail.expr.ir.defs.{MetadataWriter, Str, UUID4, WriteMetadata, WriteVal
 import is.hail.expr.ir.lowering.{BlockMatrixStage2, LowererUnsupportedOperation}
 import is.hail.io.{StreamBufferSpec, TypedCodecSpec}
 import is.hail.io.fs.FS
-import is.hail.linalg.{BlockMatrix, BlockMatrixMetadata}
+import is.hail.linalg.{BlockMatrix, BlockMatrixMetadata, MatrixSparsity}
 import is.hail.types.TypeWithRequiredness
 import is.hail.types.encoded.{EBlockMatrixNDArray, ENumpyBinaryNDArray, EType}
 import is.hail.types.virtual._
@@ -98,7 +98,7 @@ case class BlockMatrixNativeMetadataWriter(
   path: String,
   stageLocally: Boolean,
   typ: BlockMatrixType,
-) extends MetadataWriter {
+) extends MetadataWriter with Logging {
 
   case class BMMetadataHelper(
     path: String,
@@ -121,9 +121,9 @@ case class BlockMatrixNativeMetadataWriter(
       }
       assert(nBlocks == partFiles.length, s"$nBlocks vs ${partFiles.mkString(", ")}")
 
-      info(s"wrote matrix with $nRows ${plural(nRows, "row")} " +
+      logger.info(s"wrote matrix with $nRows ${plural(nRows, "row")} " +
         s"and $nCols ${plural(nCols, "column")} " +
-        s"as $nBlocks ${plural(nBlocks, "block")} " +
+        s"as $nBlocks ${plural(nBlocks.toLong, "block")} " +
         s"of size $blockSize to $path")
     }
   }
@@ -135,12 +135,15 @@ case class BlockMatrixNativeMetadataWriter(
     cb: EmitCodeBuilder,
     region: Value[Region],
   ): Unit = {
-    val metaHelper =
-      BMMetadataHelper(path, typ.blockSize, typ.nRows, typ.nCols, typ.linearizedDefinedBlocks)
+    val partIdxToBlockIdx = typ.sparsity match {
+      case _: MatrixSparsity.Dense => None
+      case x: MatrixSparsity.Sparse => Some(x.definedBlocksColMajorLinear)
+    }
+    val metaHelper = BMMetadataHelper(path, typ.blockSize, typ.nRows, typ.nCols, partIdxToBlockIdx)
 
     val pc = writeAnnotations.getOrFatal(cb, "write annotations can't be missing!").asIndexable
     val partFiles = cb.newLocal[Array[String]]("partFiles")
-    val n = cb.newLocal[Int]("n", pc.loadLength())
+    val n = cb.newLocal[Int]("n", pc.loadLength)
     val i = cb.newLocal[Int]("i", 0)
     cb.assign(partFiles, Code.newArray[String](n))
     cb.while_(
@@ -164,7 +167,12 @@ case class BlockMatrixBinaryWriter(path: String) extends BlockMatrixWriter {
   def pathOpt: Option[String] = Some(path)
 
   def apply(ctx: ExecuteContext, bm: BlockMatrix): String = {
-    RichDenseMatrixDouble.exportToDoubles(ctx.fs, path, bm.toBreezeMatrix(), forceRowMajor = true)
+    RichDenseMatrixDouble.exportToDoubles(
+      ctx.fs,
+      path,
+      bm.toBreezeMatrix(),
+      forceRowMajor = true,
+    ): Unit
     path
   }
 
@@ -220,7 +228,7 @@ case class BlockMatrixBinaryMultiWriter(
 ) extends BlockMatrixMultiWriter {
 
   def apply(ctx: ExecuteContext, bms: IndexedSeq[BlockMatrix]): Unit =
-    BlockMatrix.binaryWriteBlockMatrices(ctx.fs, bms, prefix, overwrite)
+    BlockMatrix.binaryWriteBlockMatrices(ctx, bms, prefix, overwrite)
 
   def loweredTyp: Type = TVoid
 }
@@ -237,7 +245,7 @@ case class BlockMatrixTextMultiWriter(
 
   def apply(ctx: ExecuteContext, bms: IndexedSeq[BlockMatrix]): Unit =
     BlockMatrix.exportBlockMatrices(
-      ctx.fs,
+      ctx,
       bms,
       prefix,
       overwrite,

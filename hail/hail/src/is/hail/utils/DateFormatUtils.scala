@@ -15,11 +15,12 @@ object DateFormatUtils {
     val SUNDAY_START_ALWAYS = WeekFields.of(DayOfWeek.SUNDAY, 7)
     val MONDAY_START_ALWAYS = WeekFields.of(DayOfWeek.MONDAY, 7)
 
-    def char(c: Char): Unit = fmt.appendLiteral(c)
+    def char(c: Char): Unit =
+      fmt.appendLiteral(c)
 
-    def spec(c: Char): Unit = {
+    def spec(c: Char): Unit =
       c match {
-        case '%' => char('%')
+        case '%' => fmt.appendLiteral('%')
         case 'A' => fmt.appendText(ChronoField.DAY_OF_WEEK, TextStyle.FULL)
         case 'a' => fmt.appendText(ChronoField.DAY_OF_WEEK, TextStyle.SHORT)
         case 'B' => fmt.appendText(ChronoField.MONTH_OF_YEAR, TextStyle.FULL)
@@ -35,14 +36,14 @@ object DateFormatUtils {
         case 'l' => fmt.padNext(2); fmt.appendValue(ChronoField.CLOCK_HOUR_OF_AMPM)
         case 'M' => fmt.appendValue(ChronoField.MINUTE_OF_HOUR, 2)
         case 'm' => fmt.appendValue(ChronoField.MONTH_OF_YEAR, 2)
-        case 'n' => char('\n')
+        case 'n' => fmt.appendLiteral('\n')
         case 'p' => fmt.appendText(ChronoField.AMPM_OF_DAY, TextStyle.SHORT)
         case 'R' => alternating("H:M")
         case 'r' => alternating("I:M:S p")
         case 'S' => fmt.appendValue(ChronoField.SECOND_OF_MINUTE, 2)
         case 's' => fmt.appendValue(ChronoField.INSTANT_SECONDS)
         case 'T' => alternating("H:M:S")
-        case 't' => char('\t')
+        case 't' => fmt.appendLiteral('\t')
         case 'U' => fmt.appendValue(SUNDAY_START_ALWAYS.weekOfYear(), 2) // Sunday first day
         case 'u' => fmt.appendValue(WeekFields.ISO.dayOfWeek()) // 1-7, starts on Monday
         case 'V' => fmt.appendValue(WeekFields.ISO.weekOfWeekBasedYear(), 2)
@@ -52,12 +53,12 @@ object DateFormatUtils {
         case 'y' => fmt.appendValueReduced(ChronoField.YEAR, 2, 2, _1970)
         case 'Z' => fmt.appendZoneId()
         case 'z' => fmt.appendOffsetId()
-        case 'E' | 'O' => char(c) // Python just keeps these two letters for whatever reason.
+        case 'E' | 'O' =>
+          fmt.appendLiteral(c) // Python just keeps these two letters for whatever reason.
         case 'C' | 'c' | 'G' | 'g' | 'w' | 'X' | 'x' =>
           throw new HailException(s"Currently unsupported time formatting character: $c")
         case d => fatal(s"invalid time format descriptor: $d")
       }
-    }
 
     def alternating(s: String): Unit = {
       var isSpec = true

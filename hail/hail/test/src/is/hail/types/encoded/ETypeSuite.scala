@@ -48,8 +48,7 @@ class ETypeSuite extends HailSuite {
     ).map(t => Array(t: Any))
   }
 
-  @Test def testDataProvider(): Unit =
-    etypes()
+  @Test def testDataProvider(): Unit = etypes(): Unit
 
   @Test(dataProvider = "etypes")
   def testSerialization(etype: EType): Unit = {

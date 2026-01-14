@@ -2,7 +2,6 @@ package is.hail.expr.ir
 
 import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
-import is.hail.TestUtils._
 import is.hail.annotations.BroadcastRow
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir.TestUtils._
@@ -13,8 +12,12 @@ import is.hail.expr.ir.defs.{
 import is.hail.types.virtual._
 import is.hail.utils._
 
+import scala.collection.compat._
+
 import org.apache.spark.sql.Row
 import org.json4s.jackson.JsonMethods
+import org.scalatest.Inspectors.forAll
+import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
 import org.testng.annotations.{DataProvider, Test}
 
 class MatrixIRSuite extends HailSuite {
@@ -23,7 +26,7 @@ class MatrixIRSuite extends HailSuite {
     Set(ExecStrategy.Interpret, ExecStrategy.InterpretUnoptimized, ExecStrategy.LoweredJVMCompile)
 
   @Test def testMatrixWriteRead(): Unit = {
-    val range = MatrixIR.range(10, 10, Some(3))
+    val range = MatrixIR.range(ctx, 10, 10, Some(3))
     val withEntries = MatrixMapEntries(
       range,
       makestruct(
@@ -47,7 +50,7 @@ class MatrixIRSuite extends HailSuite {
       partitionsTypeStr = partType.parsableString(),
     )
 
-    for (writer <- Array(writer1, writer2)) {
+    forAll(Array(writer1, writer2)) { writer =>
       assertEvalsTo(MatrixWrite(original, writer), ())
 
       val read = MatrixIR.read(fs, path, dropCols = false, dropRows = false, None)
@@ -59,7 +62,7 @@ class MatrixIRSuite extends HailSuite {
           (partSize, partIndex) <- partition(10, 3).zipWithIndex
           i <- 0 until partSize
         } yield Row(partIndex.toLong, i.toLong)
-        (0 until 10, uids).zipped.map { (i, uid) =>
+        (0 until 10).lazyZip(uids).map { (i, uid) =>
           Row(i, uid, expectedCols.map { case Row(j, _) => Row(i, j) })
         }
       } else
@@ -88,7 +91,7 @@ class MatrixIRSuite extends HailSuite {
     nPartitions: Option[Int] = Some(4),
     uids: Boolean = false,
   ): MatrixIR = {
-    val reader = MatrixRangeReader(nRows, nCols, nPartitions)
+    val reader = MatrixRangeReader(ctx, nRows, nCols, nPartitions)
     val requestedType = if (uids)
       reader.fullMatrixType
     else
@@ -317,7 +320,7 @@ class MatrixIRSuite extends HailSuite {
 
     // All rows must have the same number of elements in the entry field as colTab has rows
     interceptSpark("length mismatch between entry array and column array") {
-      Interpret(mir, ctx, optimize = true).rvd.count()
+      Interpret(mir, ctx).rvd.count()
     }
 
     // The entry field must be an array
@@ -333,7 +336,7 @@ class MatrixIRSuite extends HailSuite {
     val rowTab2 = makeLocalizedTable(rdata2, cdata)
     val mir2 = CastTableToMatrix(rowTab2, "__entries", "__cols", Array("col_idx"))
 
-    interceptSpark("missing")(Interpret(mir2, ctx, optimize = true).rvd.count())
+    interceptSpark("missing")(Interpret(mir2, ctx).rvd.count())
   }
 
   @Test def testMatrixFiltersWorkWithRandomness(): Unit = {
@@ -343,17 +346,16 @@ class MatrixIRSuite extends HailSuite {
 
     val colUID = GetField(Ref(MatrixIR.colName, range.typ.colType), MatrixReader.colUIDFieldName)
     val colRNG = RNGSplit(RNGStateLiteral(), colUID)
-    val cols = Interpret(MatrixFilterCols(range, rand(colRNG)), ctx, optimize = true).toMatrixValue(
+    val cols = Interpret(MatrixFilterCols(range, rand(colRNG)), ctx).toMatrixValue(
       range.typ.colKey
     ).nCols
     val rowUID = GetField(Ref(MatrixIR.rowName, range.typ.rowType), MatrixReader.rowUIDFieldName)
     val rowRNG = RNGSplit(RNGStateLiteral(), rowUID)
-    val rows = Interpret(MatrixFilterRows(range, rand(rowRNG)), ctx, optimize = true).rvd.count()
+    val rows = Interpret(MatrixFilterRows(range, rand(rowRNG)), ctx).rvd.count()
     val entryRNG = RNGSplit(RNGStateLiteral(), MakeTuple.ordered(FastSeq(rowUID, colUID)))
     val entries = Interpret(
       MatrixEntriesTable(MatrixFilterEntries(range, rand(entryRNG))),
       ctx,
-      optimize = true,
     ).rvd.count()
 
     assert(cols < 20 && cols > 0)
@@ -372,20 +374,23 @@ class MatrixIRSuite extends HailSuite {
       10 -> RepartitionStrategy.SHUFFLE,
       10 -> RepartitionStrategy.COALESCE,
     )
-    params.foreach { case (n, strat) =>
-      val rvd = Interpret(MatrixRepartition(range, n, strat), ctx, optimize = false).rvd
-      assert(rvd.getNumPartitions == n, n -> strat)
-      val values = rvd.collect(ctx).map(r => r.getAs[Int](0))
-      assert(values.isSorted && values.length == 11, n -> strat)
+
+    forAll(params) { case (n, strat) =>
+      unoptimized { ctx =>
+        val rvd = Interpret(MatrixRepartition(range, n, strat), ctx).rvd
+        assert(rvd.getNumPartitions == n, n -> strat)
+        val values = rvd.collect(ctx).map(r => r.getAs[Int](0))
+        assert(values.isSorted && values.length == 11, n -> strat)
+      }
     }
   }
 
   @Test def testMatrixMultiWriteDifferentTypesRaisesError(): Unit = {
-    val vcf = is.hail.TestUtils.importVCF(ctx, getTestResource("sample.vcf"))
+    val vcf = importVCF(ctx, getTestResource("sample.vcf"))
     val range = rangeMatrix(10, 2, None)
     val path1 = ctx.createTmpPath("test1")
     val path2 = ctx.createTmpPath("test2")
-    intercept[HailException] {
+    assertThrows[HailException] {
       TypeCheck(
         ctx,
         MatrixMultiWrite(FastSeq(vcf, range), MatrixNativeMultiWriter(IndexedSeq(path1, path2))),

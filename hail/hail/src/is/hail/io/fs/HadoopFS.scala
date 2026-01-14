@@ -2,12 +2,13 @@ package is.hail.io.fs
 
 import is.hail.utils._
 
+import scala.collection.parallel.CollectionConverters._
 import scala.util.Try
 
 import java.io._
 
 import org.apache.hadoop
-import org.apache.hadoop.fs.{EtagSource, FSDataInputStream, FSDataOutputStream}
+import org.apache.hadoop.fs.{EtagSource, FSDataInputStream, FSDataOutputStream, Path}
 
 class HadoopFileListEntry(fs: hadoop.fs.FileStatus) extends FileListEntry {
   val normalizedPath = fs.getPath
@@ -71,26 +72,26 @@ object HadoopFS {
     }
 }
 
-case class HadoopFSURL(path: String, conf: SerializableHadoopConfiguration) extends FSURL {
-  private[this] val unqualifiedHadoopPath = new hadoop.fs.Path(path)
-  val hadoopFs = unqualifiedHadoopPath.getFileSystem(conf.value)
-  val hadoopPath = hadoopFs.makeQualified(unqualifiedHadoopPath)
+class HadoopFSURL(unqualified: Path, conf: SerializableHadoopConfiguration)
+    extends FSURL[HadoopFSURL] {
+  val hadoopFs = unqualified.getFileSystem(conf.value)
+  val hadoopPath: Path = hadoopFs.makeQualified(unqualified)
 
-  def addPathComponent(c: String): HadoopFSURL = HadoopFSURL(s"${hadoopPath.toString}/$c", conf)
-  def getPath: String = hadoopPath.toString
-  def fromString(s: String): HadoopFSURL = HadoopFSURL(s, conf)
-  override def toString(): String = hadoopPath.toString
+  override def /(c: String): HadoopFSURL =
+    new HadoopFSURL(new Path(unqualified, c), conf)
+
+  override def path: String = hadoopPath.toString
+  override def toString: String = hadoopPath.toString
 }
 
 class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends FS {
   type URL = HadoopFSURL
 
-  override def parseUrl(filename: String): URL = HadoopFSURL(filename, conf)
+  override def parseUrl(filename: String): URL =
+    new HadoopFSURL(new Path(filename), conf)
 
   override def validUrl(filename: String): Boolean =
     Try(getFileSystem(filename)).isSuccess
-
-  def urlAddPathComponent(url: URL, component: String): URL = url.addPathComponent(component)
 
   def getConfiguration(): SerializableHadoopConfiguration = conf
 
@@ -147,13 +148,13 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     getFileSystem(dirname).delete(new hadoop.fs.Path(dirname), true)
 
   def delete(url: URL, recursive: Boolean): Unit =
-    url.hadoopFs.delete(url.hadoopPath, recursive)
+    url.hadoopFs.delete(url.hadoopPath, recursive): Unit
 
   override def globAll(filenames: Iterable[String]): Array[FileListEntry] = {
     filenames.flatMap { filename =>
       val fles = glob(filename)
       if (fles.isEmpty)
-        warn(s"'$filename' refers to no files")
+        logger.warn(s"'$filename' refers to no files")
       fles
     }.toArray
   }
@@ -162,7 +163,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     var files = url.hadoopFs.globStatus(url.hadoopPath)
     if (files == null)
       files = Array.empty
-    log.info(
+    logger.info(
       s"globbing path $url returned ${files.length} files: ${files.map(_.getPath.getName).mkString(",")}"
     )
     files.map(fileListEntry => new HadoopFileListEntry(fileListEntry))
@@ -171,7 +172,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
   override def fileStatus(url: URL): FileStatus = {
     val fle = fileListEntry(url)
     if (fle.isDirectory) {
-      throw new FileNotFoundException(url.getPath)
+      throw new FileNotFoundException(url.path)
     }
     fle
   }
@@ -191,13 +192,8 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     pathFS.makeQualified(ppath).toString
   }
 
-  override def deleteOnExit(url: URL): Unit =
-    url.hadoopFs.deleteOnExit(url.hadoopPath)
-
-  def supportsScheme(scheme: String): Boolean = {
-    if (scheme == "") {
-      true
-    } else {
+  def supportsScheme(scheme: String): Boolean =
+    (scheme == "") || {
       try {
         hadoop.fs.FileSystem.getFileSystemClass(scheme, conf.value)
         true
@@ -206,5 +202,4 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
         case e: Exception => throw e
       }
     }
-  }
 }
