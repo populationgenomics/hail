@@ -206,9 +206,9 @@ package object services extends Logging {
             val msg = e2.getMessage
             val retrying = if (tries <= 9) " Retrying." else ""
             if (msg != null) {
-              log.warn(s"Encountered CPG mystery 400 error: $e2 with message $msg.$retrying")
+              logger.warn(s"Encountered CPG mystery 400 error: $e2 with message $msg.$retrying")
             } else {
-              log.warn(s"Encountered CPG mystery 400 error: $e2 without message.$retrying")
+              logger.warn(s"Encountered CPG mystery 400 error: $e2 without message.$retrying")
             }
           } else if (!isTransientError(e)) {
             throw e
