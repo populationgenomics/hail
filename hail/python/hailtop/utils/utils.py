@@ -485,7 +485,6 @@ async def bounded_gather2_raise_exceptions(
     cancel_on_error is True, the unfinished tasks are all cancelled.
 
     """
-
     async def run_with_sema(pf: Callable[[], Awaitable[T]]):
         async with sema:
             return await pf()
@@ -827,14 +826,14 @@ async def retry_transient_errors_with_debug_string(
                 log_warnings = (time_msecs() - start_time >= warning_delay_msecs) or not is_delayed_warning_error(e)
                 if log_warnings and tries == 2:
                     log.warning(
-                        f'A transient error occured. We will automatically retry. Do not be alarmed. '
+                        f'A transient error occured {args}. We will automatically retry. Do not be alarmed. '
                         f'We have thus far seen {tries} transient errors (next delay: '
                         f'{delay}s). The most recent error was {type(e)} {e}. {debug_string}'
                     )
                 elif log_warnings and tries % 10 == 0:
                     st = ''.join(traceback.format_stack())
                     log.warning(
-                        f'A transient error occured. We will automatically retry. '
+                        f'A transient error occured {args}. We will automatically retry. '
                         f'We have thus far seen {tries} transient errors (next delay: '
                         f'{delay}s). The stack trace for this call is {st}. The most recent error was {type(e)} {e}. {debug_string}',
                         exc_info=True,

@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import io
+#import logging
 import os
 import os.path
 import stat
@@ -23,6 +24,7 @@ from .fs import (
     blocking_writable_stream_to_async,
 )
 
+#log = logging.getLogger("*")
 
 class LocalStatFileStatus(FileStatus):
     def __init__(self, stat_result: os.stat_result, url: str):
@@ -93,6 +95,7 @@ class LocalMultiPartCreate(MultiPartCreate):
 
     async def create_part(self, number: int, start: int, size_hint: Optional[int] = None):  # pylint: disable=unused-argument
         assert 0 <= number < self._num_parts
+        #log.info(f'LMPC.create_part opening part {number} of {self._path}')
         f = await blocking_to_async(self._fs._thread_pool, open, self._path, 'r+b')
         f.seek(start)
         return blocking_writable_stream_to_async(self._fs._thread_pool, cast(BinaryIO, f))

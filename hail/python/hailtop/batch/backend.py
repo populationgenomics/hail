@@ -923,6 +923,7 @@ class ServiceBackend(Backend[bc.Batch]):
         if verbose:
             print(f'Built DAG with {n_jobs_submitted} jobs in {round(time.time() - build_dag_start, 3)} seconds.')
 
+        # JM Localise the input files
         await copy_from_dict(files=local_input_file_transfers)
 
         submit_batch_start = time.time()

@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import logging
 import os
 import os.path
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple, Union
@@ -18,6 +19,8 @@ from ..weighted_semaphore import WeightedSemaphore
 from .exceptions import FileAndDirectoryError, UnexpectedEOFError
 from .fs import AsyncFS, FileListEntry, FileStatus, MultiPartCreate
 
+log = logging.getLogger("*")
+logging.basicConfig(format='%(relativeCreated)d:%(levelname)s:%(name)s:%(message)s')
 
 class Transfer:
     DEST_DIR = 'dest_dir'
@@ -219,6 +222,7 @@ class SourceCopier:
         assert not destfile.endswith('/')
 
         async with self.xfer_sema.acquire_manager(min(Copier.BUFFER_SIZE, size)):
+            log.info(f'_copy_file whole opening {url_basename(srcfile)}')
             async with await self.router_fs.open(srcfile) as srcf:
                 try:
                     dest_cm = await self.router_fs.create(destfile, retry_writes=False)
@@ -230,6 +234,7 @@ class SourceCopier:
                     while True:
                         b = await srcf.read(Copier.BUFFER_SIZE)
                         if not b:
+                            log.info(f'_copy_file whole finished {url_basename(srcfile)}')
                             return
                         written = await destf.write(b)
                         assert written == len(b)
@@ -247,6 +252,7 @@ class SourceCopier:
     ) -> None:
         try:
             async with self.xfer_sema.acquire_manager(min(Copier.BUFFER_SIZE, this_part_size)):
+                log.info(f'_copy_part#{part_number} opening part {part_number} of {url_basename(srcfile)}')
                 async with await self.router_fs.open_from(
                     srcfile, part_number * part_size, length=this_part_size
                 ) as srcf:
@@ -262,11 +268,14 @@ class SourceCopier:
                             assert written == len(b)
                             source_report.finish_bytes(written)
                             n -= len(b)
+                        log.info(f'_copy_part#{part_number} finished part {part_number} of {url_basename(srcfile)}')
         except asyncio.TimeoutError as e:
             source_report.timeout()
             # This is an internal transient error, so ignore return_exceptions and always retry
+            log.warning(f'_copy_part#{part_number} timeout exception part {part_number} of {url_basename(srcfile)} saw {e=}')
             raise
         except Exception as e:
+            log.warning(f'_copy_part#{part_number} exception part {part_number} of {url_basename(srcfile)} saw {e=}')
             if return_exceptions:
                 source_report.set_exception(e)
             else:
@@ -284,8 +293,10 @@ class SourceCopier:
         size = await srcstat.size()
 
         part_size = self.router_fs.copy_part_size(destfile)
+        # for local, is the superclass default 128MiB
 
         if size <= part_size:
+            log.info(f'One piece {url_basename(destfile)}')
             await retry_transient_errors(self._copy_file, source_report, srcfile, size, destfile)
             return
 
@@ -293,13 +304,14 @@ class SourceCopier:
         if rem:
             n_parts += 1
 
+        log.info(f'Chopped into {n_parts} of {part_size}: {url_basename(destfile)}')
         try:
             part_creator = await self.router_fs.multi_part_create(sema, destfile, n_parts)
         except FileNotFoundError:
             await self.router_fs.makedirs(os.path.dirname(destfile), exist_ok=True)
             part_creator = await self.router_fs.multi_part_create(sema, destfile, n_parts)
 
-        async with part_creator:
+        async with part_creator:  # is a LocalMultiPartCreate
 
             async def f(i):
                 this_part_size = rem if i == n_parts - 1 and rem else part_size
@@ -387,7 +399,9 @@ class SourceCopier:
 
         source_report.start_files(1)
         source_report.start_bytes(await srcstat.size())
+        log.info(f'starting copy_as_file({src=}, {full_dest=})')
         await self._copy_file_multi_part(sema, source_report, src, srcstat, full_dest, return_exceptions)
+        log.info(f'finished copy_as_file({src=}, {full_dest=})')
 
     async def copy_as_dir(self, sema: asyncio.Semaphore, source_report: SourceReport, return_exceptions: bool):
         async def files_iterator() -> AsyncIterator[FileListEntry]:
