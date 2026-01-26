@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import random
 import os
 import os.path
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple, Union
@@ -8,6 +9,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 import humanize
 
 from ...utils import (
+    TimeoutErrorWithDelay,
     bounded_gather2,
     humanize_timedelta_msecs,
     retry_transient_errors,
@@ -212,6 +214,11 @@ class SourceCopier:
 
         self.pending = 2
         self.barrier = asyncio.Event()
+        self.prev_restart_time = None
+        self.zerohour = time_msecs()
+        self.completed = 0
+        self.inflight = 0
+        self.max_inflight = None
 
     async def release_barrier(self):
         self.pending -= 1
@@ -240,6 +247,17 @@ class SourceCopier:
                         assert written == len(b)
                         source_report.finish_bytes(written)
 
+    def _get_delay(self):
+        now = time_msecs() - self.zerohour
+
+        restart_time = self.prev_restart_time if self.prev_restart_time is not None and self.prev_restart_time > now else now + 3000
+        restart_time += random.randrange(2000)
+        delay_ms = restart_time - now
+
+        log.info(f'_get_delay: {now=} {self.prev_restart_time=} {restart_time=} {delay_ms=}')
+        self.prev_restart_time = restart_time
+        return delay_ms
+
     async def _copy_part(
         self,
         source_report: SourceReport,
@@ -251,8 +269,10 @@ class SourceCopier:
         return_exceptions: bool,
     ) -> None:
         try:
+            beginning_inflight = self.inflight
             async with self.xfer_sema.acquire_manager(min(Copier.BUFFER_SIZE, this_part_size)):
-                log.info(f'_copy_part#{part_number} opening part {part_number} of {url_basename(srcfile)}')
+                self.inflight += 1
+                log.info(f'_copy_part#{part_number} opening part {part_number} of {url_basename(srcfile)} ({self.inflight} in flight; {self.completed} completed)')
                 async with await self.router_fs.open_from(
                     srcfile, part_number * part_size, length=this_part_size
                 ) as srcf:
@@ -269,13 +289,25 @@ class SourceCopier:
                             source_report.finish_bytes(written)
                             n -= len(b)
                         log.info(f'_copy_part#{part_number} finished part {part_number} of {url_basename(srcfile)}')
+                        self.inflight -= 1
+                        self.completed += 1
+                        log.info(f'_copy_part#{part_number} finished part {part_number} of {url_basename(srcfile)} ({self.inflight} in flight; {self.completed} completed)')
+
         except asyncio.TimeoutError as e:
             source_report.timeout()
+            log.warning(f'_copy_part#{part_number} timeout; in flight: begin:{beginning_inflight} now:{self.inflight} max:{self.max_inflight}')
+            if self.max_inflight > beginning_inflight and self.max_inflight > 10:
+                self.max_inflight -= 1
+            self.inflight -= 1
             # This is an internal transient error, so ignore return_exceptions and always retry
-            log.warning(f'_copy_part#{part_number} timeout exception part {part_number} of {url_basename(srcfile)} saw {e=}')
-            raise
+            delay_ms = self._get_delay()
+
+            log.warning(f'_copy_part#{part_number} timeout (wait: {delay_ms}ms) exception part {part_number} of {url_basename(srcfile)} ({self.inflight} in flight; {self.completed} completed) saw {e=}')
+            raise TimeoutErrorWithDelay(f'Timeout for {url_basename(srcfile)} part {part_number}', delay_ms) from e
+
         except Exception as e:
-            log.warning(f'_copy_part#{part_number} exception part {part_number} of {url_basename(srcfile)} saw {e=}')
+            self.inflight -= 1
+            log.warning(f'_copy_part#{part_number} exception part {part_number} of {url_basename(srcfile)} ({self.inflight} in flight; {self.completed} completed) saw {e=}')
             if return_exceptions:
                 source_report.set_exception(e)
             else:
@@ -303,6 +335,8 @@ class SourceCopier:
         n_parts, rem = divmod(size, part_size)
         if rem:
             n_parts += 1
+
+        self.max_inflight = n_parts
 
         log.info(f'Chopped into {n_parts} of {part_size}: {url_basename(destfile)}')
         try:

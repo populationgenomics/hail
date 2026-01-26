@@ -788,6 +788,12 @@ def retry_all_errors_n_times(max_errors: int = 10, msg: Optional[str] = None, er
     return _wrapper
 
 
+class TimeoutErrorWithDelay(asyncio.TimeoutError):
+    def __init__(self, message, delay_ms):
+        super().__init__(message)
+        self.delay_ms = delay_ms
+
+
 async def retry_transient_errors(f: Callable[..., Awaitable[T]], *args, **kwargs) -> T:
     return await retry_transient_errors_with_debug_string('', 0, f, *args, **kwargs)
 
@@ -811,7 +817,7 @@ async def retry_transient_errors_with_debug_string(
             raise
         except Exception as e:
             tries += 1
-            delay = delay_ms_for_try(tries) / 1000.0
+            delay = (e.delay_ms if isinstance(e, TimeoutErrorWithDelay) else delay_ms_for_try(tries)) / 1000.0
             if tries <= 5 and is_limited_retries_error(e):
                 log.warning(
                     f'A limited retry error has occured. We will automatically retry '
