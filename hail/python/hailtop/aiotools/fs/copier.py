@@ -54,6 +54,7 @@ class SourceReport:
         self._bytes = 0
         self._errors = 0
         self._complete = 0
+        self._timeouts = 0
         self._first_file_error: Optional[Dict[str, Any]] = None
         self._exception: Optional[Exception] = None
 
@@ -78,6 +79,9 @@ class SourceReport:
     def finish_bytes(self, n_bytes: int):
         if self._bytes_listener:
             self._bytes_listener(-n_bytes)
+
+    def timeout(self):
+        self._timeouts += 1
 
     def set_exception(self, exception: Exception):
         assert not self._exception
@@ -163,6 +167,7 @@ class CopyReport:
         total_sources = len(source_reports)
         total_files = sum(sr._files for sr in source_reports)
         total_bytes = sum(sr._bytes for sr in source_reports)
+        total_timeouts = sum(sr._timeouts for sr in source_reports)
 
         print('Transfer summary:')
         print(f'  Transfers: {total_transfers}')
@@ -170,6 +175,7 @@ class CopyReport:
         print(f'  Files: {total_files}')
         print(f'  Bytes: {humanize.naturalsize(total_bytes)}')
         print(f'  Time: {humanize_timedelta_msecs(self._duration)}')
+        print(f'  Timeouts: {total_timeouts}')
         assert self._duration is not None
         if self._duration > 0:
             bandwidth = humanize.naturalsize(total_bytes / (self._duration / 1000))
@@ -256,6 +262,10 @@ class SourceCopier:
                             assert written == len(b)
                             source_report.finish_bytes(written)
                             n -= len(b)
+        except asyncio.TimeoutError as e:
+            source_report.timeout()
+            # This is an internal transient error, so ignore return_exceptions and always retry
+            raise
         except Exception as e:
             if return_exceptions:
                 source_report.set_exception(e)
