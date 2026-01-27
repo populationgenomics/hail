@@ -524,7 +524,8 @@ class Copier:
         # This is essentially a limit on amount of memory in temporary
         # buffers during copying.  We allow ~10 full-sized copies to
         # run concurrently.
-        self.xfer_sema = WeightedSemaphore(100 * Copier.BUFFER_SIZE)
+        # JohnM 2006-01-28 Reduced from 100 to work around excessive timeouts in our Hail deployment
+        self.xfer_sema = WeightedSemaphore(35 * Copier.BUFFER_SIZE)
 
     async def _dest_type(self, transfer: Transfer):
         """Return the (real or assumed) type of `dest`.
