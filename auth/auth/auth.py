@@ -219,9 +219,7 @@ def validate_next_page_url(next_page):
     actual_next_page_domain = urlparse(next_page).netloc
 
     if actual_next_page_domain not in valid_next_domains:
-        raise web.HTTPBadRequest(
-            text=f'Invalid next page: \'{next_page}\'. Domain \'{actual_next_page_domain}\' not in {valid_next_domains}'
-        )
+        raise web.HTTPBadRequest(text='Invalid next page.')
 
 
 @routes.get('/healthcheck')
@@ -422,9 +420,11 @@ async def callback(request) -> web.Response:
 
         raise web.HTTPFound(creating_url)
 
-    if user['state'] in ('deleting', 'deleted'):
+    if user['state'] in ('deleting', 'deleted', 'inactive'):
         page_context = {'username': user['username'], 'state': user['state'], 'login_id': user['login_id']}
-        return await render_template('auth', request, user, 'account-error.html', page_context)
+        return await render_template(
+            'auth', request, user, 'account-error.html', page_context, status_code=web.HTTPUnauthorized.status_code
+        )
 
     if user['state'] == 'creating':
         if caller == 'signup':

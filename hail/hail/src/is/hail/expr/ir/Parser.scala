@@ -538,12 +538,6 @@ object IRParser {
         punctuation(it, "}")
         val fields = args.zipWithIndex.map { case ((id, t), i) => Field(id, t, i) }
         TStruct(fields)
-      case "Union" =>
-        punctuation(it, "{")
-        val args = repsepUntil(it, type_field, PunctuationToken(","), PunctuationToken("}"))
-        punctuation(it, "}")
-        val cases = args.zipWithIndex.map { case ((id, t), i) => Case(id, t, i) }
-        TUnion(cases)
       case "Void" => TVoid
     }
     typ
@@ -1075,6 +1069,16 @@ object IRParser {
           elem <- ir_value_expr(ctx)(it)
         } yield LowerBoundOnOrderedCollection(col, elem, onKey)
       case "GroupByKey" => ir_value_expr(ctx)(it).map(GroupByKey)
+      case "StreamBufferedAggregate" =>
+        val n = name(it)
+        val aggSigs = p_agg_sigs(ctx)(it)
+        val size = int32_literal(it)
+        for {
+          stream <- ir_value_expr(ctx)(it)
+          init <- ir_value_expr(ctx)(it)
+          key <- ir_value_expr(ctx)(it)
+          seq <- ir_value_expr(ctx)(it)
+        } yield StreamBufferedAggregate(stream, init, key, seq, n, aggSigs, size)
       case "StreamMap" =>
         val n = name(it)
         for {
@@ -2108,7 +2112,7 @@ object IRParser {
   }
 
   def parse[T](s: String, f: (TokenIterator) => T): T = {
-    val it = IRLexer.parse(s).toIterator.buffered
+    val it = IRLexer.parse(s).iterator.buffered
     f(it)
   }
 
@@ -2150,8 +2154,6 @@ object IRParser {
   def parsePType(code: String): PType = parse(code, ptype_expr)
 
   def parseStructType(code: String): TStruct = tcoerce[TStruct](parse(code, type_expr))
-
-  def parseUnionType(code: String): TUnion = tcoerce[TUnion](parse(code, type_expr))
 
   def parseRVDType(code: String): RVDType = parse(code, rvd_type_expr)
 

@@ -607,7 +607,7 @@ case class SplitPartitionNativeWriter(
         cb += buff.close()
       }
 
-      stages.flatMap(_.toIterable).zip(filenames).foreach { case (source, destination) =>
+      stages.flatten.zip(filenames).foreach { case (source, destination) =>
         cb += mb.getFS.invoke[String, String, Boolean, Unit](
           "copy",
           source,
@@ -654,7 +654,7 @@ class MatrixSpecHelper(
   def write(fs: FS, nCols: Long, partCounts: Array[Long]): Unit = {
     val spec = MatrixTableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "references",
       typ,
       Map(
