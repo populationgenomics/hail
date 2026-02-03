@@ -4,6 +4,7 @@ import logging
 import random
 import os
 import os.path
+import subprocess
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import humanize
@@ -322,6 +323,13 @@ class SourceCopier:
         destfile: str,
         return_exceptions: bool,
     ):
+        cmd = ['gcloud', 'storage', 'cp', srcfile, destfile]
+        log.info(f'Shelling out to {" ".join(cmd)}')
+
+        subprocess.run(cmd, check=True)
+        log.info(f'Done copying to {destfile}')
+        return
+
         size = await srcstat.size()
 
         part_size = self.router_fs.copy_part_size(destfile)

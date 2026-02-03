@@ -1456,11 +1456,12 @@ def copy_container(
         '-v',
     ]
 
+    custom_image = 'australia-southeast1-docker.pkg.dev/cpg-common/images-tmp/johnm_worker:test'
     return Container(
         task_manager=job.task_manager,
         fs=job.worker.fs,
         name=job.container_name(task_name),
-        image=Image(BATCH_WORKER_IMAGE, None, client_session, job.pool),
+        image=Image(custom_image, None, client_session, job.pool),
         scratch_dir=f'{scratch}/{task_name}',
         command=command,
         cpu_in_mcpu=cpu_in_mcpu,
