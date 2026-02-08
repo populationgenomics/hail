@@ -4,7 +4,7 @@ import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.expr.ir.{
-  EmitClassBuilder, EmitCode, EmitCodeBuilder, EmitRegion, EmitValue, IEmitCode, ParamType,
+  EmitClassBuilder, EmitCode, EmitCodeBuilder, EmitValue, IEmitCode, ParamType,
 }
 import is.hail.expr.ir.orderings.CodeOrdering
 import is.hail.io.{BufferSpec, InputBuffer, OutputBuffer}
@@ -38,7 +38,7 @@ class DownsampleBTreeKey(binType: PBaseStruct, pointType: PBaseStruct, kb: EmitC
   override def copy(cb: EmitCodeBuilder, src: Code[Long], dest: Code[Long]): Unit =
     cb += Region.copyFrom(src, dest, storageType.byteSize)
 
-  override def deepCopy(cb: EmitCodeBuilder, er: EmitRegion, srcc: Code[Long], dest: Code[Long])
+  override def deepCopy(cb: EmitCodeBuilder, r: Value[Region], srcc: Code[Long], dest: Code[Long])
     : Unit = {
     val src = cb.newLocal[Long]("dsa_deep_copy_src", srcc)
     cb.if_(
@@ -48,7 +48,7 @@ class DownsampleBTreeKey(binType: PBaseStruct, pointType: PBaseStruct, kb: EmitC
     storageType.storeAtAddress(
       cb,
       dest,
-      er.region,
+      r,
       storageType.loadCheapSCode(cb, src),
       deepCopy = true,
     )
@@ -76,9 +76,10 @@ class DownsampleState(
 
   val oldRegion: Settable[Region] = kb.genFieldThisRef[Region]("old_region")
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit = cb += region.getNewRegion(regionSize)
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+    cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit =
+  override def createState(cb: EmitCodeBuilder): Unit =
     cb.if_(region.isNull, cb.assign(r, Region.stagedCreate(regionSize, kb.pool())))
 
   val binType = PCanonicalStruct(required = true, "x" -> PInt32Required, "y" -> PInt32Required)
@@ -216,7 +217,7 @@ class DownsampleState(
     )
   }
 
-  def copyFrom(cb: EmitCodeBuilder, _src: Value[Long]): Unit = {
+  override def copyFrom(cb: EmitCodeBuilder, _src: Value[Long]): Unit = {
     val mb = kb.genEmitMethod("downsample_copy", FastSeq[ParamType](LongInfo), UnitInfo)
 
     val src = mb.getCodeParam[Long](1)
@@ -235,7 +236,7 @@ class DownsampleState(
     cb.invokeVoid(mb, cb.this_, _src)
   }
 
-  def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
+  override def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ob: Value[OutputBuffer]) =>
       val mb = kb.genEmitMethod(
         "downsample_serialize",
@@ -268,7 +269,7 @@ class DownsampleState(
       cb.invokeVoid(mb, cb.this_, ob)
   }
 
-  def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
+  override def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
     val binDec = binET.buildInplaceDecoderMethod(binType, kb)
     val pointDec = pointET.buildInplaceDecoderMethod(pointType, kb)
 
@@ -721,7 +722,7 @@ class DownsampleAggregator(arrayType: VirtualTypeWithReq) extends StagedAggregat
   val initOpTypes: Seq[Type] = Array(TInt32)
   val seqOpTypes: Seq[Type] = Array(TFloat64, TFloat64, arrayType.t)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     val Array(nDivisions) = init
     nDivisions.toI(cb)
       .consume(
@@ -731,13 +732,13 @@ class DownsampleAggregator(arrayType: VirtualTypeWithReq) extends StagedAggregat
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(x, y, label) = seq
 
     state.insert(cb, x, y, label)
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -745,7 +746,8 @@ class DownsampleAggregator(arrayType: VirtualTypeWithReq) extends StagedAggregat
     other: DownsampleState,
   ): Unit = state.merge(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     // deepCopy is handled by state.resultArray
     IEmitCode.present(cb, state.resultArray(cb, region, resultPType))
 }

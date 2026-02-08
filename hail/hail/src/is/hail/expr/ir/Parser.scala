@@ -35,23 +35,23 @@ abstract class Token extends Positional {
 }
 
 final case class IdentifierToken(value: String) extends Token {
-  def getName: String = "identifier"
+  override def getName: String = "identifier"
 }
 
 final case class StringToken(value: String) extends Token {
-  def getName: String = "string"
+  override def getName: String = "string"
 }
 
 final case class IntegerToken(value: Long) extends Token {
-  def getName: String = "integer"
+  override def getName: String = "integer"
 }
 
 final case class FloatToken(value: Double) extends Token {
-  def getName: String = "float"
+  override def getName: String = "float"
 }
 
 final case class PunctuationToken(value: String) extends Token {
-  def getName: String = "punctuation"
+  override def getName: String = "punctuation"
 }
 
 object IRLexer extends JavaTokenParsers {
@@ -66,7 +66,7 @@ object IRLexer extends JavaTokenParsers {
 
   def quotedLiteral(delim: Char, what: String): Parser[String] =
     new Parser[String] {
-      def apply(in: Input): ParseResult[String] = {
+      override def apply(in: Input): ParseResult[String] = {
         var r = in
 
         val source = in.source
@@ -933,6 +933,9 @@ object IRParser {
           state <- ir_value_expr(ctx)(it)
           dynBitstring <- ir_value_expr(ctx)(it)
         } yield RNGSplit(state, dynBitstring)
+      case "RNGSplitStatic" =>
+        val staticUid = int64_literal(it)
+        ir_value_expr(ctx)(it) map { RNGSplitStatic(_, staticUid) }
       case "ArrayLen" => ir_value_expr(ctx)(it).map(ArrayLen)
       case "StreamLen" => ir_value_expr(ctx)(it).map(StreamLen)
       case "StreamIota" =>
@@ -1374,14 +1377,6 @@ object IRParser {
           msg <- ir_value_expr(ctx)(it)
           result <- ir_value_expr(ctx)(it)
         } yield ConsoleLog(msg, result)
-      case "ApplySeeded" =>
-        val function = identifier(it)
-        val staticUID = int64_literal(it)
-        val rt = type_expr(it)
-        for {
-          rngState <- ir_value_expr(ctx)(it)
-          args <- ir_value_children(ctx)(it)
-        } yield ApplySeeded(function, args, rngState, staticUID, rt)
       case "ApplyIR" =>
         apply_like(ctx, ApplyIR.apply)(it)
       case "ApplySpecial" =>

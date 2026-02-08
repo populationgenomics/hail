@@ -234,14 +234,6 @@ case class AggContainer(
   }
 }
 
-object EmitRegion {
-  def default(mb: EmitMethodBuilder[_]): EmitRegion = EmitRegion(mb, mb.getCodeParam[Region](1))
-}
-
-case class EmitRegion(mb: EmitMethodBuilder[_], region: Value[Region]) {
-  def baseRegion: Value[Region] = mb.getCodeParam[Region](1)
-}
-
 object EmitValue {
   def apply(missing: Option[Value[Boolean]], v: SValue): EmitValue =
     new EmitValue(
@@ -1424,7 +1416,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
 
           val vab = new StagedArrayBuilder(cb, sct, producer.element.required, 0)
           StreamUtils.writeToArrayBuilder(cb, producer, vab, region)
-          val sorter = new ArraySorter(EmitRegion(mb, region), vab)
+          val sorter = new ArraySorter(mb, region, vab)
           sorter.sort(
             cb,
             region,
@@ -1524,7 +1516,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
 
           val vab = new StagedArrayBuilder(cb, sct, producer.element.required, 0)
           StreamUtils.writeToArrayBuilder(cb, producer, vab, region)
-          val sorter = new ArraySorter(EmitRegion(mb, region), vab)
+          val sorter = new ArraySorter(mb, region, vab)
 
           def lessThan(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_])
             : Value[Boolean] =
@@ -1550,7 +1542,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
 
           val vab = new StagedArrayBuilder(cb, sct, producer.element.required, 0)
           StreamUtils.writeToArrayBuilder(cb, producer, vab, region)
-          val sorter = new ArraySorter(EmitRegion(mb, region), vab)
+          val sorter = new ArraySorter(mb, region, vab)
 
           def lessThan(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_])
             : Value[Boolean] = {
@@ -1590,7 +1582,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
           val sct = SingleCodeType.fromSType(producer.element.st)
           val sortedElts = new StagedArrayBuilder(cb, sct, producer.element.required, 16)
           StreamUtils.writeToArrayBuilder(cb, producer, sortedElts, region)
-          val sorter = new ArraySorter(EmitRegion(mb, region), sortedElts)
+          val sorter = new ArraySorter(mb, region, sortedElts)
 
           def lt(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_])
             : Value[Boolean] = {
@@ -1705,7 +1697,8 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         }
 
       case RNGStateLiteral() =>
-        IEmitCode.present(cb, SRNGStateStaticSizeValue(cb))
+        val state = SRNGStateStaticSizeValue(cb)
+        IEmitCode.present(cb, state)
 
       case RNGSplit(state, dynBitstring) =>
         val stateValue = emitI(state).getOrAssert(cb)
@@ -1724,6 +1717,15 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         var result = stateValue.asRNGState
         longs.foreach(l => result = result.splitDyn(cb, l))
         presentPC(result)
+
+      case RNGSplitStatic(rngState, staticUid) =>
+        val newState =
+          emitI(rngState)
+            .getOrAssert(cb)
+            .asRNGState
+            .splitStatic(cb, staticUid)
+
+        IEmitCode.present(cb, newState)
 
       case StreamLen(a) =>
         emitStream(a, cb, region).map(cb) { case stream: SStreamValue =>
@@ -2498,7 +2500,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
           val M = shapeArray(0)
           val N = shapeArray(1)
           val K = new Value[Long] {
-            def get: Code[Long] = (M < N).mux(M, N)
+            override def get: Code[Long] = (M < N).mux(M, N)
           }
           val LDA = new Value[Long] {
             override def get: Code[Long] =
@@ -2778,22 +2780,6 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
 
         val rvAgg = agg.Extract.getAgg(sig)
         rvAgg.result(cb, sc.states(idx), region)
-
-      case x @ ApplySeeded(_, args, rngState, staticUID, rt) =>
-        val codeArgs = args.map(a => EmitCode.fromI(cb.emb)(emitInNewBuilder(_, a)))
-        val codeArgsMem = codeArgs.map(_.memoize(cb, "ApplySeeded_arg"))
-        val state = emitI(rngState).getOrAssert(cb)
-        val impl = x.implementation
-        assert(impl.unify(Array.empty[Type], x.argTypes, rt))
-        val newState = EmitCode.present(mb, state.asRNGState.splitStatic(cb, staticUID))
-        impl.applyI(
-          EmitRegion(cb.emb, region),
-          cb,
-          impl.computeReturnEmitType(x.typ, newState.emitType +: codeArgs.map(_.emitType)).st,
-          Seq[Type](),
-          const(0),
-          newState +: codeArgsMem.map(_.load): _*
-        )
 
       case AggStateValue(i, _) =>
         val AggContainer(_, sc, _) = container.get
@@ -3542,7 +3528,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         val unified = impl.unify(typeArgs, args.map(_.typ), rt)
         assert(unified)
         val retType = impl.computeReturnEmitType(x.typ, codeArgs.map(_.emitType))
-        impl.apply(EmitRegion(mb, region), retType.st, typeArgs, errorID, codeArgs: _*)
+        impl.apply(mb, region, retType.st, typeArgs, errorID, codeArgs: _*)
 
       case WritePartition(stream, pctx, writer) =>
         val ctxCode = emit(pctx)
@@ -3746,7 +3732,7 @@ object NDArrayEmitter {
     val notBroadcasted = 1L
     Array.tabulate(nDims)(dim =>
       new Value[Long] {
-        def get: Code[Long] =
+        override def get: Code[Long] =
           (shapeArray(dim) > 1L).mux(notBroadcasted, broadcasted) * loopVars(dim)
       }
     )
@@ -3757,7 +3743,7 @@ object NDArrayEmitter {
     val notBroadcasted = 1L
     shapeArray.map(shapeElement =>
       new Value[Long] {
-        def get: Code[Long] = (shapeElement > 1L).mux(notBroadcasted, broadcasted)
+        override def get: Code[Long] = (shapeElement > 1L).mux(notBroadcasted, broadcasted)
       }
     )
   }
@@ -3766,7 +3752,7 @@ object NDArrayEmitter {
     : IndexedSeq[Value[Long]] =
     indices.zip(broadcastMask).map { case (index, flag) =>
       new Value[Long] {
-        def get: Code[Long] = index * flag
+        override def get: Code[Long] = index * flag
       }
     }
 

@@ -2,7 +2,7 @@ package is.hail.types.encoded
 
 import is.hail.annotations._
 import is.hail.asm4s._
-import is.hail.expr.ir.{ArraySorter, EmitCodeBuilder, EmitRegion, StagedArrayBuilder}
+import is.hail.expr.ir.{ArraySorter, EmitCodeBuilder, StagedArrayBuilder}
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.{SType, SValue, SingleCodeType}
@@ -14,7 +14,7 @@ final case class EUnsortedSet(val elementType: EType, override val required: Boo
     extends EContainer {
   private[this] val arrayRepr = EArray(elementType, required)
 
-  def _decodedSType(requestedType: Type): SType = {
+  override def _decodedSType(requestedType: Type): SType = {
     val elementPType = elementType.decodedPType(requestedType.asInstanceOf[TContainer].elementType)
     requestedType match {
       case _: TSet =>
@@ -22,13 +22,17 @@ final case class EUnsortedSet(val elementType: EType, override val required: Boo
     }
   }
 
-  def _buildEncoder(cb: EmitCodeBuilder, v: SValue, out: Value[OutputBuffer]): Unit =
+  override def _buildEncoder(cb: EmitCodeBuilder, v: SValue, out: Value[OutputBuffer]): Unit =
     // Anything we have to encode from a region should already be sorted so we don't
     // have to do anything else
     arrayRepr._buildEncoder(cb, v, out)
 
-  def _buildDecoder(cb: EmitCodeBuilder, t: Type, region: Value[Region], in: Value[InputBuffer])
-    : SValue = {
+  override def _buildDecoder(
+    cb: EmitCodeBuilder,
+    t: Type,
+    region: Value[Region],
+    in: Value[InputBuffer],
+  ): SValue = {
     val tmpRegion = cb.memoize(Region.stagedCreate(Region.REGULAR, region.getPool()), "tmp_region")
 
     val arrayDecoder = arrayRepr.buildDecoder(t, cb.emb.ecb)
@@ -41,7 +45,7 @@ final case class EUnsortedSet(val elementType: EType, override val required: Boo
       ab.add(cb, ab.elt.coerceSCode(cb, res, region, false).code)
     }
 
-    val sorter = new ArraySorter(EmitRegion(cb.emb, region), ab)
+    val sorter = new ArraySorter(cb.emb, region, ab)
     def lessThan(cb: EmitCodeBuilder, region: Value[Region], l: Value[_], r: Value[_])
       : Value[Boolean] =
       cb.emb.ecb.getOrdering(sct.loadedSType, sct.loadedSType)
@@ -55,10 +59,10 @@ final case class EUnsortedSet(val elementType: EType, override val required: Boo
     ret
   }
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
     arrayRepr._buildSkip(cb, r, in)
 
-  def _asIdent = s"set_of_${elementType.asIdent}"
-  def _toPretty = s"EUnsortedSet[$elementType]"
-  def setRequired(newRequired: Boolean): EType = EUnsortedSet(elementType, newRequired)
+  override def _asIdent = s"set_of_${elementType.asIdent}"
+  override def _toPretty = s"EUnsortedSet[$elementType]"
+  override def setRequired(newRequired: Boolean): EType = EUnsortedSet(elementType, newRequired)
 }

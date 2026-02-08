@@ -120,7 +120,7 @@ object ArrayFunctions extends RegistryFunctions {
     foldIR(ToStream(a), one)((product, v) => ApplyBinaryPrimOp(Multiply(), product, v))
   }
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     registerIR1("isEmpty", TArray(tv("T")), TBoolean)((_, a, _) => isEmpty(a))
 
     registerIR2("extend", TArray(tv("T")), TArray(tv("T")), TArray(tv("T")))((_, a, b, _) =>
@@ -342,7 +342,7 @@ object ArrayFunctions extends RegistryFunctions {
         )
         val pt = rt.pType.asInstanceOf[PCanonicalArray]
         val (push, finish) =
-          pt.constructFromIndicesUnsafe(cb, er.region, len.value, deepCopy = false)
+          pt.constructFromIndicesUnsafe(cb, er, len.value, deepCopy = false)
         indices.forEachDefined(cb) { case (cb, pos, idx: SInt32Value) =>
           cb.if_(
             idx.value < 0 || idx.value >= len.value,
