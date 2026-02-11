@@ -154,14 +154,22 @@ class ServiceBackend(Backend):
         worker_cores = configuration_of(ConfigVariable.QUERY_BATCH_WORKER_CORES, worker_cores, None)
         worker_memory = configuration_of(ConfigVariable.QUERY_BATCH_WORKER_MEMORY, worker_memory, None)
 
+        log.warn('REG 1')
         if regions == ANY_REGION:
+            log.warn('REG 2')
             regions = await batch_client.supported_regions()
         elif regions is None:
+            log.warn('REG 3')
             fallback = await batch_client.default_region()
+            log.warn('REG 4')
             regions_from_conf = configuration_of(
                 ConfigVariable.BATCH_REGIONS, explicit_argument=None, fallback=fallback
             )
+            log.warn(f'REG 5 {regions_from_conf=}')
             regions = regions_from_conf.split(',')
+        else:
+            log.warn(f'REG 3B: already {regions=}')
+        log.warn('REG 6')
 
         assert len(regions) > 0, regions
 

@@ -22,6 +22,7 @@ class BaseSession(abc.ABC):
         pass
 
     async def get(self, url: str, **kwargs) -> aiohttp.ClientResponse:
+        log.info(f'BaseSession: get: {url=} {kwargs}')
         return await self.request('GET', url, **kwargs)
 
     async def post(self, url: str, **kwargs) -> aiohttp.ClientResponse:
@@ -59,6 +60,7 @@ class RateLimitedSession(BaseSession):
         self._rate_limiter = RateLimiter(rate_limit)
 
     async def request(self, method: str, url: str, **kwargs):
+        log.info('RateLimitedSession: request')
         async with self._rate_limiter:
             return await self._session.request(method, url, **kwargs)
 
@@ -106,8 +108,11 @@ class Session(BaseSession):
         return await self._request_with_valid_authn(method, url, **kwargs)
 
     async def _request_with_valid_authn(self, method, url, **kwargs):
+        log.info('Session: _request_with_valid_authn 0')
         while True:
+            log.info('Session: _request_with_valid_authn 1')
             auth_headers, expiration = await self._credentials.auth_headers_with_expiration()
+            log.info('Session: _request_with_valid_authn 2')
             if auth_headers:
                 if 'headers' in kwargs:
                     kwargs['headers'].update(auth_headers)

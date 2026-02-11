@@ -1306,6 +1306,7 @@ class BatchClient:
         )
 
     def __init__(self, billing_project: str, url: str, session: Session, headers: Dict[str, str]):
+        log.info(f'BatchClient init: {billing_project=} {url=} {session=} {headers=}')
         self.billing_project = billing_project
         self.url = url
         self._session: Session = session
@@ -1318,6 +1319,7 @@ class BatchClient:
         return response
 
     async def _get(self, path, params=None) -> aiohttp.ClientResponse:
+        log.info(f'_get: {params=} {self._headers=}')
         return await self._warn_if_deprecated(
             await self._session.get(self.url + path, params=params, headers=self._headers)
         )
@@ -1438,8 +1440,12 @@ class BatchClient:
         return await resp.json()
 
     async def default_region(self) -> str:
+        log.info('FRED default_region')
         resp = await self._get('/api/v1alpha/default_region')
-        return await resp.text()
+        log.info(f'FRED default_region returned {resp=}')
+        ret = await resp.text()
+        log.info(f'FRED default_region returned {ret=}')
+        return ret
 
     async def cloud(self) -> str:
         resp = await self._get('/api/v1alpha/cloud')

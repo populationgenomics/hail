@@ -540,6 +540,7 @@ class ServiceBackend(Backend[bc.Batch]):
         -------
         A list of the supported cloud regions
         """
+        # FIX HERE TOO
         with BatchClient('dummy') as dummy_client:
             return dummy_client.supported_regions()
 
@@ -558,8 +559,12 @@ class ServiceBackend(Backend[bc.Batch]):
         -------
         The default region jobs run in when no regions are specified
         """
+        print('JWM default_region 1')
         with BatchClient('dummy') as dummy_client:
-            return dummy_client.default_region()
+            print('JWM default_region 2')
+            ret = dummy_client.default_region()
+            print(f'JWM default_region 3 {ret=}')
+            return ret
 
     def __init__(
         self,
@@ -630,13 +635,17 @@ class ServiceBackend(Backend[bc.Batch]):
 
         if regions is None:
             regions_from_conf = configuration_of(ConfigVariable.BATCH_REGIONS, None, None)
+            print(f'JWM BOB 0: {regions_from_conf=}')
             if regions_from_conf is not None:
+                print('JWM BOB 1')
                 assert isinstance(regions_from_conf, str)
                 regions = regions_from_conf.split(',')
             else:
+                print('JWM BOB 2')
                 regions = [ServiceBackend.default_region()]
         elif regions == ServiceBackend.ANY_REGION:
             regions = None
+        print(f'JWM BOB 3 {regions=}')
 
         self.regions = regions
         self.__batch_client: Optional[AioBatchClient] = None
