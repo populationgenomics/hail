@@ -2,7 +2,10 @@ package is.hail.expr.ir
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeOutputBuffer, valueToRichCodeRegion}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.{ByteArrayBuilder, FastSeq}
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.{JSONAnnotationImpex, Nat}
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.TableStage
@@ -27,7 +30,7 @@ import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.physical.stypes.primitives._
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.richUtils.ByteTrackingOutputStream
+import is.hail.utils.implicits.ByteTrackingOutputStream
 import is.hail.variant.{Call, ReferenceGenome}
 
 import java.io.{InputStream, OutputStream}
@@ -61,7 +64,7 @@ case class WrappedMatrixWriter(
   entriesFieldName: String,
   colKey: IndexedSeq[String],
 ) extends TableWriter {
-  def path: String = writer.path
+  override def path: String = writer.path
 
   override def lower(ctx: ExecuteContext, ts: TableStage, r: RTable): IR =
     writer.lower(colsFieldName, entriesFieldName, colKey, ctx, ts, r)
@@ -409,9 +412,9 @@ case class SplitPartitionNativeWriter(
 
   val keyType = spec1.encodedVirtualType.asInstanceOf[TStruct].select(keyFieldNames)._1
 
-  def ctxType: Type = TString
+  override def ctxType: Type = TString
 
-  def returnType: Type = TStruct(
+  override def returnType: Type = TStruct(
     "filePath" -> TString,
     "partitionCounts" -> TInt64,
     "distinctlyKeyed" -> TBoolean,
@@ -419,7 +422,7 @@ case class SplitPartitionNativeWriter(
     "lastKey" -> keyType,
   )
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     r: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -434,7 +437,7 @@ case class SplitPartitionNativeWriter(
     r.union(streamType.required)
   }
 
-  def consumeStream(
+  override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -607,7 +610,7 @@ case class SplitPartitionNativeWriter(
         cb += buff.close()
       }
 
-      stages.flatMap(_.toIterable).zip(filenames).foreach { case (source, destination) =>
+      stages.flatten.zip(filenames).foreach { case (source, destination) =>
         cb += mb.getFS.invoke[String, String, Boolean, Unit](
           "copy",
           source,
@@ -654,7 +657,7 @@ class MatrixSpecHelper(
   def write(fs: FS, nCols: Long, partCounts: Array[Long]): Unit = {
     val spec = MatrixTableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "references",
       typ,
       Map(
@@ -686,9 +689,9 @@ case class MatrixSpecWriter(
   refRelPath: String,
   log: Boolean,
 ) extends MetadataWriter {
-  def annotationType: Type = TStruct("cols" -> TInt64, "rows" -> TArray(TInt64))
+  override def annotationType: Type = TStruct("cols" -> TInt64, "rows" -> TArray(TInt64))
 
-  def writeMetadata(
+  override def writeMetadata(
     writeAnnotations: => IEmitCode,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -847,9 +850,9 @@ case class VCFPartitionWriter(
 
   val (infoExists, infoIdx) = ExportVCF.lookupVAField(typ.rowType, "info", "INFO", None)
 
-  def returnType: Type = TString
+  override def returnType: Type = TString
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     r: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -858,7 +861,7 @@ case class VCFPartitionWriter(
     r.union(streamType.required)
   }
 
-  final def consumeStream(
+  final override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -1238,7 +1241,8 @@ case class VCFExportFinalizer(
   exportType: String,
   tabix: Boolean,
 ) extends MetadataWriter {
-  def annotationType: Type = TStruct("cols" -> TArray(typ.colType), "partFiles" -> TArray(TString))
+  override def annotationType: Type =
+    TStruct("cols" -> TArray(typ.colType), "partFiles" -> TArray(TString))
 
   private def header(cb: EmitCodeBuilder, annotations: SBaseStructValue): Code[String] = {
     val mb = cb.emb
@@ -1268,8 +1272,11 @@ case class VCFExportFinalizer(
     )
   }
 
-  def writeMetadata(writeAnnotations: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
-    : Unit = {
+  override def writeMetadata(
+    writeAnnotations: => IEmitCode,
+    cb: EmitCodeBuilder,
+    region: Value[Region],
+  ): Unit = {
     val ctx: ExecuteContext = cb.emb.ctx
     val ext = ctx.fs.getCodecExtension(outputPath)
 
@@ -1451,7 +1458,7 @@ case class MatrixGENWriter(
 
 final case class GenVariantWriter(typ: MatrixType, entriesFieldName: String, precision: Int)
     extends SimplePartitionWriter {
-  def consumeElement(
+  override def consumeElement(
     cb: EmitCodeBuilder,
     element: EmitCode,
     os: Value[OutputStream],
@@ -1551,7 +1558,7 @@ final case class GenVariantWriter(typ: MatrixType, entriesFieldName: String, pre
 }
 
 final class GenSampleWriter extends SimplePartitionWriter {
-  def consumeElement(
+  override def consumeElement(
     cb: EmitCodeBuilder,
     element: EmitCode,
     os: Value[OutputStream],
@@ -1675,7 +1682,7 @@ case class BGENPartitionWriter(
   override def returnType: TStruct =
     TStruct("partFile" -> TString, "numVariants" -> TInt64, "dropped" -> TInt64)
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     r: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -1684,7 +1691,7 @@ case class BGENPartitionWriter(
     r.union(streamType.required)
   }
 
-  final def consumeStream(
+  final override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -1962,7 +1969,7 @@ case class BGENPartitionWriter(
 
 case class BGENExportFinalizer(typ: MatrixType, path: String, exportType: String, compression: Int)
     extends MetadataWriter {
-  def annotationType: Type = TStruct(
+  override def annotationType: Type = TStruct(
     "cols" -> TArray(typ.colType),
     "results" -> TArray(TStruct(
       "partFile" -> TString,
@@ -1971,8 +1978,11 @@ case class BGENExportFinalizer(typ: MatrixType, path: String, exportType: String
     )),
   )
 
-  def writeMetadata(writeAnnotations: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
-    : Unit = {
+  override def writeMetadata(
+    writeAnnotations: => IEmitCode,
+    cb: EmitCodeBuilder,
+    region: Value[Region],
+  ): Unit = {
     val annotations = writeAnnotations.getOrAssert(cb).asBaseStruct
     val colValues = annotations.loadField(cb, "cols").getOrAssert(cb).asIndexable
     val sampleIds = cb.memoize(Code.newArray[String](colValues.loadLength))
@@ -2154,14 +2164,14 @@ case class MatrixPLINKWriter(
 
 case class PLINKPartitionWriter(typ: MatrixType, entriesFieldName: String) extends PartitionWriter {
   val ctxType = TStruct("bedFile" -> TString, "bimFile" -> TString)
-  def returnType = TStruct("bedFile" -> TString, "bimFile" -> TString)
+  override def returnType = TStruct("bedFile" -> TString, "bimFile" -> TString)
 
   val locusIdx = typ.rowType.fieldIdx("locus")
   val allelesIdx = typ.rowType.fieldIdx("alleles")
   val varidIdx = typ.rowType.fieldIdx("varid")
   val cmPosIdx = typ.rowType.fieldIdx("cm_position")
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     r: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -2170,7 +2180,7 @@ case class PLINKPartitionWriter(typ: MatrixType, entriesFieldName: String) exten
     r.union(streamType.required)
   }
 
-  final def consumeStream(
+  final override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -2294,10 +2304,13 @@ object PLINKExportFinalizer {
 
 case class PLINKExportFinalizer(typ: MatrixType, path: String, headerPath: String)
     extends MetadataWriter {
-  def annotationType: Type = TArray(TStruct("bedFile" -> TString, "bimFile" -> TString))
+  override def annotationType: Type = TArray(TStruct("bedFile" -> TString, "bimFile" -> TString))
 
-  def writeMetadata(writeAnnotations: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
-    : Unit = {
+  override def writeMetadata(
+    writeAnnotations: => IEmitCode,
+    cb: EmitCodeBuilder,
+    region: Value[Region],
+  ): Unit = {
     val paths = writeAnnotations.getOrAssert(cb).asIndexable
     val bedFiles = cb.memoize(Code.newArray[String](paths.loadLength + 1)) // room for header
     val bimFiles = cb.memoize(Code.newArray[String](paths.loadLength))

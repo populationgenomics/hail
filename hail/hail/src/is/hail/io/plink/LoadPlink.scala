@@ -3,6 +3,9 @@ package is.hail.io.plink
 import is.hail.annotations.{Region, RegionValueBuilder}
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat._
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs.Literal
@@ -15,8 +18,7 @@ import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.utils.StringEscapeUtils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
+import is.hail.utils.implicits.{toRichContextIterator, toRichInputStream}
 import is.hail.variant._
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
@@ -74,9 +76,8 @@ object LoadPlink extends Logging {
         n += 1
       }
     }
-    val variants = vs.result().sortInPlaceBy(_.locusAlleles)(
-      locusAllelesType.ordering(ctx.stateManager).toOrdering
-    ).array
+    implicit val ord = locusAllelesType.ordering(ctx.stateManager).toOrdering
+    val variants = vs.result().sortInPlaceBy(_.locusAlleles).array
     (n, variants)
   }
 
@@ -367,16 +368,16 @@ class MatrixPLINKReader(
   partitioner: RVDPartitioner,
 ) extends MatrixHybridReader {
 
-  def rowUIDType = TInt64
-  def colUIDType = TInt64
+  override def rowUIDType = TInt64
+  override def colUIDType = TInt64
 
-  def pathsUsed: Seq[String] = FastSeq(params.bed, params.bim, params.fam)
+  override def pathsUsed: Seq[String] = FastSeq(params.bed, params.bim, params.fam)
 
   def nSamples: Int = sampleInfo.length
 
   val columnCount: Option[Int] = Some(nSamples)
 
-  def partitionCounts: Option[IndexedSeq[Long]] = None
+  override def partitionCounts: Option[IndexedSeq[Long]] = None
 
   val globals = Row(sampleInfo.zipWithIndex.map { case (s, idx) =>
     Row((0 until s.length).map(s.apply) :+ idx.toLong: _*)
@@ -492,7 +493,7 @@ class MatrixPLINKReader(
               offset = newOffset
             }
 
-            is.readFully(input, 0, input.length)
+            is.readFully(input)
 
             rvb.start(requestedPType)
             rvb.startStruct()
@@ -582,7 +583,7 @@ class MatrixPLINKReader(
     decomposeWithName(params, "MatrixPLINKReader")
   }
 
-  def renderShort(): String = defaultRender()
+  override def renderShort(): String = defaultRender()
 
   override def hashCode(): Int = params.hashCode()
 

@@ -4,6 +4,9 @@ import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
 import is.hail.annotations.{BroadcastRow, ExtendedOrdering, SafeNDArray}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.{FastSeq, IntArrayBuilder}
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.Nat
 import is.hail.expr.ir.TestUtils._
 import is.hail.expr.ir.agg._
@@ -21,7 +24,7 @@ import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.primitives.SInt32
 import is.hail.types.virtual._
 import is.hail.types.virtual.TIterable.elementType
-import is.hail.utils.{FastSeq, _}
+import is.hail.utils._
 import is.hail.variant.{Call2, Locus}
 
 import scala.collection.compat._
@@ -39,19 +42,18 @@ class IRSuite extends HailSuite {
   @Test def testRandDifferentLengthUIDStrings(): Unit = {
     implicit val execStrats = ExecStrategy.lowering
     val staticUID: Long = 112233
-    var rng: IR = RNGStateLiteral()
-    rng = RNGSplit(rng, I64(12345))
+    var rng = RNGSplit(RNGSplitStatic(RNGStateLiteral(), staticUID), I64(12345))
     val expected1 = Threefry.pmac(ctx.rngNonce, staticUID, Array(12345L))
-    assertEvalsTo(ApplySeeded("rand_int64", IndexedSeq(), rng, staticUID, TInt64), expected1(0))
+    assertEvalsTo(Apply("rand_int64", ArraySeq.empty, ArraySeq(rng), TInt64), expected1(0))
 
     rng = RNGSplit(rng, I64(0))
     val expected2 = Threefry.pmac(ctx.rngNonce, staticUID, Array(12345L, 0L))
-    assertEvalsTo(ApplySeeded("rand_int64", IndexedSeq(), rng, staticUID, TInt64), expected2(0))
+    assertEvalsTo(Apply("rand_int64", ArraySeq.empty, ArraySeq(rng), TInt64), expected2(0))
 
     rng = RNGSplit(rng, I64(0))
     rng = RNGSplit(rng, I64(0))
     val expected3 = Threefry.pmac(ctx.rngNonce, staticUID, Array(12345L, 0L, 0L, 0L))
-    assertEvalsTo(ApplySeeded("rand_int64", IndexedSeq(), rng, staticUID, TInt64), expected3(0))
+    assertEvalsTo(Apply("rand_int64", ArraySeq.empty, ArraySeq(rng), TInt64), expected3(0))
     assert(expected1 != expected2)
     assert(expected2 != expected3)
     assert(expected1 != expected3)
@@ -3429,6 +3431,15 @@ class IRSuite extends HailSuite {
       },
       forIR(st)(_ => Void()) -> Array(st),
       streamAggIR(st)(x => ApplyAggOp(Sum())(Cast(x, TInt64))) -> Array(st),
+      StreamBufferedAggregate(
+        st,
+        Void(),
+        MakeStruct(ArraySeq("l" -> l)),
+        Void(),
+        l.name,
+        ArraySeq(pCollectSig),
+        27,
+      ) -> Array(st),
       streamAggScanIR(st)(x => ApplyScanOp(Sum())(Cast(x, TInt64))) -> Array(st),
       RunAgg(
         Begin(FastSeq(
@@ -4428,11 +4439,11 @@ class IRSuite extends HailSuite {
       assert(interval1.isDisjointFrom(kord, interval2))
     }
 
-    val splitterValueDuplicated = splitters.counter().mapValues(_ > 1)
+    val splitterValueCounts = splitters.counter()
     val intBuilder = new IntArrayBuilder()
     splitters.toSet.toIndexedSeq.sorted.foreach { e =>
       intBuilder.add(e)
-      if (splitterValueDuplicated(e)) {
+      if (splitterValueCounts(e) > 1) {
         intBuilder.add(e)
       }
     }

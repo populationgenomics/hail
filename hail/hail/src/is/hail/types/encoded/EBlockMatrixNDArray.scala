@@ -2,6 +2,8 @@ package is.hail.types.encoded
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer}
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical._
@@ -9,7 +11,6 @@ import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.concrete.SNDArrayPointer
 import is.hail.types.physical.stypes.interfaces.SNDArrayValue
 import is.hail.types.virtual._
-import is.hail.utils._
 
 final case class EBlockMatrixNDArray(
   elementType: EType,
@@ -18,10 +19,10 @@ final case class EBlockMatrixNDArray(
 ) extends EType {
   type DecodedPType = PCanonicalNDArray
 
-  def setRequired(newRequired: Boolean): EBlockMatrixNDArray =
+  override def setRequired(newRequired: Boolean): EBlockMatrixNDArray =
     EBlockMatrixNDArray(elementType, newRequired)
 
-  def _decodedSType(requestedType: Type): SType = {
+  override def _decodedSType(requestedType: Type): SType = {
     val elementPType = elementType.decodedPType(requestedType.asInstanceOf[TNDArray].elementType)
     SNDArrayPointer(PCanonicalNDArray(elementPType, 2, false))
   }
@@ -108,7 +109,7 @@ final case class EBlockMatrixNDArray(
     tFinisher(cb)
   }
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
     val skip = elementType.buildSkip(cb.emb.ecb)
 
     val len = cb.newLocal[Int]("len", in.readInt() * in.readInt())
@@ -120,7 +121,7 @@ final case class EBlockMatrixNDArray(
   override def _asIdent: String =
     s"bm_ndarray_${if (encodeRowMajor) "row" else "column"}_major_of_${elementType.asIdent}"
 
-  def _toPretty = s"ENDArray[$elementType]"
+  override def _toPretty = s"ENDArray[$elementType]"
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
     sb ++= "ENDArray["

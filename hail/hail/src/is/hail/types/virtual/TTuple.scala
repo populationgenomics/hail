@@ -2,7 +2,7 @@ package is.hail.types.virtual
 
 import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.HailStateManager
-import is.hail.utils._
+import is.hail.collection.implicits.toRichIterable
 
 import scala.collection.compat._
 
@@ -34,7 +34,7 @@ final case class TTuple(_types: IndexedSeq[TupleField]) extends TBaseStruct {
 
   override lazy val _isCanonical: Boolean = _types.indices.forall(i => i == _types(i).index)
 
-  def size: Int = types.length
+  override def size: Int = types.length
 
   override def truncate(newSize: Int): TTuple =
     TTuple(_types.take(newSize))

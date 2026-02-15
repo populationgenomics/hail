@@ -1,7 +1,8 @@
 package is.hail.asm4s
 
-import is.hail.{lir, HAIL_BUILD_CONFIGURATION}
-import is.hail.utils.{toRichIterable, Traceback}
+import is.hail.{lir, EmitTracebackInAssertions}
+import is.hail.collection.implicits.toRichIterable
+import is.hail.utils.Traceback
 
 import scala.collection.compat._
 
@@ -274,18 +275,19 @@ trait CodeBuilderLike {
 
   def _assert(cond: => Code[Boolean], msgs: Code[String]*): Unit = {
     val message = msgs.reduce(_.concat(_))
-    if (HAIL_BUILD_CONFIGURATION.isDebug) {
-      val traceback = mb.cb.modb.getObject[Throwable](new Traceback().fillInStackTrace())
-      val assertion = Code.newInstance[AssertionError, String, Throwable](message, traceback)
-      if_(cond, {}, _throw(assertion))
-    } else {
-      if_(cond, {}, _throw(Code.newInstance[AssertionError, Object](message)))
-    }
+
+    val assertion =
+      if (EmitTracebackInAssertions) {
+        val traceback = mb.cb.modb.getObject[Throwable](new Traceback().fillInStackTrace())
+        Code.newInstance[AssertionError, String, Throwable](message, traceback)
+      } else Code.newInstance[AssertionError, Object](message)
+
+    if_(cond, {}, _throw(assertion))
   }
 }
 
 class CodeBuilder(val mb: MethodBuilder[_], var code: Code[Unit]) extends CodeBuilderLike {
-  def isOpenEnded: Boolean =
+  override def isOpenEnded: Boolean =
     code.isOpenEnded
 
   override def append(c: Code[Unit]): Unit = {
@@ -305,7 +307,7 @@ class CodeBuilder(val mb: MethodBuilder[_], var code: Code[Unit]) extends CodeBu
   def uncheckedAppend(c: Code[Unit]): Unit =
     code = Code(code, c)
 
-  def result(): Code[Unit] = {
+  override def result(): Code[Unit] = {
     val tmp = code
     code = Code._empty
     tmp

@@ -1,8 +1,10 @@
 package is.hail.io.compress
 
 import is.hail.HailSuite
+import is.hail.collection.implicits.toRichIterator
 import is.hail.expr.ir.GenericLines
 import is.hail.scalacheck.ApplicativeGenOps
+import is.hail.sparkextras.implicits._
 import is.hail.utils._
 
 import scala.collection.mutable
@@ -241,8 +243,8 @@ class BGzipCodecSuite extends HailSuite with ScalaCheckDrivenPropertyChecks {
           assert(decompIS.getVirtualOffset() == vOff);
           uncompIS.seek(uOff.toLong + extra)
 
-          val decompRead = decompIS.readRepeatedly(decompData)
-          val uncompRead = uncompIS.readRepeatedly(uncompData)
+          val decompRead = decompIS.readNBytes(decompData, 0, decompData.length)
+          val uncompRead = uncompIS.readNBytes(uncompData, 0, uncompData.length)
 
           assert(
             decompRead == uncompRead,

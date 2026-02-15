@@ -83,6 +83,8 @@ async def render_template(
     userdata: Optional[UserData],
     file: str,
     page_context: Dict[str, Any],
+    *,
+    status_code: int = 200,
 ) -> web.Response:
     if request.headers.get('x-hail-return-jinja-context'):
         if userdata and userdata['is_developer']:
@@ -100,7 +102,7 @@ async def render_template(
     context['use_tailwind'] = service in TAILWIND_SERVICES
     context['csrf_token'] = csrf_token
 
-    response = aiohttp_jinja2.render_template(file, request, context)
+    response = aiohttp_jinja2.render_template(file, request, context, status=status_code)
     response.set_cookie('_csrf', csrf_token, secure=True, httponly=True, samesite='strict')
     return response
 
@@ -129,7 +131,7 @@ def web_security_header_generator(fun, extra_script: str = '', extra_style: str 
         default_src = 'default-src \'self\';'
         style_src = f'style-src \'self\' \'unsafe-inline\' {extra_style} fonts.googleapis.com fonts.gstatic.com;'
         font_src = 'font-src \'self\' fonts.gstatic.com;'
-        script_src = f'script-src \'self\' \'unsafe-inline\' {extra_script} cdn.jsdelivr.net cdn.plot.ly;'
+        script_src = f'script-src \'self\' {extra_script} cdn.jsdelivr.net cdn.plot.ly;'
         img_src = f'img-src \'self\' {extra_img};'
         frame_ancestors = 'frame-ancestors \'self\';'
 

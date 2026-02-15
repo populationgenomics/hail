@@ -4,6 +4,8 @@ import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
 import is.hail.annotations.{Region, SafeRow, ScalaToRegionValue}
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.agg.{CollectStateSig, PhysicalAggSig, TypedStateSig}
 import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs._
@@ -120,7 +122,7 @@ class EmitStreamSuite extends HailSuite {
         var _eltRegion: Region = _
         var eos: Boolean = _
 
-        def init(outerRegion: Region, eltRegion: Region): Unit = _eltRegion = eltRegion
+        override def init(outerRegion: Region, eltRegion: Region): Unit = _eltRegion = eltRegion
 
         override def next(): Long =
           if (eos || !it.hasNext) {

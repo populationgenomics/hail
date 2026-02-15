@@ -3,6 +3,9 @@ package is.hail.expr.ir
 import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.agg.AggStateSig
 import is.hail.expr.ir.defs.In
 import is.hail.expr.ir.lowering.LoweringPipeline
@@ -14,8 +17,6 @@ import is.hail.types.physical.stypes.{
   PTypeReferenceSingleCodeType, SingleCodeType, StreamSingleCodeType,
 }
 import is.hail.types.physical.stypes.interfaces.{NoBoxLongIterator, SStream}
-import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import java.io.PrintWriter
 
@@ -156,7 +157,7 @@ object CompileIterator {
     private var _stepped = false
     private var _hasNext = false
 
-    def hasNext: Boolean = {
+    override def hasNext: Boolean = {
       if (!_stepped) {
         _hasNext = step()
         _stepped = true
@@ -164,7 +165,7 @@ object CompileIterator {
       _hasNext
     }
 
-    def next(): java.lang.Long = {
+    override def next(): java.lang.Long = {
       if (!hasNext) Iterator.empty.next(): Unit // throw
       _stepped = false
       stepFunction.loadAddress()
@@ -309,7 +310,7 @@ object CompileIterator {
         new LongIteratorWrapper {
           val stepFunction: TMPStepFunction = outerStepFunction
 
-          def step(): Boolean = stepFunction.apply(null, v0, part)
+          override def step(): Boolean = stepFunction.apply(null, v0, part)
         }
       },
     )
@@ -345,7 +346,7 @@ object CompileIterator {
         new LongIteratorWrapper {
           val stepFunction: TableStageToRVDStepFunction = outerStepFunction
 
-          def step(): Boolean = stepFunction.apply(null, v0, v1)
+          override def step(): Boolean = stepFunction.apply(null, v0, v1)
         }
       },
     )

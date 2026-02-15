@@ -2,6 +2,9 @@ package is.hail.types.physical.stypes.interfaces
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.valueToRichCodeRegion
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.linalg.{BLAS, LAPACK}
 import is.hail.types.{RNDArray, TypeWithRequiredness}
@@ -10,7 +13,6 @@ import is.hail.types.physical.stypes.{EmitType, SSettable, SType, SValue}
 import is.hail.types.physical.stypes.concrete.{SNDArraySlice, SNDArraySliceValue}
 import is.hail.types.physical.stypes.primitives.SInt64Value
 import is.hail.types.virtual.TInt32
-import is.hail.utils.{toRichIterable, valueToRichCodeRegion, FastSeq}
 
 import scala.collection.compat._
 import scala.collection.mutable
@@ -1243,7 +1245,7 @@ object SizeValueStatic {
 }
 
 final class SizeValueDyn(val v: Value[Long]) extends SizeValue {
-  def get: Code[Long] = v.get
+  override def get: Code[Long] = v.get
 
   override def equals(other: Any): Boolean = other match {
     case SizeValueDyn(v2) => v eq v2
@@ -1252,7 +1254,7 @@ final class SizeValueDyn(val v: Value[Long]) extends SizeValue {
 }
 
 final class SizeValueStatic(val v: Long) extends SizeValue {
-  def get: Code[Long] = const(v)
+  override def get: Code[Long] = const(v)
 
   override def equals(other: Any): Boolean = other match {
     case SizeValueStatic(v2) => v == v2
@@ -1261,7 +1263,7 @@ final class SizeValueStatic(val v: Long) extends SizeValue {
 }
 
 trait SNDArrayValue extends SValue {
-  def st: SNDArray
+  override def st: SNDArray
 
   def pt: PNDArray
 

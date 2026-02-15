@@ -2,7 +2,11 @@ package is.hail.expr.ir
 
 import is.hail.annotations.{Region, RegionPool, RegionValueBuilder}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{codeToRichCodeRegion, valueToRichCodeRegion}
 import is.hail.backend.{BackendUtils, ExecuteContext, HailTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs.EncodedLiteral
 import is.hail.expr.ir.functions.IRRandomness
 import is.hail.expr.ir.orderings.{CodeOrdering, StructOrdering}
@@ -14,9 +18,7 @@ import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.interfaces.SBaseStruct
 import is.hail.types.virtual.Type
 import is.hail.utils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
-import is.hail.utils.prettyPrint.ArrayOfByteArrayInputStream
+import is.hail.utils.implicits.toRichBoolean
 import is.hail.variant.ReferenceGenome
 
 import scala.collection.mutable
@@ -135,7 +137,7 @@ trait WrappedEmitModuleBuilder {
 trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
   def ecb: EmitClassBuilder[C]
 
-  def emodb: EmitModuleBuilder = ecb.emodb
+  override def emodb: EmitModuleBuilder = ecb.emodb
 
   def cb: ClassBuilder[C] = ecb.cb
 
@@ -944,7 +946,8 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
       new ((HailClassLoader, FS, HailTaskContext, Region) => C) with java.io.Serializable {
         @transient @volatile private var theClass: Class[_] = null
 
-        def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region): C = {
+        override def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region)
+          : C = {
           if (theClass == null) {
             this.synchronized {
               if (theClass == null) {
@@ -1438,7 +1441,7 @@ class EmitMethodBuilder[C](
 trait WrappedEmitMethodBuilder[C] extends WrappedEmitClassBuilder[C] {
   def emb: EmitMethodBuilder[C]
 
-  def ecb: EmitClassBuilder[C] = emb.ecb
+  override def ecb: EmitClassBuilder[C] = emb.ecb
 
   // wrapped MethodBuilder methods
   def mb: MethodBuilder[C] = emb.mb

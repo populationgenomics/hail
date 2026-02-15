@@ -2,9 +2,12 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichOption
 import is.hail.expr.ir._
 import is.hail.expr.ir.functions.MatrixToTableFunction
 import is.hail.sparkextras.ContextRDD
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.{PCanonicalString, PCanonicalStruct, PFloat64, PInt64}
 import is.hail.types.virtual.{MatrixType, TFloat64, TStruct, TableType}
 import is.hail.utils._
@@ -388,12 +391,12 @@ case class IBD(
     }
   }
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
-  def typ(childType: MatrixType): TableType =
+  override def typ(childType: MatrixType): TableType =
     TableType(IBD.ibdPType.virtualType, IBD.ibdKey, TStruct.empty)
 
-  def execute(ctx: ExecuteContext, input: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, input: MatrixValue): TableValue = {
     input.requireUniqueSamples("ibd")
     val computeMaf = mafFieldName.map(IBD.generateComputeMaf(input, _))
     val crdd =

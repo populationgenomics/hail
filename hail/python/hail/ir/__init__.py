@@ -54,7 +54,6 @@ from .ir import (
     ApplyBinaryPrimOp,
     ApplyComparisonOp,
     ApplyScanOp,
-    ApplySeeded,
     ApplyUnaryPrimOp,
     ArrayLen,
     ArrayMaximalIndependentSet,
@@ -119,6 +118,7 @@ from .ir import (
     Recur,
     Ref,
     RNGSplit,
+    RNGSplitStatic,
     RNGStateLiteral,
     SelectedTopLevelReference,
     SelectFields,
@@ -211,7 +211,6 @@ from .matrix_writer import (
     MatrixWriter,
 )
 from .register_aggregators import register_aggregators
-from .register_functions import register_functions
 from .renderer import (
     CSERenderer,
     ParensRenderer,
@@ -288,7 +287,6 @@ __all__ = [
     'ApplyBinaryPrimOp',
     'ApplyComparisonOp',
     'ApplyScanOp',
-    'ApplySeeded',
     'ApplyUnaryPrimOp',
     'ArrayLen',
     'ArrayMaximalIndependentSet',
@@ -437,6 +435,7 @@ __all__ = [
     'PlainRenderer',
     'ProjectedTopLevelReference',
     'RNGSplit',
+    'RNGSplitStatic',
     'RNGStateLiteral',
     'RQStack',
     'ReadPartition',
@@ -528,7 +527,6 @@ __all__ = [
     'finalize_randomness',
     'make_filter_and_replace',
     'register_aggregators',
-    'register_functions',
     'subst',
     'tensor_shape_to_matrix_shape',
     'toArray',

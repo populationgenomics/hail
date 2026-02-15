@@ -4,6 +4,8 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.{BroadcastValue, ExecuteContext, HailStateManager}
 import is.hail.backend.spark.SparkBackend
+import is.hail.collection.{FastSeq, MissingArrayBuilder}
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir.{
   CloseableIterator, EmitCode, EmitCodeBuilder, EmitMethodBuilder, GenericLine, GenericLines,
@@ -12,7 +14,7 @@ import is.hail.expr.ir.{
 import is.hail.expr.ir.defs.{Literal, PartitionReader}
 import is.hail.expr.ir.lowering.TableStage
 import is.hail.expr.ir.streams.StreamProducer
-import is.hail.io.{VCFAttributes, VCFMetadata}
+import is.hail.io.{checkGzipOfGlobbedFiles, VCFAttributes, VCFMetadata}
 import is.hail.io.fs.{FS, FileListEntry}
 import is.hail.io.tabix._
 import is.hail.io.vcf.LoadVCF.{getHeaderLines, parseHeader}
@@ -23,6 +25,7 @@ import is.hail.types.physical._
 import is.hail.types.physical.stypes.interfaces.{SBaseStructValue, SStreamValue}
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.implicits.toTruncatable
 import is.hail.variant._
 
 import scala.annotation.meta.param
@@ -1522,7 +1525,7 @@ object LoadVCF extends Logging {
         val abf = new MissingArrayBuilder[Float]
         val abd = new MissingArrayBuilder[Double]
 
-        def hasNext: Boolean = {
+        override def hasNext: Boolean = {
           while (!present && it.hasNext) {
             val lwc = it.next()
             val line = lwc.value
@@ -1583,7 +1586,7 @@ object LoadVCF extends Logging {
           present
         }
 
-        def next(): Long = {
+        override def next(): Long = {
           // call hasNext to advance if necessary
           if (!hasNext)
             throw new java.util.NoSuchElementException()
@@ -1688,9 +1691,9 @@ class PartitionedVCFRDD(
   val contigRemappingBc =
     if (reverseContigMapping.size != 0) sparkContext.broadcast(reverseContigMapping) else null
 
-  protected def getPartitions: Array[Partition] = _partitions
+  override protected def getPartitions: Array[Partition] = _partitions
 
-  def compute(split: Partition, context: TaskContext): Iterator[WithContext[String]] = {
+  override def compute(split: Partition, context: TaskContext): Iterator[WithContext[String]] = {
     val p = split.asInstanceOf[PartitionedVCFPartition]
 
     val chromToQuery = if (contigRemappingBc != null)
@@ -1715,9 +1718,9 @@ class PartitionedVCFRDD(
       private var l = lines.next()
       private var curIdx: Long = lines.getCurIdx()
 
-      def hasNext: Boolean = l != null
+      override def hasNext: Boolean = l != null
 
-      def next(): WithContext[String] = {
+      override def next(): WithContext[String] = {
         assert(l != null)
         val n = l
         l = lines.next()
@@ -1917,8 +1920,8 @@ class MatrixVCFReader(
 
   LoadVCF.warnDuplicates(sampleIDs)
 
-  def rowUIDType = TTuple(TInt64, TInt64)
-  def colUIDType = TInt64
+  override def rowUIDType = TTuple(TInt64, TInt64)
+  override def colUIDType = TInt64
 
   val (infoPType, rowValuePType, formatPType) = header.getPTypes(
     params.arrayElementsRequired,
@@ -1926,7 +1929,7 @@ class MatrixVCFReader(
     params.callFields,
   )
 
-  def fullMatrixTypeWithoutUIDs: MatrixType = MatrixType(
+  override def fullMatrixTypeWithoutUIDs: MatrixType = MatrixType(
     globalType = TStruct.empty,
     colType = TStruct("s" -> TString),
     colKey = Array("s"),
@@ -1958,13 +1961,13 @@ class MatrixVCFReader(
     fullType.key,
   )
 
-  def pathsUsed: Seq[String] = params.files
+  override def pathsUsed: Seq[String] = params.files
 
   def nCols: Int = sampleIDs.length
 
   val columnCount: Option[Int] = Some(nCols)
 
-  def partitionCounts: Option[IndexedSeq[Long]] = None
+  override def partitionCounts: Option[IndexedSeq[Long]] = None
 
   def partitioner(sm: HailStateManager): Option[RVDPartitioner] =
     params.partitionsJSON.map { partitionsJSON =>
@@ -2140,7 +2143,7 @@ class MatrixVCFReader(
     decomposeWithName(params, "MatrixVCFReader")
   }
 
-  def renderShort(): String = defaultRender()
+  override def renderShort(): String = defaultRender()
 
   override def hashCode(): Int = params.hashCode()
 
@@ -2189,7 +2192,7 @@ case class GVCFPartitionReader(
 
   lazy val fullRowType: TStruct = fullRowPType.virtualType
 
-  def rowRequiredness(requestedType: TStruct): RStruct =
+  override def rowRequiredness(requestedType: TStruct): RStruct =
     VirtualTypeWithReq(tcoerce[PStruct](fullRowPType.subsetTo(requestedType))).r.asInstanceOf[
       RStruct
     ]
@@ -2199,7 +2202,7 @@ case class GVCFPartitionReader(
     decomposeWithName(this, "MatrixVCFReader")
   }
 
-  def emitStream(
+  override def emitStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     mb: EmitMethodBuilder[_],
