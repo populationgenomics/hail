@@ -2,7 +2,10 @@ package is.hail.expr.ir
 
 import is.hail.annotations._
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.valueToRichCodeInputBuffer
 import is.hail.backend.{ExecuteContext, HailStateManager, HailTaskContext, TaskFinalizer}
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.{
@@ -940,6 +943,7 @@ case class PartitionNativeIntervalReader(
       val currIdxInPartition = mb.genFieldThisRef[Long]("n_to_read")
       val stopIdxInPartition = mb.genFieldThisRef[Long]("n_to_read")
       val finalizer = mb.genFieldThisRef[TaskFinalizer]("finalizer")
+      cb.assign(finalizer, cb.emb.ecb.getTaskContext.invoke[TaskFinalizer]("newFinalizer"))
 
       val startPartitionIndex = mb.genFieldThisRef[Int]("start_part")
       val currPartitionIdx = mb.genFieldThisRef[Int]("curr_part")
@@ -995,8 +999,6 @@ case class PartitionNativeIntervalReader(
           cb.assign(streamFirst, true)
           cb.assign(currIdxInPartition, 0L)
           cb.assign(stopIdxInPartition, 0L)
-
-          cb.assign(finalizer, cb.emb.ecb.getTaskContext.invoke[TaskFinalizer]("newFinalizer"))
         }
 
         override val elementRegion: Settable[Region] = region
