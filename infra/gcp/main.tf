@@ -50,13 +50,6 @@ variable "use_artifact_registry" {
   description = "pull the ubuntu image from Artifact Registry. Otherwise, GCR"
 }
 
-
-variable deploy_ukbb {
-  type = bool
-  description = "Run the UKBB Genetic Correlation browser"
-  default = false
-}
-
 variable "enable_master_authorized_networks" {
   type = bool
   description = "Enable master authorized networks configuration for GKE cluster"
@@ -70,6 +63,12 @@ variable "master_authorized_networks" {
   }))
   description = "List of CIDR blocks authorized to access the GKE master"
   default = []
+}
+
+variable "support_email" {
+  type        = string
+  description = "Support email address to display in error pages and user-facing messages"
+  default     = ""
 }
 
 locals {
@@ -441,7 +440,7 @@ resource "kubernetes_secret" "global_config" {
     name = "global-config"
   }
 
-  data = {
+  data = merge({
     cloud = "gcp"
     batch_gcp_regions = var.batch_gcp_regions
     batch_logs_bucket = module.batch_logs.name  # Deprecated
@@ -462,7 +461,9 @@ resource "kubernetes_secret" "global_config" {
     ip = google_compute_address.gateway.address
     kubernetes_server_url = "https://${google_container_cluster.vdc.endpoint}"
     organization_domain = var.organization_domain
-  }
+  }, var.support_email != "" ? {
+    support_email = var.support_email
+  } : {})
 }
 
 resource "google_sql_ssl_cert" "root_client_cert" {
@@ -527,20 +528,35 @@ resource "google_artifact_registry_repository" "repository" {
 resource "google_artifact_registry_repository" "dockerhub_remote" {
   provider      = google-beta
   format        = "DOCKER"
-  mode          = "REMOTE"
+  mode          = "REMOTE_REPOSITORY"
   repository_id = "dockerhubproxy"
   location      = var.gcp_location
+  cleanup_policy_dry_run = false
 
   remote_repository_config {
     description = "Docker Hub remote repository for Batch worker images"
-    docker_repository {
-      public_repository = "DOCKER_HUB"
+    common_repository {
+      uri = "https://registry-1.docker.io"
+    }
+  }
+
+  cleanup_policies {
+    id     = "Delete after 6h"
+    action = "DELETE"
+    condition {
+      older_than            = "21600s"
+      package_name_prefixes = []
+      tag_prefixes          = []
+      tag_state             = "ANY"
+      version_name_prefixes  = []
     }
   }
 
   lifecycle {
-    # Allow users to specify the upstream credentials manually without Terraform resetting it.
-    ignore_changes = [remote_repository_config[0].upstream_credentials]
+    # Ignore fields that are managed outside Terraform or have different representations
+    ignore_changes = [
+      remote_repository_config[0].upstream_credentials,
+    ]
   }
 }
 
