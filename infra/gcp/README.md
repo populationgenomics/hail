@@ -159,6 +159,21 @@ export GCP_PROJECT=<gcp project name>
   }
   ```
 
+  Issues with this file may cause errors when launching dev deploys, in particular due to malformed/expired OAuth tokens. Errors like these likely point to a malformed token:
+  
+  ```
+  dev deploy failed: error finding {"repo": {"owner": "populationgenomics", "name": "hail"}, "name": "<branch-name>"} at GitHub
+  ```
+
+  Inspection of the pods can reveal what token is being used and help with further debugging of the deploy:
+  ```
+  $ kubectl exec -it ci-7fb45cb8cb-sgvwn -- bash
+   root@ci-7fb45cb8cb-sgvwn:/# cat /secrets/oauth-token/oauth-token; echo
+   github_pat_<snip>_<snip>
+   root@ci-7fb45cb8cb-sgvwn:/# exit
+   $
+  ```
+
 ## Check Service Accounts into Repository
 
 - Install [sops](https://github.com/mozilla/sops).
