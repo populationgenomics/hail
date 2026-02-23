@@ -32,7 +32,7 @@ import com.fasterxml.jackson.core.StreamReadConstraints
 
 object ServiceBackend {
   // SET-982 2026-02-19 Reduced from 1000 to work around excessive driver memory use
-  val MaxAvailableGcsConnections = 300
+  val MaxAvailableGcsConnections = 100
 
   // See https://github.com/hail-is/hail/issues/14580
   StreamReadConstraints.overrideDefaultStreamReadConstraints(
