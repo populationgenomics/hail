@@ -1,9 +1,12 @@
 package is.hail.expr.ir
 
-import is.hail.GenericIndexedSeqSerializer
+import is.hail.PrettyVersion
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeOutputBuffer, valueToRichCodeRegion}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.TableAnnotationImpex
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.StringFunctions
@@ -24,12 +27,13 @@ import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.physical.stypes.primitives.{SBooleanValue, SInt64, SInt64Value}
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.richUtils.ByteTrackingOutputStream
+import is.hail.utils.implicits.ByteTrackingOutputStream
 import is.hail.variant.ReferenceGenome
 
-import java.io.{BufferedOutputStream, OutputStream}
+import java.io.{BufferedOutputStream, OutputStream, OutputStreamWriter}
 import java.nio.file.{FileSystems, Path}
-import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.{Date, UUID}
 
 import org.json4s.{DefaultFormats, Formats, JBool, JObject, ShortTypeHints}
 
@@ -145,6 +149,17 @@ object TableNativeWriter {
       }
     )
   }
+
+  def writeFileReadMe(fs: FS, path: String): Unit = {
+    val dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss")
+    using(new OutputStreamWriter(fs.create(path + "/README.txt"))) { out =>
+      out.write(
+        s"""This folder comprises a Hail (www.hail.is) native Table or MatrixTable.
+           |  Written with version $PrettyVersion
+           |  Created at ${dateFormat.format(new Date())}""".stripMargin
+      )
+    }
+  }
 }
 
 case class TableNativeWriter(
@@ -196,10 +211,10 @@ case class PartitionNativeWriter(
 ) extends PartitionWriter {
   val keyType = spec.encodedVirtualType.asInstanceOf[TStruct].select(keyFields)._1
 
-  def ctxType = PartitionNativeWriter.ctxType
+  override def ctxType = PartitionNativeWriter.ctxType
   val returnType = PartitionNativeWriter.returnType(keyType, trackTotalBytes)
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     r: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -383,7 +398,7 @@ case class PartitionNativeWriter(
     }
   }
 
-  def consumeStream(
+  override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -402,9 +417,9 @@ case class PartitionNativeWriter(
 }
 
 case class RVDSpecWriter(path: String, spec: RVDSpecMaker) extends MetadataWriter {
-  def annotationType: Type = TArray(TString)
+  override def annotationType: Type = TArray(TString)
 
-  def writeMetadata(
+  override def writeMetadata(
     writeAnnotations: => IEmitCode,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -439,7 +454,7 @@ class TableSpecHelper(
   def write(fs: FS, partCounts: Array[Long], distinctlyKeyed: Boolean): Unit = {
     val spec = TableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       refRelPath,
       typ,
       Map(
@@ -469,14 +484,14 @@ case class TableSpecWriter(
   refRelPath: String,
   log: Boolean,
 ) extends MetadataWriter {
-  def annotationType: Type = TArray(TStruct(
+  override def annotationType: Type = TArray(TStruct(
     "partitionCounts" -> TInt64,
     "distinctlyKeyed" -> TBoolean,
     "firstKey" -> typ.keyType,
     "lastKey" -> typ.keyType,
   ))
 
-  def writeMetadata(
+  override def writeMetadata(
     writeAnnotations: => IEmitCode,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -576,9 +591,10 @@ case class RelationalSetup(path: String, overwrite: Boolean, refs: Option[TableT
     ))
   )
 
-  def annotationType: Type = TVoid
+  override def annotationType: Type = TVoid
 
-  def writeMetadata(ignored: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region]): Unit = {
+  override def writeMetadata(ignored: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
+    : Unit = {
     if (overwrite)
       cb += cb.emb.getFS.invoke[String, Boolean, Unit]("delete", path, true)
     else
@@ -605,16 +621,16 @@ case class RelationalSetup(path: String, overwrite: Boolean, refs: Option[TableT
 }
 
 case class RelationalCommit(path: String) extends MetadataWriter {
-  def annotationType: Type = TStruct()
+  override def annotationType: Type = TStruct()
 
-  def writeMetadata(
+  override def writeMetadata(
     writeAnnotations: => IEmitCode,
     cb: EmitCodeBuilder,
     region: Value[Region],
   ): Unit = {
     cb += Code.invokeScalaObject2[FS, String, Unit](
-      Class.forName("is.hail.utils.package$"),
-      "writeNativeFileReadMe",
+      Class.forName("is.hail.expr.ir.TableNativeWriter$"),
+      "writeFileReadMe",
       cb.emb.getFS,
       path,
     )
@@ -627,9 +643,9 @@ case class RelationalWriter(
   overwrite: Boolean,
   maybeRefs: Option[(String, Set[String])],
 ) extends MetadataWriter {
-  def annotationType: Type = TVoid
+  override def annotationType: Type = TVoid
 
-  def writeMetadata(
+  override def writeMetadata(
     writeAnnotations: => IEmitCode,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -664,8 +680,8 @@ case class RelationalWriter(
     ) // PVoidCode.code is Code._empty
 
     cb += Code.invokeScalaObject2[FS, String, Unit](
-      Class.forName("is.hail.utils.package$"),
-      "writeNativeFileReadMe",
+      Class.forName("is.hail.expr.ir.TableNativeWriter$"),
+      "writeFileReadMe",
       cb.emb.getFS,
       path,
     )
@@ -734,7 +750,7 @@ case class TableTextPartitionWriter(rowType: TStruct, delimiter: String, writeHe
     cb += os.invoke[Int, Unit]("write", '\n')
   }
 
-  def consumeElement(
+  override def consumeElement(
     cb: EmitCodeBuilder,
     element: EmitCode,
     os: Value[OutputStream],
@@ -808,10 +824,13 @@ case class TableTextFinalizer(
   header: Boolean = true,
   exportType: String = ExportType.CONCATENATED,
 ) extends MetadataWriter {
-  def annotationType: Type = TArray(TString)
+  override def annotationType: Type = TArray(TString)
 
-  def writeMetadata(writeAnnotations: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
-    : Unit = {
+  override def writeMetadata(
+    writeAnnotations: => IEmitCode,
+    cb: EmitCodeBuilder,
+    region: Value[Region],
+  ): Unit = {
     val ctx: ExecuteContext = cb.emb.ctx
     val ext = ctx.fs.getCodecExtension(outputPath)
     val partPaths = writeAnnotations.getOrFatal(cb, "write annotations cannot be missing!")
@@ -1064,7 +1083,7 @@ case class TableNativeFanoutWriter(
 class PartitionNativeFanoutWriter(
   targets: IndexedSeq[FanoutWriterTarget]
 ) extends PartitionWriter {
-  def consumeStream(
+  override def consumeStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     stream: StreamProducer,
@@ -1097,12 +1116,12 @@ class PartitionNativeFanoutWriter(
     )
   }
 
-  def ctxType = TString
+  override def ctxType = TString
 
-  def returnType: TTuple =
+  override def returnType: TTuple =
     TTuple(targets.map(target => target.rowWriter.returnType): _*)
 
-  def unionTypeRequiredness(
+  override def unionTypeRequiredness(
     returnType: TypeWithRequiredness,
     ctxType: TypeWithRequiredness,
     streamType: RIterable,
@@ -1117,8 +1136,7 @@ class PartitionNativeFanoutWriter(
 
 object WrappedMatrixNativeMultiWriter {
   implicit val formats: Formats = MatrixNativeMultiWriter.formats +
-    ShortTypeHints(List(classOf[WrappedMatrixNativeMultiWriter])) +
-    GenericIndexedSeqSerializer
+    ShortTypeHints(List(classOf[WrappedMatrixNativeMultiWriter]))
 }
 
 case class WrappedMatrixNativeMultiWriter(

@@ -1,6 +1,7 @@
 package is.hail.methods
 
 import is.hail.backend.ExecuteContext
+import is.hail.collection.LongArrayBuilder
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs.{GetField, StreamLocalLDPrune, ToArray, ToStream}
 import is.hail.expr.ir.functions.MatrixToTableFunction
@@ -305,7 +306,7 @@ case class LocalLDPrune(
       globalType = TStruct.empty,
     )
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
   def makeStream(stream: IR, entriesFieldName: String, nCols: IR): StreamLocalLDPrune = {
     val newRow = mapIR(stream) { row =>
@@ -318,7 +319,7 @@ case class LocalLDPrune(
     StreamLocalLDPrune(newRow, r2Threshold, windowSize, maxQueueSize, nCols)
   }
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
     val nSamples = mv.nCols
     val tableType = typ(mv.typ)
     val ts = TableExecuteIntermediate(mv.toTableValue).asTableStage(ctx).mapPartition(Some(

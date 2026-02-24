@@ -4,6 +4,8 @@ import is.hail.{linalg, HailFeatureFlags}
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend._
 import is.hail.backend.spark.SparkBackend
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.{JSONAnnotationImpex, SparkAnnotationImpex}
 import is.hail.expr.ir._
 import is.hail.expr.ir.IRParser.parseType
@@ -13,14 +15,17 @@ import is.hail.expr.ir.functions.IRFunctionRegistry
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs._
 import is.hail.io.reference.{IndexedFastaSequenceFile, LiftOver}
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.PStruct
 import is.hail.types.virtual.{TArray, TInterval}
 import is.hail.types.virtual.Kinds.{BlockMatrix, Matrix, Table, Value}
 import is.hail.utils._
 import is.hail.utils.ExecutionTimer.Timings
+import is.hail.utils.implicits.toRichString
 import is.hail.variant.ReferenceGenome
 
 import scala.annotation.nowarn
+import scala.collection.compat._
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
@@ -302,7 +307,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
 
   def pyGrepReturn(regex: String, files: Seq[String], maxLines: Int)
     : Array[(String, Array[String])] =
-    fileAndLineCounts(regex, files, maxLines).mapValues(_.map(_.value)).toArray
+    fileAndLineCounts(regex, files, maxLines).view.mapValues(_.map(_.value)).toArray
 
   private[this] def addReference(rg: ReferenceGenome): Unit =
     ReferenceGenome.addFatalOnCollision(references, FastSeq(rg))
@@ -473,7 +478,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
       // Note that simply calling httpServer.start() from a non-daemon thread will spawn a
       // non-daemon thread itself.
       private[this] val thread = new Thread(new Runnable() {
-        def run(): Unit = httpServer.start()
+        override def run(): Unit = httpServer.start()
       })
 
       thread.setDaemon(true)

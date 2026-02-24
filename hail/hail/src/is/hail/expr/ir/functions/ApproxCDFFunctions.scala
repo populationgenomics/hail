@@ -2,13 +2,13 @@ package is.hail.expr.ir.functions
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{valueToCodeObject, Code, Value}
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.expr.ir.agg.{ApproxCDFStateManager, QuantilesAggregator}
 import is.hail.types.physical.stypes.concrete.SBaseStructPointer
 import is.hail.types.physical.stypes.interfaces.SBaseStructValue
 import is.hail.types.physical.stypes.primitives.SInt32Value
 import is.hail.types.virtual.TInt32
-import is.hail.utils.toRichIterable
 
 import org.apache.spark.sql.Row
 
@@ -51,7 +51,7 @@ object ApproxCDFFunctions extends RegistryFunctions {
     unwrapReturn(cb, r, SBaseStructPointer(statePType), row).asBaseStruct
   }
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     registerSCode3(
       "approxCDFCombine",
       TInt32,
@@ -61,12 +61,12 @@ object ApproxCDFFunctions extends RegistryFunctions {
       (_, _, _, _) => SBaseStructPointer(statePType),
     ) {
       case (r, cb, _, k: SInt32Value, left: SBaseStructValue, right: SBaseStructValue, _) =>
-        val leftState = makeStateManager(cb, r.region, k.value, left)
-        val rightState = makeStateManager(cb, r.region, k.value, right)
+        val leftState = makeStateManager(cb, r, k.value, left)
+        val rightState = makeStateManager(cb, r, k.value, right)
 
         cb += leftState.invoke[ApproxCDFStateManager, Unit]("combOp", rightState)
 
-        fromStateManager(cb, r.region, leftState)
+        fromStateManager(cb, r, leftState)
     }
   }
 }

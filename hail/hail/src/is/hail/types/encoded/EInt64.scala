@@ -2,12 +2,12 @@ package is.hail.types.encoded
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer}
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.primitives.{SInt64, SInt64Value}
 import is.hail.types.virtual._
-import is.hail.utils._
 
 case object EInt64Optional extends EInt64(false)
 
@@ -25,16 +25,16 @@ class EInt64(override val required: Boolean) extends EType {
   ): SValue =
     new SInt64Value(cb.memoize(in.readLong()))
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
     cb += in.skipLong()
 
-  def _decodedSType(requestedType: Type): SType = SInt64
+  override def _decodedSType(requestedType: Type): SType = SInt64
 
-  def _asIdent = "int64"
+  override def _asIdent = "int64"
 
-  def _toPretty = "EInt64"
+  override def _toPretty = "EInt64"
 
-  def setRequired(newRequired: Boolean): EInt64 = EInt64(newRequired)
+  override def setRequired(newRequired: Boolean): EInt64 = EInt64(newRequired)
 }
 
 object EInt64 {

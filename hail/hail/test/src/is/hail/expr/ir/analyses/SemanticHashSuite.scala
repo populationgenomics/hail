@@ -1,13 +1,13 @@
 package is.hail.expr.ir.analyses
 
-import is.hail.{HAIL_PRETTY_VERSION, HailSuite}
+import is.hail.{HailSuite, PrettyVersion}
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs._
 import is.hail.io.fs.{FS, FakeFS, FakeURL, FileListEntry}
 import is.hail.linalg.BlockMatrixMetadata
 import is.hail.rvd.AbstractRVDSpec
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 
 import java.io.FileNotFoundException
 import java.lang
@@ -365,7 +365,7 @@ class SemanticHashSuite extends HailSuite {
           override def file_version: Int =
             1
           override def hail_version: String =
-            HAIL_PRETTY_VERSION
+            PrettyVersion
           override def components: Map[String, ComponentSpec] =
             Map.empty
           override def toJValue: JValue = ???

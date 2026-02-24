@@ -1,6 +1,7 @@
 package is.hail.expr.ir.functions
 
 import is.hail.asm4s.Code
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.EmitValue
 import is.hail.expr.ir.defs.{Cast, ErrorIDs}
 import is.hail.stats._
@@ -111,7 +112,7 @@ object MathFunctions extends RegistryFunctions {
 
   val mathPackageClass: Class[_] = Class.forName("scala.math.package$")
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     val thisClass = getClass
     val statsPackageClass = Class.forName("is.hail.stats.package$")
     val jMathClass = classOf[java.lang.Math]
@@ -341,9 +342,9 @@ object MathFunctions extends RegistryFunctions {
             statsPackageClass,
             "pgenchisq",
             x.value,
-            Code.checkcast[IndexedSeq[Double]](svalueToJavaValue(cb, r.region, w)),
-            Code.checkcast[IndexedSeq[Int]](svalueToJavaValue(cb, r.region, k)),
-            Code.checkcast[IndexedSeq[Double]](svalueToJavaValue(cb, r.region, lam)),
+            Code.checkcast[IndexedSeq[Double]](svalueToJavaValue(cb, r, w)),
+            Code.checkcast[IndexedSeq[Int]](svalueToJavaValue(cb, r, k)),
+            Code.checkcast[IndexedSeq[Double]](svalueToJavaValue(cb, r, lam)),
             sigma.value,
             maxIterations.value,
             minAccuracy.value,
@@ -352,7 +353,7 @@ object MathFunctions extends RegistryFunctions {
 
         DaviesAlgorithm.pType.constructFromFields(
           cb,
-          r.region,
+          r,
           FastSeq(
             EmitValue.present(primitive(cb.memoize(res.invoke[Double]("value")))),
             EmitValue.present(primitive(cb.memoize(res.invoke[Int]("nIterations")))),
@@ -439,7 +440,7 @@ object MathFunctions extends RegistryFunctions {
 
       fetStruct.constructFromFields(
         cb,
-        r.region,
+        r,
         FastSeq(
           EmitValue.present(primitive(cb.memoize(res(0)))),
           EmitValue.present(primitive(cb.memoize(res(1)))),
@@ -473,7 +474,7 @@ object MathFunctions extends RegistryFunctions {
 
       chisqStruct.constructFromFields(
         cb,
-        r.region,
+        r,
         FastSeq(
           EmitValue.present(primitive(cb.memoize(res(0)))),
           EmitValue.present(primitive(cb.memoize(res(1)))),
@@ -518,7 +519,7 @@ object MathFunctions extends RegistryFunctions {
 
         chisqStruct.constructFromFields(
           cb,
-          r.region,
+          r,
           FastSeq(
             EmitValue.present(primitive(cb.memoize(res(0)))),
             EmitValue.present(primitive(cb.memoize(res(1)))),
@@ -560,7 +561,7 @@ object MathFunctions extends RegistryFunctions {
 
         hweStruct.constructFromFields(
           cb,
-          r.region,
+          r,
           FastSeq(
             EmitValue.present(primitive(cb.memoize(res(0)))),
             EmitValue.present(primitive(cb.memoize(res(1)))),

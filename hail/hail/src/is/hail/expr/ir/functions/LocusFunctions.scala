@@ -2,6 +2,7 @@ package is.hail.expr.ir.functions
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{EmitMethodBuilder, _}
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.{EmitType, SType}
@@ -118,7 +119,7 @@ object LocusFunctions extends RegistryFunctions {
         )))
     }
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     val locusClass = Locus.getClass
 
     registerSCode1(
@@ -160,8 +161,8 @@ object LocusFunctions extends RegistryFunctions {
         SCanonicalLocusPointer(PCanonicalLocus(tl.asInstanceOf[TLocus].rg)),
     ) {
       case (
-            r: EmitRegion,
-            cb: EmitCodeBuilder,
+            r,
+            cb,
             rt: SCanonicalLocusPointer,
             inputLocus: SLocusValue,
             basePairsToAdd: SInt32Value,
@@ -182,7 +183,7 @@ object LocusFunctions extends RegistryFunctions {
             )),
           ),
         )
-        rt.pType.constructFromContigAndPosition(cb, r.region, contig, newPos)
+        rt.pType.constructFromContigAndPosition(cb, r, contig, newPos)
     }
 
     registerSCode2(
@@ -215,10 +216,10 @@ object LocusFunctions extends RegistryFunctions {
             VariantMethods.getClass,
             "minRep",
             locus.getLocusObj(cb),
-            Code.checkcast[IndexedSeq[String]](svalueToJavaValue(cb, r.region, alleles)),
+            Code.checkcast[IndexedSeq[String]](svalueToJavaValue(cb, r, alleles)),
           )
 
-        emitVariant(cb, r.region, variantTuple, rt)
+        emitVariant(cb, r, variantTuple, rt)
     }
 
     registerSCode2(
@@ -234,8 +235,8 @@ object LocusFunctions extends RegistryFunctions {
         ).sType,
     ) {
       case (
-            r: EmitRegion,
-            cb: EmitCodeBuilder,
+            r,
+            cb,
             SBaseStructPointer(rt: PCanonicalTuple),
             grouped: SIndexableValue,
             radiusVal: SFloat64Value,
@@ -276,7 +277,7 @@ object LocusFunctions extends RegistryFunctions {
         ): IEmitCode = {
 
           val (pushElement, finish) =
-            arrayType.constructFromFunctions(cb, r.region, totalLen, deepCopy = false)
+            arrayType.constructFromFunctions(cb, r, totalLen, deepCopy = false)
           val offset = cb.newLocal[Int]("locuswindows_offset", 0)
 
           val lastCoord = cb.newLocal[Double]("locuswindows_coord")
@@ -350,7 +351,7 @@ object LocusFunctions extends RegistryFunctions {
 
         rt.constructFromFields(
           cb,
-          r.region,
+          r,
           FastSeq[EmitCode](
             EmitCode.fromI(cb.emb)(cb =>
               addIdxWithCondition(cb) { case (cb, i, idx, coords) =>
@@ -389,12 +390,12 @@ object LocusFunctions extends RegistryFunctions {
         val slocus = str.loadString(cb)
         emitLocus(
           cb,
-          r.region,
+          r,
           Code.invokeScalaObject2[String, ReferenceGenome, Locus](
             locusClass,
             "parse",
             slocus,
-            rgCode(r.mb, rt.rg),
+            rgCode(cb.emb, rt.rg),
           ),
           rt,
         )
@@ -409,14 +410,14 @@ object LocusFunctions extends RegistryFunctions {
         PCanonicalLocus(returnType.asInstanceOf[TLocus].rg).sType,
     ) {
       case (r, cb, SCanonicalLocusPointer(rt: PCanonicalLocus), contig, pos, _) =>
-        cb += rgCode(r.mb, rt.rg).invoke[String, Int, Unit](
+        cb += rgCode(cb.emb, rt.rg).invoke[String, Int, Unit](
           "checkLocus",
           contig.asString.loadString(cb),
           pos.asInt.value,
         )
         rt.constructFromContigAndPosition(
           cb,
-          r.region,
+          r,
           contig.asString.loadString(cb),
           pos.asInt.value,
         )
@@ -443,9 +444,9 @@ object LocusFunctions extends RegistryFunctions {
             VariantMethods.getClass,
             "parse",
             svar,
-            rgCode(r.mb, plocus.rg),
+            rgCode(cb.emb, plocus.rg),
           )
-        emitVariant(cb, r.region, variant, rt)
+        emitVariant(cb, r, variant, rt)
     }
 
     registerIEmitCode2(
@@ -586,21 +587,24 @@ object LocusFunctions extends RegistryFunctions {
       case (r, cb, SCanonicalLocusPointer(rt: PCanonicalLocus), globalPos, _) =>
         val locus = cb.newLocal[Locus](
           "global_pos_locus",
-          rgCode(r.mb, rt.rg).invoke[Long, Locus]("globalPosToLocus", globalPos.asLong.value),
+          rgCode(cb.emb, rt.rg).invoke[Long, Locus]("globalPosToLocus", globalPos.asLong.value),
         )
         rt.constructFromContigAndPosition(
           cb,
-          r.region,
+          r,
           locus.invoke[String]("contig"),
           locus.invoke[Int]("position"),
         )
     }
 
     registerSCode1("locusToGlobalPos", tlocus("T"), TInt64, (_: Type, _: SType) => SInt64) {
-      case (r, cb, _, locus: SLocusValue, _) =>
+      case (_, cb, _, locus: SLocusValue, _) =>
         val locusObject = locus.getLocusObj(cb)
         val globalPos =
-          cb.memoize(rgCode(r.mb, locus.st.rg).invoke[Locus, Long]("locusToGlobalPos", locusObject))
+          cb.memoize(rgCode(cb.emb, locus.st.rg).invoke[Locus, Long](
+            "locusToGlobalPos",
+            locusObject,
+          ))
         primitive(globalPos)
     }
 

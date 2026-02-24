@@ -50,12 +50,6 @@ variable "use_artifact_registry" {
   description = "pull the ubuntu image from Artifact Registry. Otherwise, GCR"
 }
 
-variable deploy_ukbb {
-  type = bool
-  description = "Run the UKBB Genetic Correlation browser"
-  default = false
-}
-
 variable "enable_master_authorized_networks" {
   type = bool
   description = "Enable master authorized networks configuration for GKE cluster"
@@ -71,6 +65,12 @@ variable "master_authorized_networks" {
   default = []
 }
 
+variable "support_email" {
+  type        = string
+  description = "Support email address to display in error pages and user-facing messages"
+  default     = ""
+}
+
 locals {
   docker_prefix = (
     var.use_artifact_registry ?
@@ -78,6 +78,7 @@ locals {
     "gcr.io/${var.gcp_project}"
   )
   docker_root_image = "${local.docker_prefix}/ubuntu:24.04"
+  dockerhub_prefix  = "${var.gcp_location}-docker.pkg.dev/${var.gcp_project}/dockerhubproxy"
 }
 
 data "sops_file" "terraform_sa_key_sops" {
@@ -395,21 +396,31 @@ resource "google_compute_address" "internal_gateway" {
   region = var.gcp_region
 }
 
-# Cloud Router for GKE node outbound NAT
-resource "google_compute_router" "gke_node_outbound_router" {
-  name    = "gke-node-outbound-router"
-  region  = var.gcp_region
-  network = google_compute_network.default.id
+# Parse batch_gcp_regions to create Cloud NAT for all regions where batch instances can be created
+locals {
+  batch_regions = jsondecode(var.batch_gcp_regions)
 }
 
-# Cloud NAT Gateway for GKE private node outbound internet access
-resource "google_compute_router_nat" "gke_node_outbound_nat" {
-  name                               = "gke-node-outbound-nat"
-  router                            = google_compute_router.gke_node_outbound_router.name
-  region                            = var.gcp_region
+# Cloud Routers for outbound NAT in all batch regions
+resource "google_compute_router" "outbound_router" {
+  for_each = toset(local.batch_regions)
+  name     = "outbound-router-${each.key}"
+  region   = each.key
+  network  = google_compute_network.default.id
+}
+
+# Cloud NAT Gateways for outbound internet access in all batch regions
+resource "google_compute_router_nat" "outbound_nat" {
+  for_each = google_compute_router.outbound_router
+  name                               = "outbound-nat-${each.key}"
+  router                            = each.value.name
+  region                            = each.key
   nat_ip_allocate_option            = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-  
+  enable_dynamic_port_allocation     = true
+  min_ports_per_vm                  = 512
+  max_ports_per_vm                  = 16384
+
   log_config {
     enable = true
     filter = "ERRORS_ONLY"
@@ -429,7 +440,7 @@ resource "kubernetes_secret" "global_config" {
     name = "global-config"
   }
 
-  data = {
+  data = merge({
     cloud = "gcp"
     batch_gcp_regions = var.batch_gcp_regions
     batch_logs_bucket = module.batch_logs.name  # Deprecated
@@ -445,11 +456,14 @@ resource "kubernetes_secret" "global_config" {
     gcp_region = var.gcp_region
     gcp_zone = var.gcp_zone
     docker_prefix = local.docker_prefix
+    dockerhub_prefix = local.dockerhub_prefix
     internal_ip = google_compute_address.internal_gateway.address
     ip = google_compute_address.gateway.address
     kubernetes_server_url = "https://${google_container_cluster.vdc.endpoint}"
     organization_domain = var.organization_domain
-  }
+  }, var.support_email != "" ? {
+    support_email = var.support_email
+  } : {})
 }
 
 resource "google_sql_ssl_cert" "root_client_cert" {
@@ -511,6 +525,41 @@ resource "google_artifact_registry_repository" "repository" {
   location = var.gcp_location
 }
 
+resource "google_artifact_registry_repository" "dockerhub_remote" {
+  provider      = google-beta
+  format        = "DOCKER"
+  mode          = "REMOTE_REPOSITORY"
+  repository_id = "dockerhubproxy"
+  location      = var.gcp_location
+  cleanup_policy_dry_run = false
+
+  remote_repository_config {
+    description = "Docker Hub remote repository for Batch worker images"
+    common_repository {
+      uri = "https://registry-1.docker.io"
+    }
+  }
+
+  cleanup_policies {
+    id     = "Delete after 6h"
+    action = "DELETE"
+    condition {
+      older_than            = "21600s"
+      package_name_prefixes = []
+      tag_prefixes          = []
+      tag_state             = "ANY"
+      version_name_prefixes  = []
+    }
+  }
+
+  lifecycle {
+    # Ignore fields that are managed outside Terraform or have different representations
+    ignore_changes = [
+      remote_repository_config[0].upstream_credentials,
+    ]
+  }
+}
+
 resource "google_service_account" "gcr_push" {
   account_id = "gcr-push"
   display_name = "push to gcr.io"
@@ -528,6 +577,17 @@ resource "google_artifact_registry_repository_iam_member" "artifact_registry_bat
   role = "roles/artifactregistry.reader"
   member = "serviceAccount:${google_service_account.batch_agent.email}"
 }
+
+# Grant all service accounts in the project read access to dockerhubproxy
+resource "google_artifact_registry_repository_iam_member" "artifact_registry_all_service_accounts_dockerhub_viewer" {
+  provider  = google-beta
+  project   = var.gcp_project
+  repository = google_artifact_registry_repository.dockerhub_remote.name
+  location  = var.gcp_location
+  role      = "roles/artifactregistry.reader"
+  member    = "principalSet://cloudresourcemanager.googleapis.com/projects/${data.google_project.current.number}/type/ServiceAccount"
+}
+
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_ci_admin" {
   provider = google-beta

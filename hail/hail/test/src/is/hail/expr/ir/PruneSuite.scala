@@ -2,6 +2,8 @@ package is.hail.expr.ir
 
 import is.hail.HailSuite
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Nat
 import is.hail.expr.ir.PruneDeadFields.TypeState
 import is.hail.expr.ir.defs._
@@ -10,8 +12,6 @@ import is.hail.methods.{ForceCountMatrixTable, ForceCountTable}
 import is.hail.rvd.RVD
 import is.hail.types._
 import is.hail.types.virtual._
-import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 
@@ -202,25 +202,25 @@ class PruneSuite extends HailSuite {
     false,
     false,
     new MatrixReader {
-      def pathsUsed: IndexedSeq[String] = FastSeq()
+      override def pathsUsed: IndexedSeq[String] = FastSeq()
 
       override def columnCount: Option[Int] = None
 
-      def partitionCounts: Option[IndexedSeq[Long]] = None
+      override def partitionCounts: Option[IndexedSeq[Long]] = None
 
-      def rowUIDType = TTuple(TInt64, TInt64)
-      def colUIDType = TTuple(TInt64, TInt64)
+      override def rowUIDType = TTuple(TInt64, TInt64)
+      override def colUIDType = TTuple(TInt64, TInt64)
 
-      def fullMatrixTypeWithoutUIDs: MatrixType = mat.typ
+      override def fullMatrixTypeWithoutUIDs: MatrixType = mat.typ
 
-      def lower(
+      override def lower(
         ctx: ExecuteContext,
         requestedType: MatrixType,
         dropCols: Boolean,
         dropRows: Boolean,
       ): TableIR = ???
 
-      def toJValue: JValue = ???
+      override def toJValue: JValue = ???
 
       override def renderShort(): String = "mr"
     },

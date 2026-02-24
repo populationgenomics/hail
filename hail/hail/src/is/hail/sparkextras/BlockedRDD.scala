@@ -1,7 +1,9 @@
 package is.hail.sparkextras
 
-import is.hail.utils._
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 
+import scala.collection.compat._
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Dependency, NarrowDependency, Partition, TaskContext}
@@ -38,7 +40,7 @@ class BlockedRDD[T](
 
   override def getDependencies: Seq[Dependency[_]] =
     FastSeq(new NarrowDependency(prev) {
-      def getParents(id: Int): Seq[Int] =
+      override def getParents(id: Int): Seq[Int] =
         partitions(id).asInstanceOf[BlockedRDDPartition].range
     })
 
@@ -54,15 +56,12 @@ class BlockedRDD[T](
     val locationAvail = range.flatMap(i =>
       prev.preferredLocations(prevPartitions(i))
     )
-      .groupBy(identity)
-      .mapValues(_.length)
+      .counter()
 
     if (locationAvail.isEmpty)
       return FastSeq.empty[String]
 
     val m = locationAvail.values.max
-    locationAvail.filter(_._2 == m)
-      .keys
-      .toFastSeq
+    locationAvail.filter(_._2 == m).keys.toFastSeq
   }
 }

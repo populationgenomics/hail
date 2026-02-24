@@ -1,9 +1,9 @@
 package is.hail.expr.ir.functions
 
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs._
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 
 object SetFunctions extends RegistryFunctions {
   def contains(set: IR, elem: IR) = {
@@ -20,7 +20,7 @@ object SetFunctions extends RegistryFunctions {
     )
   }
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     registerIR1("toSet", TArray(tv("T")), TSet(tv("T")))((_, a, _) => ToSet(ToStream(a)))
 
     registerIR1("isEmpty", TSet(tv("T")), TBoolean) { (_, s, _) =>

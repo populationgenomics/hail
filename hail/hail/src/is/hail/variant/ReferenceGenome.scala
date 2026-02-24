@@ -2,6 +2,8 @@ package is.hail.variant
 
 import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.{toRichIndexedSeq, toRichIterable}
 import is.hail.expr.{
   JSONExtractContig, JSONExtractIntervalLocus, JSONExtractReferenceGenome, Parser,
 }
@@ -13,7 +15,6 @@ import is.hail.io.reference.{
 import is.hail.types._
 import is.hail.types.virtual.{TLocus, Type}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -108,7 +109,8 @@ case class ReferenceGenome(
   val locusOrdering = {
     val localContigsIndex = contigsIndex
     new Ordering[Locus] {
-      def compare(x: Locus, y: Locus): Int = ReferenceGenome.compare(localContigsIndex, x, y)
+      override def compare(x: Locus, y: Locus): Int =
+        ReferenceGenome.compare(localContigsIndex, x, y)
     }
   }
 
@@ -496,12 +498,12 @@ object ReferenceGenome {
   }
 
   def read(is: InputStream): ReferenceGenome = {
-    implicit val formats = defaultJSONFormats
+    implicit val formats = DefaultFormats
     JsonMethods.parse(is).extract[JSONExtractReferenceGenome].toReferenceGenome
   }
 
   def parse(str: String): ReferenceGenome = {
-    implicit val formats = defaultJSONFormats
+    implicit val formats = DefaultFormats
     JsonMethods.parse(str).extract[JSONExtractReferenceGenome].toReferenceGenome
   }
 

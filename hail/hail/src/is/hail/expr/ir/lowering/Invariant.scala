@@ -5,8 +5,8 @@ import is.hail.expr.ir.{
   BaseIR, BlockMatrixIR, Compilable, Emittable, IR, IRTraversal, MatrixIR, RelationalLetMatrixTable,
   RelationalLetTable, TableIR, TableKeyBy, TableKeyByAndAggregate, TableOrderBy,
 }
-import is.hail.expr.ir.defs.{ApplyIR, RelationalLet, RelationalRef}
-import is.hail.utils.toRichPredicate
+import is.hail.expr.ir.defs.{ApplyIR, LiftMeOut, RelationalLet, RelationalRef}
+import is.hail.utils.implicits.toRichPredicate
 
 abstract class Invariant(implicit E: sourcecode.Enclosing) extends (BaseIR => Boolean) {
   final def verify(ctx: ExecuteContext, ir: BaseIR): Unit =
@@ -45,6 +45,9 @@ object Invariant {
       case _: RelationalRef => false
       case _ => true
     }
+
+  lazy val NoLiftMeOuts: Invariant =
+    Invariant(!_.isInstanceOf[LiftMeOut])
 
   lazy val NoApplyIR: Invariant =
     Invariant(!_.isInstanceOf[ApplyIR])

@@ -1,10 +1,12 @@
 package is.hail.backend.driver
 
-import is.hail.{HAIL_PRETTY_VERSION, HailFeatureFlags}
+import is.hail.{HailFeatureFlags, PrettyVersion}
 import is.hail.annotations.Memory
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.{Backend, ExecuteContext, OwningTempFileManager}
 import is.hail.backend.service._
+import is.hail.collection.ImmutableMap
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs.{CloudStorageFSConfig, FS, RouterFS}
 import is.hail.io.reference.{IndexedFastaSequenceFile, LiftOver}
@@ -134,7 +136,7 @@ object BatchQueryDriver extends HttpLikeRpc with Logging {
     val inputURL = argv(5)
     val outputURL = argv(6)
 
-    logger.info(f"${getClass.getName} $HAIL_PRETTY_VERSION")
+    logger.info(f"${getClass.getName} $PrettyVersion")
 
     sys.env.get("HAIL_SSL_CONFIG_DIR").foreach(tls.setSSLConfigFromDir)
 
@@ -239,7 +241,7 @@ private class HailSocketAPIOutputStream(
 
   def writeString(s: String): Unit = writeBytes(s.getBytes(StandardCharsets.UTF_8))
 
-  def close(): Unit =
+  override def close(): Unit =
     if (!closed) {
       out.close()
       closed = true

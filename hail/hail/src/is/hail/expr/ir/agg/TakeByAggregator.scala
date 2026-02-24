@@ -2,7 +2,12 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{Code, _}
+import is.hail.asm4s.implicits.{
+  codeToRichCodeRegion, valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer,
+  valueToRichCodeRegion,
+}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{
   Ascending, EmitClassBuilder, EmitCode, EmitCodeBuilder, EmitValue, IEmitCode, ParamType, SortOrder,
 }
@@ -16,7 +21,6 @@ import is.hail.types.physical.stypes.concrete.{
 }
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual.{TInt32, Type}
-import is.hail.utils._
 
 object TakeByRVAS {
   val END_SERIALIZATION: Int = 0x1324
@@ -100,9 +104,10 @@ class TakeByRVAS(
     }
   }
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit = cb += region.getNewRegion(regionSize)
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+    cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit =
+  override def createState(cb: EmitCodeBuilder): Unit =
     cb.if_(
       region.isNull, {
         cb.assign(r, Region.stagedCreate(regionSize, kb.pool()))
@@ -193,7 +198,7 @@ class TakeByRVAS(
     })
   }
 
-  def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
+  override def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
     maybeGCCode(
       cb,
       { cb =>
@@ -205,7 +210,7 @@ class TakeByRVAS(
     )({ cb => cb.assign(maxGarbage, Region.loadInt(storageType.fieldOffset(src, 4))) })
   }
 
-  def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
+  override def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ob: Value[OutputBuffer]) =>
       maybeGCCode(
         cb,
@@ -218,7 +223,7 @@ class TakeByRVAS(
       )(cb => cb += ob.writeInt(maxGarbage), runBefore = true)
   }
 
-  def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
+  override def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ib: Value[InputBuffer]) =>
       maybeGCCode(
         cb,
@@ -676,7 +681,7 @@ class TakeByAggregator(valueType: VirtualTypeWithReq, keyType: VirtualTypeWithRe
   val initOpTypes: Seq[Type] = Array(TInt32)
   val seqOpTypes: Seq[Type] = Array(valueType.t, keyType.t)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     assert(init.length == 1)
     val Array(sizeTriplet) = init
     sizeTriplet.toI(cb)
@@ -687,12 +692,12 @@ class TakeByAggregator(valueType: VirtualTypeWithReq, keyType: VirtualTypeWithRe
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(value: EmitCode, key: EmitCode) = seq
     state.seqOp(cb, value, key)
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -700,7 +705,8 @@ class TakeByAggregator(valueType: VirtualTypeWithReq, keyType: VirtualTypeWithRe
     other: TakeByRVAS,
   ): Unit = state.combine(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     // state.result does a deep copy
     IEmitCode.present(
       cb,

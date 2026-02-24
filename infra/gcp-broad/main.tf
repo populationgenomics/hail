@@ -48,11 +48,6 @@ variable "use_artifact_registry" {
 }
 variable artifact_registry_location {}
 
-variable deploy_ukbb {
-  type = bool
-  description = "Run the UKBB Genetic Correlation browser"
-  default = false
-}
 variable default_subnet_ip_cidr_range {}
 
 locals {
@@ -62,6 +57,7 @@ locals {
     "gcr.io/${var.gcp_project}"
   )
   docker_root_image = "${local.docker_prefix}/ubuntu:24.04"
+  dockerhub_prefix  = "${var.artifact_registry_location}-docker.pkg.dev/${var.gcp_project}/dockerhubproxy"
 }
 
 provider "google" {
@@ -508,20 +504,30 @@ resource "google_compute_address" "internal_gateway" {
   region = var.gcp_region
 }
 
-# Cloud Router for GKE node outbound NAT
-resource "google_compute_router" "gke_node_outbound_router" {
-  name    = "gke-node-outbound-router"
-  region  = var.gcp_region
-  network = google_compute_network.default.id
+# Parse batch_gcp_regions to create Cloud NAT for all regions where batch instances can be created
+locals {
+  batch_regions = jsondecode(var.batch_gcp_regions)
 }
 
-# Cloud NAT Gateway for GKE private node outbound internet access
-resource "google_compute_router_nat" "gke_node_outbound_nat" {
-  name                               = "gke-node-outbound-nat"
-  router                            = google_compute_router.gke_node_outbound_router.name
-  region                            = var.gcp_region
+# Cloud Routers for outbound NAT in all batch regions
+resource "google_compute_router" "outbound_router" {
+  for_each = toset(local.batch_regions)
+  name     = "outbound-router-${each.key}"
+  region   = each.key
+  network  = google_compute_network.default.id
+}
+
+# Cloud NAT Gateways for outbound internet access in all batch regions
+resource "google_compute_router_nat" "outbound_nat" {
+  for_each = google_compute_router.outbound_router
+  name                               = "outbound-nat-${each.key}"
+  router                            = each.value.name
+  region                            = each.key
   nat_ip_allocate_option            = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+  enable_dynamic_port_allocation     = true
+  min_ports_per_vm                  = 512
+  max_ports_per_vm                  = 16384
 
   log_config {
     enable = true
@@ -551,6 +557,42 @@ resource "google_artifact_registry_repository" "repository" {
   }
 }
 
+resource "google_artifact_registry_repository" "dockerhub_remote" {
+  provider      = google-beta
+  format        = "DOCKER"
+  mode          = "REMOTE_REPOSITORY"
+  repository_id = "dockerhubproxy"
+  location      = var.artifact_registry_location
+  cleanup_policy_dry_run = false
+
+  remote_repository_config {
+    description = "Docker Hub remote repository for Batch worker images"
+    common_repository {
+      uri = "https://registry-1.docker.io"
+    }
+  }
+
+  cleanup_policies {
+    id     = "Delete after 6h"
+    action = "DELETE"
+    condition {
+      older_than            = "21600s"
+      package_name_prefixes = []
+      tag_prefixes          = []
+      tag_state             = "ANY"
+      version_name_prefixes  = []
+    }
+  }
+
+  lifecycle {
+    # Ignore fields that are managed outside Terraform or have different representations
+    ignore_changes = [
+      remote_repository_config[0].description,
+      remote_repository_config[0].upstream_credentials,
+    ]
+  }
+}
+
 resource "google_service_account" "gcr_push" {
   account_id = "gcr-push"
   display_name = "push to gcr.io"
@@ -564,6 +606,17 @@ resource "google_artifact_registry_repository_iam_member" "artifact_registry_bat
   role = "roles/artifactregistry.reader"
   member = "serviceAccount:${google_service_account.batch_agent.email}"
 }
+
+# Grant all service accounts in the project read access to dockerhubproxy
+resource "google_artifact_registry_repository_iam_member" "artifact_registry_all_service_accounts_dockerhub_viewer" {
+  provider  = google-beta
+  project   = var.gcp_project
+  repository = google_artifact_registry_repository.dockerhub_remote.name
+  location  = var.artifact_registry_location
+  role      = "roles/artifactregistry.reader"
+  member    = "principalSet://cloudresourcemanager.googleapis.com/projects/${data.google_project.current.number}/type/ServiceAccount"
+}
+
 
 resource "google_artifact_registry_repository_iam_member" "artifact_registry_ci_admin" {
   provider = google-beta
@@ -583,10 +636,6 @@ resource "google_artifact_registry_repository_iam_member" "artifact_registry_pus
   member = "serviceAccount:${google_service_account.gcr_push.email}"
 }
 
-module "ukbb" {
-  count = var.deploy_ukbb ? 1 : 0
-  source = "../k8s/ukbb"
-}
 
 resource "google_project_iam_custom_role" "auth_service_account_manager" {
   role_id     = "authServiceAccountManager"

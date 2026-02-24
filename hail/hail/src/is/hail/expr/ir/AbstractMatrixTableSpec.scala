@@ -1,5 +1,6 @@
 package is.hail.expr.ir
 
+import is.hail.collection.FastSeq
 import is.hail.io.fs.FS
 import is.hail.rvd._
 import is.hail.types.virtual.{MatrixType, MatrixTypeSerializer, TableType, TableTypeSerializer}
@@ -154,7 +155,7 @@ abstract class AbstractMatrixTableSpec extends RelationalSpec {
 
   def entriesSpec: AbstractTableSpec
 
-  def indexed: Boolean = rowsSpec.indexed
+  override def indexed: Boolean = rowsSpec.indexed
 }
 
 object MatrixTableSpec {
@@ -219,17 +220,17 @@ class MatrixTableSpec(
   val rowsSpec: AbstractTableSpec,
   val entriesSpec: AbstractTableSpec,
 ) extends AbstractMatrixTableSpec {
-  def references_rel_path: String = params.references_rel_path
+  override def references_rel_path: String = params.references_rel_path
 
-  def file_version: Int = params.file_version
+  override def file_version: Int = params.file_version
 
-  def hail_version: String = params.hail_version
+  override def hail_version: String = params.hail_version
 
-  def matrix_type: MatrixType = params.matrix_type
+  override def matrix_type: MatrixType = params.matrix_type
 
-  def components: Map[String, ComponentSpec] = params.components
+  override def components: Map[String, ComponentSpec] = params.components
 
-  def toJValue: JValue =
+  override def toJValue: JValue =
     decomposeWithName(params, "MatrixTableSpec")(RelationalSpec.formats)
 }
 

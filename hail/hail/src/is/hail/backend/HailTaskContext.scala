@@ -30,12 +30,6 @@ abstract class HailTaskContext extends AutoCloseable with Logging {
 
   def getRegionPool(): RegionPool = thePool
 
-  def partSuffix(): String = {
-    val rng = new java.security.SecureRandom()
-    val fileUUID = new java.util.UUID(rng.nextLong(), rng.nextLong())
-    s"${stageId()}-${partitionId()}-${attemptNumber()}-$fileUUID"
-  }
-
   val finalizers = mutable.ArrayBuffer.empty[TaskFinalizer]
 
   def newFinalizer(): TaskFinalizer = {
@@ -44,7 +38,7 @@ abstract class HailTaskContext extends AutoCloseable with Logging {
     f
   }
 
-  def close(): Unit = {
+  override def close(): Unit = {
     logger.info(
       s"TaskReport: stage=${stageId()}, partition=${partitionId()}, attempt=${attemptNumber()}, " +
         s"peakBytes=${thePool.getHighestTotalUsage}, peakBytesReadable=${formatSpace(thePool.getHighestTotalUsage)}, " +

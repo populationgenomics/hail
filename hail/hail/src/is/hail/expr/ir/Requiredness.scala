@@ -1,6 +1,9 @@
 package is.hail.expr.ir
 
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.GetElement
 import is.hail.methods.ForceCountTable
@@ -9,7 +12,6 @@ import is.hail.types.physical.PType
 import is.hail.types.physical.stypes.{EmitType, PTypeReferenceSingleCodeType, StreamSingleCodeType}
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.compat._
 import scala.collection.mutable
@@ -554,7 +556,7 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
         requiredness.union(node.children.forall { case c: IR => lookup(c).required })
 
       // always required
-      case _: I32 | _: I64 | _: F32 | _: F64 | _: Str | True() | False() | _: IsNA | _: Die | _: UUID4 | _: RNGStateLiteral | _: RNGSplit =>
+      case _: I32 | _: I64 | _: F32 | _: F64 | _: Str | True() | False() | _: IsNA | _: Die | _: UUID4 | _: RNGSplit | _: RNGSplitStatic | _: RNGStateLiteral =>
       case _: CombOpValue | _: AggStateValue =>
       case Trap(child) =>
         // error message field is missing if the child runs without error
@@ -805,9 +807,9 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
         lookup(old) match {
           case oldReq: RStruct =>
             requiredness.union(oldReq.required)
-            val fieldMap = fields.toMap.mapValues(lookup)
+            val fieldMap = fields.toMap
             tcoerce[RStruct](requiredness).fields.foreach { f =>
-              f.typ.unionFrom(fieldMap.getOrElse(f.name, oldReq.field(f.name)))
+              f.typ.unionFrom(fieldMap.get(f.name).map(lookup).getOrElse(oldReq.field(f.name)))
             }
           case _ => fields.foreach { case (n, f) =>
               tcoerce[RStruct](requiredness).field(n).unionFrom(lookup(f))

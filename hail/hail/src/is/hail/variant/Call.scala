@@ -1,7 +1,9 @@
 package is.hail.variant
 
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.Parser
 import is.hail.utils._
+import is.hail.utils.implicits.toRichBoolean
 
 import scala.annotation.switch
 import scala.jdk.CollectionConverters._
@@ -444,9 +446,9 @@ object Call extends Serializable {
     }
 
     new IndexedSeq[Int] with Serializable {
-      def length: Int = nAlleles
+      override def length: Int = nAlleles
 
-      def apply(idx: Int): Int = {
+      override def apply(idx: Int): Int = {
         if (idx < 0 || idx >= nAlleles)
           throw new ArrayIndexOutOfBoundsException(idx)
 

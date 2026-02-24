@@ -2,11 +2,12 @@ package is.hail.io.vcf
 
 import is.hail.annotations.{Region, RegionValueBuilder}
 import is.hail.backend.HailStateManager
+import is.hail.collection.MissingArrayBuilder
 import is.hail.expr.ir.{CloseableIterator, GenericLine}
 import is.hail.io.fs.FS
 import is.hail.io.tabix.{TabixLineIterator, TabixReader}
 import is.hail.types.physical.PStruct
-import is.hail.utils.{fatal, makeJavaSet, MissingArrayBuilder, TextInputFilterAndReplace}
+import is.hail.utils.{fatal, makeJavaSet, TextInputFilterAndReplace}
 import is.hail.variant.ReferenceGenome
 
 class TabixReadVCFIterator(
@@ -48,9 +49,9 @@ class TabixReadVCFIterator(
       private[this] var l = lines.next()
       private[this] var curIdx: Long = lines.getCurIdx()
       private[this] val inner = new Iterator[GenericLine] {
-        def hasNext: Boolean = l != null
+        override def hasNext: Boolean = l != null
 
-        def next(): GenericLine = {
+        override def next(): GenericLine = {
           assert(l != null)
           try {
             val n = l
@@ -85,11 +86,11 @@ class TabixReadVCFIterator(
         start <= pos && pos <= end
       }
 
-      def hasNext: Boolean = inner.hasNext
+      override def hasNext: Boolean = inner.hasNext
 
-      def next(): GenericLine = inner.next()
+      override def next(): GenericLine = inner.next()
 
-      def close(): Unit = lines.close()
+      override def close(): Unit = lines.close()
     }
   }
 

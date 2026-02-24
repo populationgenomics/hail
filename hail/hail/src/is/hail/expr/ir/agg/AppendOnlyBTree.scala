@@ -2,10 +2,13 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical._
-import is.hail.utils._
 
 trait BTreeKey {
   def storageType: PType
@@ -18,7 +21,7 @@ trait BTreeKey {
 
   def copy(cb: EmitCodeBuilder, src: Code[Long], dest: Code[Long]): Unit
 
-  def deepCopy(cb: EmitCodeBuilder, er: EmitRegion, src: Code[Long], dest: Code[Long]): Unit
+  def deepCopy(cb: EmitCodeBuilder, r: Value[Region], src: Code[Long], dest: Code[Long]): Unit
 
   def compKeys(cb: EmitCodeBuilder, k1: EmitValue, k2: EmitValue): Value[Int]
 
@@ -430,7 +433,6 @@ class AppendOnlyBTree(
         val destNode = f.getCodeParam[Long](1)
         val srcNode = f.getCodeParam[Long](2)
 
-        val er = EmitRegion(cb.emb, region)
         val newNode = cb.newLocal[Long]("new_node")
 
         def copyChild(i: Int): Unit = {
@@ -448,7 +450,7 @@ class AppendOnlyBTree(
         (0 until maxElements).foreach { i =>
           cb.if_(
             hasKey(cb, srcNode, i), {
-              key.deepCopy(cb, er, destNode, srcNode)
+              key.deepCopy(cb, region, destNode, srcNode)
               cb.if_(
                 !isLeaf(cb, srcNode), {
                   copyChild(i)

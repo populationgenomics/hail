@@ -2,15 +2,14 @@ package is.hail.types.encoded
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer}
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.io.{InputBuffer, OutputBuffer}
-import is.hail.types.physical._
 import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.concrete.{SCanonicalCall, SCanonicalCallValue}
 import is.hail.types.physical.stypes.interfaces.{SCall, SCallValue}
 import is.hail.types.physical.stypes.primitives.{SInt32, SInt32Value}
 import is.hail.types.virtual._
-import is.hail.utils._
 
 case object EInt32Optional extends EInt32(false)
 
@@ -38,26 +37,19 @@ class EInt32(override val required: Boolean) extends EType {
     }
   }
 
-  def _buildFundamentalDecoder(
-    cb: EmitCodeBuilder,
-    pt: PType,
-    region: Value[Region],
-    in: Value[InputBuffer],
-  ): Code[Int] = in.readInt()
-
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit =
     cb += in.skipInt()
 
-  def _decodedSType(requestedType: Type): SType = requestedType match {
+  override def _decodedSType(requestedType: Type): SType = requestedType match {
     case TCall => SCanonicalCall
     case _ => SInt32
   }
 
-  def _asIdent = "int32"
+  override def _asIdent = "int32"
 
-  def _toPretty = "EInt32"
+  override def _toPretty = "EInt32"
 
-  def setRequired(newRequired: Boolean): EInt32 = EInt32(newRequired)
+  override def setRequired(newRequired: Boolean): EInt32 = EInt32(newRequired)
 }
 
 object EInt32 {

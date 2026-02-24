@@ -2,9 +2,11 @@ package is.hail.expr.ir
 
 import is.hail.annotations.{Region, RegionPool, RegionValueBuilder}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{codeToRichCodeRegion, valueToRichCodeRegion}
 import is.hail.backend.{BackendUtils, ExecuteContext, HailTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs.EncodedLiteral
-import is.hail.expr.ir.functions.IRRandomness
 import is.hail.expr.ir.orderings.{CodeOrdering, StructOrdering}
 import is.hail.io.{BufferSpec, InputBuffer, TypedCodecSpec}
 import is.hail.io.fs.FS
@@ -14,9 +16,7 @@ import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.interfaces.SBaseStruct
 import is.hail.types.virtual.Type
 import is.hail.utils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
-import is.hail.utils.prettyPrint.ArrayOfByteArrayInputStream
+import is.hail.utils.implicits.toRichBoolean
 import is.hail.variant.ReferenceGenome
 
 import scala.collection.mutable
@@ -135,7 +135,7 @@ trait WrappedEmitModuleBuilder {
 trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
   def ecb: EmitClassBuilder[C]
 
-  def emodb: EmitModuleBuilder = ecb.emodb
+  override def emodb: EmitModuleBuilder = ecb.emodb
 
   def cb: ClassBuilder[C] = ecb.cb
 
@@ -248,9 +248,7 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
   def addAggStates(aggSigs: IndexedSeq[agg.AggStateSig]): agg.TupleAggregatorState =
     ecb.addAggStates(aggSigs)
 
-  def newRNG(seed: Long): Value[IRRandomness] = ecb.newRNG(seed)
-
-  def getThreefryRNG(): Value[ThreefryRandomEngine] = ecb.getThreefryRNG()
+  def threefryRandomEngine: Value[ThreefryRandomEngine] = ecb.threefryRandomEngine
 
   def resultWithIndex(print: Option[PrintWriter] = None)
     : (HailClassLoader, FS, HailTaskContext, Region) => C =
@@ -780,10 +778,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     )
   }
 
-  private val rngs = ArraySeq.newBuilder[(Settable[IRRandomness], Code[IRRandomness])]
-
-  var threefryRNG: Option[(Settable[ThreefryRandomEngine], Code[ThreefryRandomEngine])] = None
-
   def makeAddPartitionRegion(): Unit = {
     cb.addInterface(typeInfo[FunctionWithPartitionRegion].iname)
     val mb =
@@ -852,59 +846,20 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     }
   }
 
-  def makeRNGs(): Unit = {
-    cb.addInterface(typeInfo[FunctionWithSeededRandomness].iname)
-
-    val initialized = genFieldThisRef[Boolean]("initialized")
-    val mb =
-      newEmitMethod("setPartitionIndex", IndexedSeq[ParamType](typeInfo[Int]), typeInfo[Unit])
-    val rngFields = rngs.result()
-
-    mb.voidWithBuilder { cb =>
-      cb.if_(
-        !initialized, {
-          rngFields.foreach { case (field, init) =>
-            cb.assign(field, init)
-          }
-
-          threefryRNG.foreach { case (field, init) =>
-            cb.assign(field, init)
-          }
-
-          cb.assign(initialized, true)
-        },
+  lazy val threefryRandomEngine: Value[ThreefryRandomEngine] = {
+    val rngField = genFieldThisRef[ThreefryRandomEngine]("threefry")
+    cb.ctor.emitInit {
+      rngField := Code.invokeScalaObject0[ThreefryRandomEngine](
+        ThreefryRandomEngine.getClass,
+        "apply",
       )
-
-      rngFields.foreach { case (field, _) =>
-        cb += field.invoke[Int, Unit]("reset", mb.getCodeParam[Int](1))
-      }
     }
-  }
-
-  def newRNG(seed: Long): Value[IRRandomness] = {
-    val rng = genFieldThisRef[IRRandomness]()
-    rngs += rng -> Code.newInstance[IRRandomness, Long](seed)
-    rng
-  }
-
-  def getThreefryRNG(): Value[ThreefryRandomEngine] = {
-    threefryRNG match {
-      case Some((rngField, _)) => rngField
-      case None =>
-        val rngField = genFieldThisRef[ThreefryRandomEngine]()
-        val rngInit = Code.invokeScalaObject0[ThreefryRandomEngine](
-          ThreefryRandomEngine.getClass,
-          "apply",
-        )
-        threefryRNG = Some(rngField -> rngInit)
-        rngField
-    }
+    rngField
   }
 
   def resultWithIndex(print: Option[PrintWriter] = None)
     : (HailClassLoader, FS, HailTaskContext, Region) => C =
     ctx.time {
-      makeRNGs()
       makeAddPartitionRegion()
       makeAddHailClassLoader()
       makeAddFS()
@@ -944,7 +899,8 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
       new ((HailClassLoader, FS, HailTaskContext, Region) => C) with java.io.Serializable {
         @transient @volatile private var theClass: Class[_] = null
 
-        def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region): C = {
+        override def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region)
+          : C = {
           if (theClass == null) {
             this.synchronized {
               if (theClass == null) {
@@ -953,7 +909,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
               }
             }
           }
-          val idx = htc.partitionId()
 
           val f = theClass.getDeclaredConstructor().newInstance().asInstanceOf[C]
           f.asInstanceOf[FunctionWithHailClassLoader].addHailClassLoader(hcl)
@@ -971,7 +926,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
             f.asInstanceOf[FunctionWithReferences].addReferenceGenomes(references)
           if (nSerializedAggs != 0)
             f.asInstanceOf[FunctionWithAggRegion].setNumSerialized(nSerializedAggs)
-          f.asInstanceOf[FunctionWithSeededRandomness].setPartitionIndex(idx)
           f
         }
       }
@@ -1261,10 +1215,6 @@ trait FunctionWithLiterals {
   def addAndDecodeLiterals(lit: Array[AnyRef]): Unit
 }
 
-trait FunctionWithSeededRandomness {
-  def setPartitionIndex(idx: Int): Unit
-}
-
 trait FunctionWithBackend {
   def setBackend(spark: BackendUtils): Unit
 }
@@ -1438,7 +1388,7 @@ class EmitMethodBuilder[C](
 trait WrappedEmitMethodBuilder[C] extends WrappedEmitClassBuilder[C] {
   def emb: EmitMethodBuilder[C]
 
-  def ecb: EmitClassBuilder[C] = emb.ecb
+  override def ecb: EmitClassBuilder[C] = emb.ecb
 
   // wrapped MethodBuilder methods
   def mb: MethodBuilder[C] = emb.mb

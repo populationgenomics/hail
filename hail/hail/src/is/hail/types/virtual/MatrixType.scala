@@ -1,6 +1,8 @@
 package is.hail.types.virtual
 
 import is.hail.annotations.Annotation
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{Env, IRParser, LowerMatrixIR, MatrixIR, Name}
 import is.hail.types.physical.{PArray, PStruct}
 import is.hail.utils._
@@ -154,7 +156,7 @@ case class MatrixType(
     "g" -> entryType,
   )
 
-  def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
+  override def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
 
     val space: String = if (compact) "" else " "
     val newline: String = if (compact) "" else "\n"

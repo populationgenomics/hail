@@ -3,9 +3,9 @@ package is.hail.types.physical
 import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.HailStateManager
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.physical.stypes.interfaces.SBaseStructValue
-import is.hail.utils._
 
 object PBaseStruct {
   def alignment(types: Array[PType]): Long =
@@ -53,7 +53,7 @@ abstract class PBaseStruct extends PType {
 
   def identBase: String
 
-  def _asIdent: String = {
+  override def _asIdent: String = {
     val sb = new StringBuilder
     sb ++= identBase
     sb ++= "_of_"
@@ -79,7 +79,7 @@ abstract class PBaseStruct extends PType {
       types.zip(right.types).map { case (l, r) => l.unsafeOrdering(sm, r) }
 
     new UnsafeOrdering {
-      def compare(o1: Long, o2: Long): Int = {
+      override def compare(o1: Long, o2: Long): Int = {
         var i = 0
         while (i < types.length) {
           val leftDefined = isFieldDefined(o1, i)

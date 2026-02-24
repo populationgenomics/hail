@@ -1,10 +1,11 @@
 package is.hail.io.tabix
 
-import is.hail.expr.ir.IntArrayBuilder
+import is.hail.collection.IntArrayBuilder
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.io.compress.BGzipLineReader
 import is.hail.io.fs.FS
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
+import is.hail.utils.implicits.toRichInputStream
 
 import scala.collection.mutable
 
@@ -26,8 +27,7 @@ class Tabix(
 )
 
 case class TbiPair(var _1: Long, var _2: Long) extends java.lang.Comparable[TbiPair] {
-  @Override
-  def compareTo(other: TbiPair): Int = TbiOrd.compare(this, other)
+  override def compareTo(other: TbiPair): Int = TbiOrd.compare(this, other)
 }
 
 object TbiPair {
@@ -35,7 +35,7 @@ object TbiPair {
 }
 
 object TbiOrd extends Ordering[TbiPair] {
-  def compare(u: TbiPair, v: TbiPair): Int = if (u._1 == v._1) {
+  override def compare(u: TbiPair, v: TbiPair): Int = if (u._1 == v._1) {
     0
   } else if (less64(u._1, v._1)) {
     -1

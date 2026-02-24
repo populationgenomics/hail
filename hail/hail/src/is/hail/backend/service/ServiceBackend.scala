@@ -1,10 +1,12 @@
 package is.hail.backend.service
 
-import is.hail.HAIL_REVISION
+import is.hail.Revision
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
 import is.hail.backend.local.LocalTaskContext
 import is.hail.backend.service.ServiceBackend.MaxAvailableGcsConnections
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Validate
 import is.hail.expr.ir.{
   CompileAndEvaluate, IR, IRSize, LoweringAnalyses, SortField, TableIR, TableReader, TypeCheck,
@@ -17,7 +19,6 @@ import is.hail.services.oauth2.{CloudCredentials, HailCredentials}
 import is.hail.types._
 import is.hail.types.physical._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.compat._
 import scala.concurrent.{Await, CancellationException, ExecutionContext, Future}
@@ -83,7 +84,7 @@ object ServiceBackend {
     new ServiceBackend(
       name,
       client,
-      GitRevision(HAIL_REVISION),
+      GitRevision(Revision),
       BatchConfig(batchId, 0),
       workerConfig,
     )
@@ -113,11 +114,11 @@ class ServiceBackend(
       Executors.newFixedThreadPool(MaxAvailableGcsConnections)
     }
 
-  def defaultParallelism: Int = 4
+  override def defaultParallelism: Int = 4
 
-  def broadcast[T: ClassTag](_value: T): BroadcastValue[T] =
+  override def broadcast[T: ClassTag](_value: T): BroadcastValue[T] =
     new BroadcastValue[T] with Serializable {
-      def value: T = _value
+      override def value: T = _value
     }
 
   override def runtimeContext(ctx: ExecuteContext): DriverRuntimeContext =
@@ -410,7 +411,7 @@ class ServiceBackend(
   ): TableReader =
     LowerDistributedSort.distributedSort(ctx, inputStage, sortFields, rt, nPartitions)
 
-  def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
+  override def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
     : TableStage =
     LowerTableIR.applyTable(inputIR, DArrayLowering.All, ctx, analyses)
 }

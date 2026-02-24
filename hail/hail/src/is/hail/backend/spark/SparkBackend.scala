@@ -4,6 +4,7 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Validate
 import is.hail.expr.ir._
 import is.hail.expr.ir.analyses.SemanticHash
@@ -14,7 +15,6 @@ import is.hail.rvd.RVD
 import is.hail.types._
 import is.hail.types.physical.{PStruct, PTuple}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 import scala.concurrent.{CancellationException, ExecutionException}
@@ -32,7 +32,7 @@ import org.apache.spark.sql.SparkSession
 import sourcecode.Enclosing
 
 class SparkBroadcastValue[T](bc: Broadcast[T]) extends BroadcastValue[T] with Serializable {
-  def value: T = bc.value
+  override def value: T = bc.value
 }
 
 object SparkTaskContext {
@@ -109,7 +109,7 @@ object SparkBackend extends Logging {
     : SparkConf = {
     require(blockSize >= 0)
 
-    checkSparkCompatibility(is.hail.HAIL_SPARK_VERSION, org.apache.spark.SPARK_VERSION)
+    checkSparkCompatibility(is.hail.SparkVersion, org.apache.spark.SPARK_VERSION)
 
     val conf = new SparkConf().setAppName(appName)
 
@@ -231,7 +231,7 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
   val sc: SparkContext =
     spark.sparkContext
 
-  def broadcast[T: ClassTag](value: T): BroadcastValue[T] =
+  override def broadcast[T: ClassTag](value: T): BroadcastValue[T] =
     new SparkBroadcastValue[T](sc.broadcast(value))
 
   override def runtimeContext(ctx: ExecuteContext): DriverRuntimeContext =
@@ -316,12 +316,12 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
       }
     }
 
-  def defaultParallelism: Int =
+  override def defaultParallelism: Int =
     sc.defaultParallelism
 
   override def asSpark(implicit E: Enclosing): SparkBackend = this
 
-  def close(): Unit =
+  override def close(): Unit =
     SparkBackend.synchronized {
       assert(this eq SparkBackend.theSparkBackend)
       SparkBackend.theSparkBackend = null
@@ -424,7 +424,7 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
     RVDTableReader(RVD.unkeyed(rowPType, orderedCRDD), globalsLit, rt)
   }
 
-  def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
+  override def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
     : TableStage =
     CanLowerEfficiently(ctx, inputIR) match {
       case Some(failReason) =>

@@ -2,6 +2,7 @@ package is.hail.types.physical
 
 import is.hail.annotations.{Annotation, Region, UnsafeOrdering}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.valueToRichCodeRegion
 import is.hail.backend.HailStateManager
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.physical.stypes.{SType, SValue}
@@ -117,7 +118,7 @@ case class StoredSTypePType(sType: SType, required: Boolean) extends PType {
 
   override def deepRename(t: Type): PType = StoredSTypePType(sType.castRename(t), required)
 
-  def byteSize: Long = ct.byteSize
+  override def byteSize: Long = ct.byteSize
 
   override def alignment: Long = ct.alignment
 
@@ -137,12 +138,13 @@ case class StoredSTypePType(sType: SType, required: Boolean) extends PType {
 
   override def unsafeOrdering(sm: HailStateManager): UnsafeOrdering = unsupportedCanonicalMethod
 
-  def unstagedLoadFromNested(addr: Long): Long = unsupportedCanonicalMethod
+  override def unstagedLoadFromNested(addr: Long): Long = unsupportedCanonicalMethod
 
-  def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region): Long =
+  override def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region)
+    : Long =
     unsupportedCanonicalMethod
 
-  def unstagedStoreJavaObjectAtAddress(
+  override def unstagedStoreJavaObjectAtAddress(
     sm: HailStateManager,
     addr: Long,
     annotation: Annotation,

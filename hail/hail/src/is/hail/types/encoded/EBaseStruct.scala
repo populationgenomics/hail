@@ -2,6 +2,8 @@ package is.hail.types.encoded
 
 import is.hail.annotations.{Region, UnsafeUtils}
 import is.hail.asm4s.{Field => _, _}
+import is.hail.asm4s.implicits._
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.BaseStruct
@@ -11,6 +13,7 @@ import is.hail.types.physical.stypes.concrete._
 import is.hail.types.physical.stypes.interfaces.{SBaseStructValue, SLocus, SLocusValue}
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.implicits.{toRichBoolean, toTruncatable}
 
 final case class EField(name: String, typ: EType, index: Int) {
   def pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
@@ -55,7 +58,7 @@ final case class EBaseStruct(fields: IndexedSeq[EField], override val required: 
     )
   }
 
-  def _decodedSType(requestedType: Type): SType = requestedType match {
+  override def _decodedSType(requestedType: Type): SType = requestedType match {
     case t: TInterval =>
       val structPType = decodedPType(t.structRepresentation).asInstanceOf[PStruct]
       val pointType = structPType.field("start").typ
@@ -198,7 +201,7 @@ final case class EBaseStruct(fields: IndexedSeq[EField], override val required: 
     }
   }
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
     val mbytes = cb.newLocal[Long]("mbytes", r.allocate(const(1L), const(nMissingBytes.toLong)))
     cb += in.readBytes(r, mbytes, nMissingBytes)
     fields.foreach { f =>
@@ -210,7 +213,7 @@ final case class EBaseStruct(fields: IndexedSeq[EField], override val required: 
     }
   }
 
-  def _asIdent: String = {
+  override def _asIdent: String = {
     val sb = new StringBuilder
     sb ++= "struct_of_"
     types.foreachBetween(sb ++= _.asIdent)(sb ++= "AND")
@@ -218,7 +221,7 @@ final case class EBaseStruct(fields: IndexedSeq[EField], override val required: 
     sb.result()
   }
 
-  def _toPretty: String = {
+  override def _toPretty: String = {
     val sb = new StringBuilder
     _pretty(sb, 0, compact = true)
     sb.result()
@@ -237,5 +240,5 @@ final case class EBaseStruct(fields: IndexedSeq[EField], override val required: 
       sb += '\n' ++= " " * indent += '}': Unit
     }
 
-  def setRequired(newRequired: Boolean): EBaseStruct = EBaseStruct(fields, newRequired)
+  override def setRequired(newRequired: Boolean): EBaseStruct = EBaseStruct(fields, newRequired)
 }

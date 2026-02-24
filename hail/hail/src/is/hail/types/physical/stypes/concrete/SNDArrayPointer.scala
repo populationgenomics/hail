@@ -2,12 +2,13 @@ package is.hail.types.physical.stypes.concrete
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.physical.{PCanonicalNDArray, PType}
 import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual.Type
-import is.hail.utils.{toRichIterable, FastSeq}
 
 import scala.collection.compat._
 
@@ -153,10 +154,10 @@ final class SNDArrayPointerSettable(
   override val firstDataAddress: Settable[Long],
 ) extends SNDArrayPointerValue(st, a, shape.map(SizeValueDyn.apply), strides, firstDataAddress)
     with SNDArraySettable {
-  def settableTuple(): IndexedSeq[Settable[_]] =
+  override def settableTuple(): IndexedSeq[Settable[_]] =
     FastSeq(a) ++ shape ++ strides ++ FastSeq(firstDataAddress)
 
-  def store(cb: EmitCodeBuilder, v: SValue): Unit = v match {
+  override def store(cb: EmitCodeBuilder, v: SValue): Unit = v match {
     case v: SNDArrayPointerValue =>
       cb.assign(a, v.a)
       shape.lazyZip(v.shapes).foreach(cb.assign(_, _))

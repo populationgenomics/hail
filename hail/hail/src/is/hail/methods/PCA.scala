@@ -2,6 +2,8 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.{toRichIterable, toRichIterator}
 import is.hail.expr.ir.{MatrixValue, TableValue}
 import is.hail.expr.ir.functions.MatrixToTableFunction
 import is.hail.rvd.{RVD, RVDType}
@@ -27,9 +29,9 @@ case class PCA(entryField: String, k: Int, computeLoadings: Boolean)
       ),
     )
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
     if (k < 1)
       fatal(s"""requested invalid number of components: $k
                |  Expect componenents >= 1""".stripMargin)

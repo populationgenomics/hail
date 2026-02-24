@@ -2,13 +2,13 @@ package is.hail.types.physical.stypes.concrete
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{EmitCodeBuilder, EmitValue}
 import is.hail.types.physical.{PCanonicalNDArray, PType}
 import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.physical.stypes.primitives.SInt64
 import is.hail.types.virtual.{TNDArray, Type}
-import is.hail.utils.toRichIterable
 
 import scala.collection.compat._
 
@@ -86,7 +86,8 @@ class SNDArraySliceValue(
   override def loadElement(indices: IndexedSeq[Value[Long]], cb: EmitCodeBuilder): SValue =
     pt.elementType.loadCheapSCode(cb, loadElementAddress(indices, cb))
 
-  def coerceToShape(cb: EmitCodeBuilder, otherShape: IndexedSeq[SizeValue]): SNDArrayValue = {
+  override def coerceToShape(cb: EmitCodeBuilder, otherShape: IndexedSeq[SizeValue])
+    : SNDArrayValue = {
     cb.if_(!hasShape(cb, otherShape), cb._fatal("incompatible shapes"))
     new SNDArraySliceValue(st, otherShape, strides, firstDataAddress)
   }

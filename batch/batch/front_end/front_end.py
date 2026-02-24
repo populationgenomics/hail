@@ -19,6 +19,7 @@ import aiohttp
 import aiohttp.web_exceptions
 import aiohttp_session
 import humanize
+import jinja2
 import pandas as pd
 import plotly
 import plotly.express as px
@@ -82,7 +83,7 @@ from web_common import (
 )
 
 from ..batch import batch_record_to_dict, cancel_job_group_in_db, job_group_record_to_dict, job_record_to_dict
-from ..batch_configuration import BATCH_STORAGE_URI, CLOUD, DEFAULT_NAMESPACE, SCOPE
+from ..batch_configuration import BATCH_STORAGE_URI, CLOUD, DEFAULT_NAMESPACE, DOCKERHUB_PREFIX, SCOPE
 from ..batch_format_version import BatchFormatVersion
 from ..cloud.azure.resource_utils import azure_cores_mcpu_to_memory_bytes
 from ..cloud.gcp.resource_utils import GCP_MACHINE_FAMILY, gcp_cores_mcpu_to_memory_bytes
@@ -117,6 +118,7 @@ from ..utils import (
     query_billing_projects_with_cost,
     query_billing_projects_without_cost,
     regions_to_bits_rep,
+    rewrite_dockerhub_image,
     unavailable_if_frozen,
 )
 from .query import (
@@ -144,6 +146,8 @@ routes = web.RouteTableDef()
 deploy_config = get_deploy_config()
 
 auth = get_authenticator()
+
+FRONT_END_ROOT = os.path.dirname(__file__)
 
 BATCH_JOB_DEFAULT_CPU = os.environ.get('HAIL_BATCH_JOB_DEFAULT_CPU', '1')
 BATCH_JOB_DEFAULT_MEMORY = os.environ.get('HAIL_BATCH_JOB_DEFAULT_MEMORY', 'standard')
@@ -1405,6 +1409,18 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
 
         if machine_type and pool_label:
             raise web.HTTPBadRequest(reason='cannot specify pool label with machine_type')
+
+        # Rewrite Docker Hub images if feature flag is enabled
+        if (
+            spec['process']['type'] == 'docker'
+            and DOCKERHUB_PREFIX
+            and app['feature_flags'].get('dockerhub_proxy', False)
+        ):
+            original_image = spec['process']['image']
+            rewritten_image = rewrite_dockerhub_image(original_image, DOCKERHUB_PREFIX)
+            if rewritten_image is not None:
+                spec['process']['image'] = rewritten_image
+                log.info(f'Rewrote Docker Hub image {original_image} to {rewritten_image} for job {batch_id}/{job_id}')
 
         if spec['process']['type'] == 'jvm':
             jvm_requested_cpu = parse_cpu_in_mcpu(resources.get('cpu', BATCH_JOB_DEFAULT_CPU))
@@ -3707,6 +3723,22 @@ async def privacy(request):
     return await render_template('batch', request, None, 'privacy.html', {})
 
 
+@routes.get('/batch/static/js/{filename}')
+@web_security_headers
+async def fetch_js_file(request):
+    filename = request.match_info['filename']
+    if filename.endswith('.js'):
+        page_context = {'base_path': deploy_config.base_path('batch')}
+        try:
+            response = await render_template('batch', request, None, f'js/{filename}', page_context)
+            response.content_type = 'application/javascript'
+            return response
+        except jinja2.exceptions.TemplateNotFound as error:
+            raise web.HTTPNotFound() from error
+    else:
+        raise web.HTTPNotFound()
+
+
 async def cancel_batch_loop_body(app):
     client_session = app[CommonAiohttpAppKeys.CLIENT_SESSION]
     await retry_transient_errors(
@@ -3791,6 +3823,9 @@ SELECT instance_id, n_tokens, frozen FROM globals;
 
     app['frozen'] = row['frozen']
 
+    row = await db.select_and_fetchone('SELECT * FROM feature_flags')
+    app['feature_flags'] = row
+
     regions: Dict[str, int] = {
         record['region']: record['region_id']
         async for record in db.select_and_fetchall('SELECT region_id, region from regions')
@@ -3856,7 +3891,7 @@ def run():
     )
     setup_aiohttp_session(app)
 
-    setup_aiohttp_jinja2(app, 'batch.front_end')
+    setup_aiohttp_jinja2(app, 'batch.front_end', jinja2.FileSystemLoader(f'{FRONT_END_ROOT}/static/'))
     setup_common_static_routes(routes)
     app.add_routes(routes)
     app.router.add_get("/metrics", server_stats)

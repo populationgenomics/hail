@@ -2,10 +2,10 @@ package is.hail
 
 import is.hail.backend.ExecutionCache
 import is.hail.backend.spark.SparkBackend
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{agg, Optimize}
 import is.hail.io.fs.RequesterPaysConfig
 import is.hail.types.encoded.EType
-import is.hail.utils._
 
 import scala.collection.mutable
 
@@ -73,13 +73,13 @@ class HailFeatureFlags private (
   }
 
   def +(feature: (String, String)): HailFeatureFlags =
-    new HailFeatureFlags(flags + (feature._1 -> feature._2))
+    new HailFeatureFlags(flags.clone() += feature._1 -> feature._2)
 
   def define(feature: String): HailFeatureFlags =
-    new HailFeatureFlags(flags + (feature -> "1"))
+    new HailFeatureFlags(flags.clone() += feature -> "1")
 
   def -(feature: String): HailFeatureFlags =
-    new HailFeatureFlags(flags - feature)
+    new HailFeatureFlags(flags.clone() -= feature)
 
   def get(flag: String): String = flags(flag)
 

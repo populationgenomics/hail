@@ -2,7 +2,11 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{Code, _}
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, EmitMethodBuilder, IEmitCode}
 import is.hail.io.{BufferSpec, InputBuffer, OutputBuffer}
 import is.hail.types.VirtualTypeWithReq
@@ -10,7 +14,6 @@ import is.hail.types.physical._
 import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.concrete.{SIndexablePointer, SIndexablePointerValue}
 import is.hail.types.virtual.{TInt32, Type}
-import is.hail.utils._
 
 class ReservoirSampleRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuilder[_])
     extends AggregatorState {
@@ -33,10 +36,10 @@ class ReservoirSampleRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuil
   private val garbageOffset: Code[Long] => Code[Long] = storageType.loadField(_, 2)
   private val builderStateOffset: Code[Long] => Code[Long] = storageType.loadField(_, 3)
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
     cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit = {
+  override def createState(cb: EmitCodeBuilder): Unit = {
     cb.assign(rand, Code.newInstance[java.util.Random]())
     cb.if_(region.isNull, cb.assign(r, Region.stagedCreate(regionSize, kb.pool())))
   }
@@ -70,14 +73,14 @@ class ReservoirSampleRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuil
     )
   }
 
-  def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
+  override def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ob: Value[OutputBuffer]) =>
       cb += ob.writeInt(maxSize)
       cb += ob.writeLong(seenSoFar)
       builder.serialize(codec)(cb, ob)
   }
 
-  def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
+  override def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ib: Value[InputBuffer]) =>
       cb.assign(maxSize, ib.readInt())
       cb.assign(seenSoFar, ib.readLong())
@@ -245,7 +248,7 @@ class ReservoirSampleRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuil
       builder.loadElement(cb, idx).toI(cb)
     }
 
-  def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
+  override def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
     cb.assign(maxSize, Region.loadInt(maxSizeOffset(src)))
     cb.assign(seenSoFar, Region.loadLong(elementsSeenOffset(src)))
     cb.assign(garbage, Region.loadLong(garbageOffset(src)))
@@ -262,8 +265,11 @@ class ReservoirSampleAggregator(typ: VirtualTypeWithReq) extends StagedAggregato
   val initOpTypes: Seq[Type] = Array(TInt32)
   val seqOpTypes: Seq[Type] = Array(typ.t)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: ReservoirSampleRVAS, init: Array[EmitCode])
-    : Unit = {
+  override protected def _initOp(
+    cb: EmitCodeBuilder,
+    state: ReservoirSampleRVAS,
+    init: Array[EmitCode],
+  ): Unit = {
     assert(init.length == 1)
     val Array(sizeTriplet) = init
     sizeTriplet.toI(cb)
@@ -274,13 +280,16 @@ class ReservoirSampleAggregator(typ: VirtualTypeWithReq) extends StagedAggregato
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: ReservoirSampleRVAS, seq: Array[EmitCode])
-    : Unit = {
+  override protected def _seqOp(
+    cb: EmitCodeBuilder,
+    state: ReservoirSampleRVAS,
+    seq: Array[EmitCode],
+  ): Unit = {
     val Array(elt: EmitCode) = seq
     state.seqOp(cb, elt)
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -288,7 +297,8 @@ class ReservoirSampleAggregator(typ: VirtualTypeWithReq) extends StagedAggregato
     other: ReservoirSampleRVAS,
   ): Unit = state.combine(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     // deepCopy is handled by state.resultArray
     IEmitCode.present(cb, state.resultArray(cb, region, resultPType))
 }

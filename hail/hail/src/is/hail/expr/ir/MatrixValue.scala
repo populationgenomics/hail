@@ -2,13 +2,17 @@ package is.hail.expr.ir
 
 import is.hail.annotations._
 import is.hail.backend.{ExecuteContext, HailStateManager}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
+import is.hail.expr.ir.TableNativeWriter.writeFileReadMe
 import is.hail.io.{BufferSpec, FileWriteMetadata}
 import is.hail.linalg.RowMatrix
 import is.hail.rvd.{AbstractRVDSpec, RVD}
+import is.hail.sparkextras.implicits.toRichRDD
 import is.hail.types.physical.{PArray, PCanonicalStruct, PStruct, PType}
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant._
 
 import scala.collection.compat._
@@ -107,7 +111,7 @@ case class MatrixValue(
 
     val colsSpec = TableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "../references",
       typ.colsTableType.copy(key = FastSeq[String]()),
       Map(
@@ -144,7 +148,7 @@ case class MatrixValue(
 
     val globalsSpec = TableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "../references",
       TableType(typ.globalType, FastSeq(), TStruct.empty),
       Map(
@@ -175,7 +179,7 @@ case class MatrixValue(
 
     val rowsSpec = TableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "../references",
       typ.rowsTableType,
       Map(
@@ -190,7 +194,7 @@ case class MatrixValue(
 
     val entriesSpec = TableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "../references",
       TableType(entriesRVType, FastSeq(), typ.globalType),
       Map(
@@ -218,7 +222,7 @@ case class MatrixValue(
 
     val spec = MatrixTableSpecParameters(
       FileFormat.version.rep,
-      is.hail.HAIL_PRETTY_VERSION,
+      is.hail.PrettyVersion,
       "references",
       typ,
       Map(
@@ -231,7 +235,7 @@ case class MatrixValue(
     )
     spec.write(fs, path)
 
-    writeNativeFileReadMe(fs, path)
+    writeFileReadMe(fs, path)
 
     using(fs.create(path + "/_SUCCESS"))(_ => ())
 

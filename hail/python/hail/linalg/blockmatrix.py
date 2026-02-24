@@ -66,7 +66,7 @@ from hail.typecheck import (
     typecheck,
     typecheck_method,
 )
-from hail.utils import local_path_uri, new_local_temp_file, new_temp_file, storage_level, with_local_temp_file
+from hail.utils import local_path_uri, new_local_temp_file, new_temp_file, with_local_temp_file
 from hail.utils.java import Env
 
 block_matrix_type = lazy()
@@ -1328,7 +1328,6 @@ class BlockMatrix:
         """
         return self.persist('MEMORY_ONLY')
 
-    @typecheck_method(storage_level=storage_level)
     def persist(self, storage_level='MEMORY_AND_DISK'):
         """Persists this block matrix in memory or on disk.
 
@@ -1340,11 +1339,6 @@ class BlockMatrix:
         pipelines. This method is not a substitution for
         :meth:`.BlockMatrix.write`, which stores a permanent file.
 
-        Most users should use the "MEMORY_AND_DISK" storage level. See the `Spark
-        documentation
-        <http://spark.apache.org/docs/latest/programming-guide.html#rdd-persistence>`__
-        for a more in-depth discussion of persisting data.
-
         Parameters
         ----------
         storage_level : str
@@ -1353,12 +1347,15 @@ class BlockMatrix:
             MEMORY_ONLY_SER_2, MEMORY_AND_DISK, MEMORY_AND_DISK_2,
             MEMORY_AND_DISK_SER, MEMORY_AND_DISK_SER_2, OFF_HEAP
 
+            This parameter no longer does anything and has been retained for
+            compatibility.
+
         Returns
         -------
         :class:`.BlockMatrix`
             Persisted block matrix.
         """
-        return Env.backend().persist_blockmatrix(self)
+        return Env.backend().persist(self)
 
     def unpersist(self):
         """Unpersists this block matrix from memory/disk.
@@ -1373,7 +1370,7 @@ class BlockMatrix:
         :class:`.BlockMatrix`
             Unpersisted block matrix.
         """
-        return Env.backend().unpersist_blockmatrix(self)
+        return Env.backend().unpersist(self)
 
     def __pos__(self):
         return self
@@ -2618,7 +2615,7 @@ def _jarray_from_ndarray(nd):
     with with_local_temp_file() as path:
         uri = local_path_uri(path)
         nd.tofile(path)
-        return Env.hail().utils.richUtils.RichArray.importFromDoubles(
+        return Env.hail().io.ArrayImpex.importFromDoubles(
             Env.spark_backend('_jarray_from_ndarray').fs._jfs, uri, nd.size
         )
 
@@ -2626,14 +2623,14 @@ def _jarray_from_ndarray(nd):
 def _ndarray_from_jarray(ja):
     with with_local_temp_file() as path:
         uri = local_path_uri(path)
-        Env.hail().utils.richUtils.RichArray.exportToDoubles(Env.spark_backend('_ndarray_from_jarray').fs._jfs, uri, ja)
+        Env.hail().io.ArrayImpex.exportToDoubles(Env.spark_backend('_ndarray_from_jarray').fs._jfs, uri, ja)
         return np.fromfile(path)
 
 
 def _breeze_fromfile(uri, n_rows, n_cols):
     _check_entries_size(n_rows, n_cols)
 
-    return Env.hail().utils.richUtils.RichDenseMatrixDouble.importFromDoubles(
+    return Env.hail().linalg.implicits.RichDenseMatrixDouble.importFromDoubles(
         Env.spark_backend('_breeze_fromfile').fs._jfs, uri, n_rows, n_cols, True
     )
 

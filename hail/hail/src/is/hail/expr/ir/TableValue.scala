@@ -4,6 +4,9 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.backend.spark.{SparkBackend, SparkTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.TableAnnotationImpex
 import is.hail.expr.ir.agg.IndependentExtractedAggs
 import is.hail.expr.ir.compile.{Compile, CompileWithAggregators}
@@ -12,6 +15,7 @@ import is.hail.expr.ir.lowering.{RVDToTableStage, TableStage, TableStageToRVD}
 import is.hail.io.{exportTypes, BufferSpec, ByteArrayDecoder, ByteArrayEncoder, TypedCodecSpec}
 import is.hail.rvd.{RVD, RVDContext, RVDPartitioner, RVDType}
 import is.hail.sparkextras.ContextRDD
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.{
   PArray, PCanonicalArray, PCanonicalStruct, PInt32Required, PStruct, PType,
 }
@@ -22,7 +26,6 @@ import is.hail.types.physical.stypes.interfaces.NoBoxLongIterator
 import is.hail.types.tcoerce
 import is.hail.types.virtual.{Field, MatrixType, TArray, TInt32, TStream, TStruct, TableType}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.reflect.ClassTag
 
@@ -49,23 +52,23 @@ sealed trait TableExecuteIntermediate {
 }
 
 case class TableValueIntermediate(tv: TableValue) extends TableExecuteIntermediate {
-  def asTableStage(ctx: ExecuteContext): TableStage =
+  override def asTableStage(ctx: ExecuteContext): TableStage =
     RVDToTableStage(tv.rvd, tv.globals.toEncodedLiteral(ctx.theHailClassLoader))
 
-  def asTableValue(ctx: ExecuteContext): TableValue = tv
+  override def asTableValue(ctx: ExecuteContext): TableValue = tv
 
-  def partitioner: RVDPartitioner = tv.rvd.partitioner
+  override def partitioner: RVDPartitioner = tv.rvd.partitioner
 }
 
 case class TableStageIntermediate(ts: TableStage) extends TableExecuteIntermediate {
-  def asTableStage(ctx: ExecuteContext): TableStage = ts
+  override def asTableStage(ctx: ExecuteContext): TableStage = ts
 
-  def asTableValue(ctx: ExecuteContext): TableValue = {
+  override def asTableValue(ctx: ExecuteContext): TableValue = {
     val (globals, rvd) = TableStageToRVD(ctx, ts)
     TableValue(ctx, TableType(ts.rowType, ts.key, ts.globalType), globals, rvd)
   }
 
-  def partitioner: RVDPartitioner = ts.partitioner
+  override def partitioner: RVDPartitioner = ts.partitioner
 }
 
 object TableValue extends Logging {
@@ -529,7 +532,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
           val rowKey: WritableRegionValue = WritableRegionValue(sm, keyType, ctx.freshRegion())
           val consumerRegion: Region = ctx.region
 
-          def hasNext: Boolean = {
+          override def hasNext: Boolean = {
             if (isEnd || (current == 0 && !it.hasNext)) {
               isEnd = true
               return false
@@ -539,7 +542,7 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
             true
           }
 
-          def next(): Long = {
+          override def next(): Long = {
             if (!hasNext)
               throw new java.util.NoSuchElementException()
 
@@ -641,9 +644,9 @@ case class TableValue(ctx: ExecuteContext, typ: TableType, globals: BroadcastRow
           new Iterator[Long] {
             private[this] var i = 0
 
-            def hasNext: Boolean = i < len
+            override def hasNext: Boolean = i < len
 
-            def next(): Long = {
+            override def next(): Long = {
               val ret = rowF(ctx.region, ptr, i)
               i += 1
               ret

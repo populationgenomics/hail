@@ -1,8 +1,8 @@
 package is.hail.linalg
 
-import is.hail.utils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
+import is.hail.collection.compat._
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichOrderedSeq
 
 import scala.collection.Searching._
 import scala.collection.compat._
@@ -126,7 +126,7 @@ object MatrixSparsity {
       }
     }
 
-    def newToOldPosNonSubset(newSparsity: Sparse): IndexedSeq[Integer] = {
+    override def newToOldPosNonSubset(newSparsity: Sparse): IndexedSeq[Integer] = {
       if (newSparsity.isEmpty) return ArraySeq.empty
       var cur =
         definedCoords.search(newSparsity.definedCoords.head)(Ordering.by(_.swap)).insertionPoint

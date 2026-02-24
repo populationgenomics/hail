@@ -1,6 +1,7 @@
 package is.hail.annotations
 
-import is.hail.expr.ir.LongArrayBuilder
+import is.hail.collection.LongArrayBuilder
+import is.hail.io.fs.readableBytes
 import is.hail.utils._
 
 import scala.collection.mutable
@@ -173,7 +174,7 @@ final class RegionPool private (strictMemoryCheck: Boolean, threadName: String, 
 
   private[this] var closed: Boolean = false
 
-  def close(): Unit = {
+  override def close(): Unit = {
     if (closed)
       return
     closed = true

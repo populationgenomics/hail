@@ -2,7 +2,10 @@ package is.hail.types.virtual
 
 import is.hail.annotations.{Annotation, ExtendedOrdering}
 import is.hail.backend.HailStateManager
-import is.hail.utils._
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.{toRichMap, toRichOption}
+
+import scala.collection.compat._
 
 import org.json4s.jackson.JsonMethods
 
@@ -25,7 +28,7 @@ final case class TDict(keyType: Type, valueType: Type) extends TContainer {
 
   override def subst() = TDict(keyType.subst(), valueType.subst())
 
-  def _toPretty = s"Dict[$keyType, $valueType]"
+  override def _toPretty = s"Dict[$keyType, $valueType]"
 
   override def pyString(sb: StringBuilder): Unit = {
     sb ++= "dict<"
@@ -43,7 +46,7 @@ final case class TDict(keyType: Type, valueType: Type) extends TContainer {
     sb += ']'
   }
 
-  def _typeCheck(a: Any): Boolean = a == null || (a.isInstanceOf[Map[_, _]] &&
+  override def _typeCheck(a: Any): Boolean = a == null || (a.isInstanceOf[Map[_, _]] &&
     a.asInstanceOf[Map[_, _]].forall { case (k, v) =>
       keyType.typeCheck(k) && valueType.typeCheck(v)
     })
@@ -75,7 +78,7 @@ final case class TDict(keyType: Type, valueType: Type) extends TContainer {
       return identity
 
     val subsetValue = valueType.valueSubsetter(subdict.valueType)
-    (a: Any) => a.asInstanceOf[Map[Any, Any]].mapValues(subsetValue)
+    (a: Any) => a.asInstanceOf[Map[Any, Any]].view.mapValues(subsetValue)
   }
 
   override def arrayElementsRepr: TArray = TArray(elementType)

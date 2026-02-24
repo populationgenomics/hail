@@ -63,6 +63,8 @@ trait IR extends BaseIR {
 
 package defs {
 
+  import is.hail.collection.FastSeq
+
   trait TypedIR[T <: Type] extends IR {
     override def typ: T = tcoerce[T](super.typ)
   }
@@ -401,11 +403,11 @@ package defs {
   }
 
   abstract class SimplePartitionWriter extends PartitionWriter {
-    def ctxType: Type = TString
+    override def ctxType: Type = TString
 
-    def returnType: Type = TString
+    override def returnType: Type = TString
 
-    def unionTypeRequiredness(
+    override def unionTypeRequiredness(
       r: TypeWithRequiredness,
       ctxType: TypeWithRequiredness,
       streamType: RIterable,
@@ -425,7 +427,7 @@ package defs {
 
     def postConsume(cb: EmitCodeBuilder, os: Value[OutputStream]): Unit = ()
 
-    final def consumeStream(
+    final override def consumeStream(
       ctx: ExecuteContext,
       cb: EmitCodeBuilder,
       stream: StreamProducer,
@@ -463,8 +465,11 @@ package defs {
   }
 
   final case class SimpleMetadataWriter(val annotationType: Type) extends MetadataWriter {
-    def writeMetadata(writeAnnotations: => IEmitCode, cb: EmitCodeBuilder, region: Value[Region])
-      : Unit =
+    override def writeMetadata(
+      writeAnnotations: => IEmitCode,
+      cb: EmitCodeBuilder,
+      region: Value[Region],
+    ): Unit =
       writeAnnotations.consume(cb, {}, _ => ())
   }
 
@@ -521,6 +526,8 @@ package defs {
   }
 
   package exts {
+
+    import is.hail.collection.implicits.toRichIterable
 
     abstract class UUID4CompanionExt {
       def apply(): UUID4 = UUID4(genUID())

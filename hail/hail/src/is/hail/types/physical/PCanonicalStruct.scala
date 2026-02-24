@@ -1,10 +1,12 @@
 package is.hail.types.physical
 
 import is.hail.asm4s.{Code, Value}
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.{toRichIterable, toRichIterator}
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.virtual.{TStruct, Type}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
+import is.hail.utils.implicits.toTruncatable
 
 import scala.collection.compat._
 import scala.collection.mutable
@@ -112,7 +114,7 @@ final case class PCanonicalStruct(fields: IndexedSeq[PField], required: Boolean 
       ab += fields(i)
       i += 1
     }
-    val it = fieldsToInsert.toIterator
+    val it = fieldsToInsert.iterator
     while (it.hasNext) {
       val (name, typ) = it.next()
       if (fieldIdx.contains(name)) {

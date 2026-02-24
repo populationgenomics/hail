@@ -1,5 +1,6 @@
 package is.hail.annotations
 
+import is.hail.collection.implicits.toRichIterable
 import is.hail.utils._
 
 import org.apache.spark.sql.Row
@@ -9,7 +10,8 @@ object ExtendedOrdering {
     new ExtendedOrdering {
       val missingEqual = _missingEqual
 
-      def compareNonnull(x: T, y: T): Int = ord.compare(x.asInstanceOf[S], y.asInstanceOf[S])
+      override def compareNonnull(x: T, y: T): Int =
+        ord.compare(x.asInstanceOf[S], y.asInstanceOf[S])
 
       override def ltNonnull(x: T, y: T): Boolean = ord.lt(x.asInstanceOf[S], y.asInstanceOf[S])
 
@@ -24,7 +26,7 @@ object ExtendedOrdering {
     new ExtendedOrdering {
       val missingEqual = _missingEqual
 
-      def compareNonnull(x: T, y: T): Int = {
+      override def compareNonnull(x: T, y: T): Int = {
         val xit = x.asInstanceOf[Iterable[T]].iterator
         val yit = y.asInstanceOf[Iterable[T]].iterator
 
@@ -93,7 +95,7 @@ object ExtendedOrdering {
       // ord can be null if the element type is a TVariable
       val elemOrd = if (ord != null) ord.toOrdering else null
 
-      def compareNonnull(x: T, y: T): Int =
+      override def compareNonnull(x: T, y: T): Int =
         itOrd.compareNonnull(
           x.asInstanceOf[Array[T]].sorted(elemOrd).toFastSeq,
           y.asInstanceOf[Array[T]].sorted(elemOrd).toFastSeq,
@@ -124,7 +126,7 @@ object ExtendedOrdering {
 
       val missingEqual = _missingEqual
 
-      def compareNonnull(x: T, y: T): Int =
+      override def compareNonnull(x: T, y: T): Int =
         saOrd.compareNonnull(
           x.asInstanceOf[Iterable[T]].toArray,
           y.asInstanceOf[Iterable[T]].toArray,
@@ -158,7 +160,7 @@ object ExtendedOrdering {
       private def toArrayOfT(x: T): Array[T] =
         x.asInstanceOf[Map[_, _]].iterator.map { case (k, v) => Row(k, v): T }.toArray
 
-      def compareNonnull(x: T, y: T): Int =
+      override def compareNonnull(x: T, y: T): Int =
         saOrd.compareNonnull(
           toArrayOfT(x),
           toArrayOfT(y),
@@ -384,7 +386,7 @@ abstract class ExtendedOrdering extends Serializable {
 
     override def reverse: ExtendedOrdering = outer
 
-    def compareNonnull(x: T, y: T): Int = outer.compareNonnull(y, x)
+    override def compareNonnull(x: T, y: T): Int = outer.compareNonnull(y, x)
 
     override def ltNonnull(x: T, y: T): Boolean = outer.ltNonnull(y, x)
 
@@ -394,7 +396,7 @@ abstract class ExtendedOrdering extends Serializable {
   }
 
   def toOrdering: Ordering[T] = new Ordering[T] {
-    def compare(x: T, y: T): Int = outer.compare(x, y)
+    override def compare(x: T, y: T): Int = outer.compare(x, y)
 
     override def lt(x: T, y: T): Boolean = outer.lt(x, y)
 

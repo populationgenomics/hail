@@ -4,6 +4,9 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.backend.spark.SparkTaskContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.{toRichIterable, toRichIterator}
 import is.hail.expr.ir.analyses.PartitionCounts
 import is.hail.expr.ir.compile.{Compile, CompileWithAggregators}
 import is.hail.expr.ir.defs._
@@ -16,8 +19,8 @@ import is.hail.types.physical.stypes.{PTypeReferenceSingleCodeType, SingleCodeTy
 import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
+import scala.collection.compat._
 import scala.collection.mutable
 
 import org.apache.spark.sql.Row
@@ -426,7 +429,9 @@ object Interpret extends Logging {
       case GroupByKey(collection) =>
         interpret(collection, env, args).asInstanceOf[IndexedSeq[Row]]
           .groupBy { case Row(k, _) => k }
+          .view
           .mapValues { elt: IndexedSeq[Row] => elt.map { case Row(_, v) => v } }
+          .toMap
       case StreamTake(a, len) =>
         val aValue = interpret(a, env, args)
         val lenValue = interpret(len, env, args)
@@ -780,11 +785,13 @@ object Interpret extends Logging {
         if (struct != null)
           fieldOrder match {
             case Some(fds) =>
-              val newValues = fields.toMap.mapValues(interpret(_, env, args))
+              val m = fields.toMap
               val oldIndices =
                 old.typ.asInstanceOf[TStruct].fields.map(f => f.name -> f.index).toMap
               Row.fromSeq(fds.map(name =>
-                newValues.getOrElse(name, struct.asInstanceOf[Row].get(oldIndices(name)))
+                m.get(name).map(interpret(_, env, args)).getOrElse(
+                  struct.asInstanceOf[Row].get(oldIndices(name))
+                )
               ))
             case None =>
               var t = old.typ.asInstanceOf[TStruct]
@@ -1091,18 +1098,6 @@ object Interpret extends Logging {
         }
 
         wrapped.get(0)
-      case LiftMeOut(child) =>
-        val (Some(PTypeReferenceSingleCodeType(rt)), makeFunction) =
-          Compile[AsmFunction1RegionLong](
-            ctx,
-            FastSeq(),
-            FastSeq(classInfo[Region]),
-            LongInfo,
-            MakeTuple.ordered(FastSeq(child)),
-          )
-        ctx.scopedExecution { (hcl, fs, htc, r) =>
-          SafeRow.read(rt, makeFunction(hcl, fs, htc, r)(r)).asInstanceOf[Row](0)
-        }
       case UUID4(_) =>
         uuid4()
     }
