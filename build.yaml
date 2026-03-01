@@ -44,9 +44,58 @@ steps:
     - gcp
   - name: test-azure-key
     clouds:
-    - gcp
-  - name: zulip-config
-  - name: billing-monitor-gsa-key
+      - gcp
+  - kind: runImage
+    name: test_hailtop_python_fs
+    numSplits: 5
+    image:
+      valueFrom: hailgenetics_hailtop_image.image
+    resources:
+      memory: standard
+      cpu: '2'
+    script: |
+      set -ex
+      cd /io
+      tar xzf test.tar.gz
+
+      python3 -m pip install -r test-requirements.txt
+
+      export HAIL_TEST_GCS_BUCKET={{ global.hail_test_gcs_bucket }}
+      export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
+
+      export HAIL_TEST_S3_BUCKET=hail-test-dy5rg
+      export AWS_SHARED_CREDENTIALS_FILE=/test-aws-key/credentials
+
+      python3 -m pytest \
+              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              --timeout=120 \
+              test/hailtop/inter_cloud
+    timeout: 1200
+    inputs:
+      - from: /repo/hail/python/dev/pinned-requirements.txt
+        to: /io/test-requirements.txt
+      - from: /test.tar.gz
+        to: /io/test.tar.gz
+    secrets:
+      - name: test-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-gsa-key
+      - name: test-aws-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-aws-key
+    dependsOn:
+      - default_ns
+      - hailgenetics_hailtop_image
+      - create_test_gsa_keys
+      - build_hail_test_artifacts
     clouds:
     - gcp
   - name: hail-ci-0-1-service-account-key
@@ -1117,71 +1166,6 @@ steps:
   - hail_run_image
   - create_test_gsa_keys
   - build_hail_debug_jar_and_wheel
-  - build_hail_test_artifacts
-  clouds:
-  - gcp
-- kind: runImage
-  name: test_hailtop_python_fs
-  numSplits: 5
-  image:
-    valueFrom: hailgenetics_hailtop_image.image
-  resources:
-    memory: standard
-    cpu: '2'
-  script: |
-    set -ex
-    cd /io
-    tar xzf test.tar.gz
-
-    python3 -m pip install -r test-requirements.txt
-
-    export HAIL_TEST_GCS_BUCKET={{ global.hail_test_gcs_bucket }}
-    export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-    export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-
-    export HAIL_TEST_S3_BUCKET=hail-test-dy5rg
-    export AWS_SHARED_CREDENTIALS_FILE=/test-aws-key/credentials
-
-    export HAIL_TEST_AZURE_ACCOUNT=hailtest
-    export HAIL_TEST_AZURE_CONTAINER=hail-test-4nxei
-    # Required for SAS testing on Azure
-    export HAIL_TEST_AZURE_RESGRP=hail-dev
-    export HAIL_TEST_AZURE_SUBID=22cd45fe-f996-4c51-af67-ef329d977519
-    export AZURE_APPLICATION_CREDENTIALS=/test-azure-key/credentials.json
-
-    python3 -m pytest \
-            -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
-            --log-cli-level=INFO \
-            -s \
-            -r A \
-            -vv \
-            --instafail \
-            --durations=50 \
-            --timeout=120 \
-            test/hailtop/inter_cloud
-  timeout: 1200
-  inputs:
-  - from: /repo/hail/python/dev/pinned-requirements.txt
-    to: /io/test-requirements.txt
-  - from: /test.tar.gz
-    to: /io/test.tar.gz
-  secrets:
-  - name: test-gsa-key
-    namespace:
-      valueFrom: default_ns.name
-    mountPath: /test-gsa-key
-  - name: test-aws-key
-    namespace:
-      valueFrom: default_ns.name
-    mountPath: /test-aws-key
-  - name: test-azure-key
-    namespace:
-      valueFrom: default_ns.name
-    mountPath: /test-azure-key
-  dependsOn:
-  - default_ns
-  - hailgenetics_hailtop_image
-  - create_test_gsa_keys
   - build_hail_test_artifacts
   clouds:
   - gcp
