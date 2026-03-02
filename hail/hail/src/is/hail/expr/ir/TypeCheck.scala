@@ -1,6 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.backend.ExecuteContext
+import is.hail.collection.implicits.{toRichIterable, toRichOrderedSeq}
 import is.hail.expr.Nat
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.streams.StreamUtils
@@ -323,6 +324,8 @@ object TypeCheck {
           case t => t == TInt64
         }
         assert(isValid(dynBitstring.typ))
+      case RNGSplitStatic(state, _) =>
+        assert(state.typ == TRNGState)
       case StreamLen(a) =>
         assert(a.typ.isInstanceOf[TStream])
       case x @ StreamTake(a, num) =>

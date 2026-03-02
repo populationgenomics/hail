@@ -17,9 +17,9 @@ object FoldConstants {
       {
         case _: Ref |
             _: In |
+            _: LiftMeOut |
             _: RelationalRef |
             _: RelationalLet |
-            _: ApplySeeded |
             _: UUID4 |
             _: ApplyAggOp |
             _: ApplyScanOp |
@@ -37,6 +37,7 @@ object FoldConstants {
             _: NDArrayMatMul |
             _: Trap |
             _: Die |
+            _: RNGSplitStatic |
             _: RNGStateLiteral => None
         case ir: IR if ir.typ.isInstanceOf[TStream] || ir.typ == TVoid => None
         case ir: IR

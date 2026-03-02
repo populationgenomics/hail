@@ -2,6 +2,10 @@ package is.hail.types.encoded
 
 import is.hail.annotations.{Region, UnsafeUtils}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{EmitCodeBuilder, IEmitCode}
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types._
@@ -10,7 +14,6 @@ import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.concrete._
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual.{Field => TField, _}
-import is.hail.utils._
 
 object EStructOfArrays {
   // expand this as more types are supported
@@ -72,14 +75,18 @@ final case class EStructOfArrays(
       )
   }
 
-  def _decodedSType(requestedType: Type): SType = {
+  override def _decodedSType(requestedType: Type): SType = {
     require(requestedType.isInstanceOf[TArray])
     val elementPType = elementType.decodedPType(requestedType.asInstanceOf[TContainer].elementType)
     SIndexablePointer(PCanonicalArray(elementPType, required = false))
   }
 
-  def _buildDecoder(cb: EmitCodeBuilder, t: Type, region: Value[Region], in: Value[InputBuffer])
-    : SValue = {
+  override def _buildDecoder(
+    cb: EmitCodeBuilder,
+    t: Type,
+    region: Value[Region],
+    in: Value[InputBuffer],
+  ): SValue = {
     val st = tcoerce[SIndexablePointer](decodedSType(t))
     val pt = tcoerce[PCanonicalArray](st.pType)
     val ept = tcoerce[PBaseStruct](pt.elementType)
@@ -157,26 +164,27 @@ final case class EStructOfArrays(
     )
   }
 
-  def _buildEncoder(cb: EmitCodeBuilder, v: SValue, out: Value[OutputBuffer]): Unit = v match {
-    case sv: SIndexablePointerValue =>
-      val pArray = sv.st.pType.asInstanceOf[PCanonicalArrayBackedContainer].arrayRep
-      val r: Value[Region] = // scratch region
-        cb.memoize(cb.emb.ecb.pool().invoke[Region]("getRegion"))
-      cb += out.writeInt(sv.length)
-      if (!elementType.required) {
-        val nMissingBytes = cb.memoize(pArray.nMissingBytes(sv.length))
-        cb += out.writeBytes(sv.a + pArray.missingBytesOffset, nMissingBytes)
-      }
+  override def _buildEncoder(cb: EmitCodeBuilder, v: SValue, out: Value[OutputBuffer]): Unit =
+    v match {
+      case sv: SIndexablePointerValue =>
+        val pArray = sv.st.pType.asInstanceOf[PCanonicalArrayBackedContainer].arrayRep
+        val r: Value[Region] = // scratch region
+          cb.memoize(cb.emb.ecb.pool().invoke[Region]("getRegion"))
+        cb += out.writeInt(sv.length)
+        if (!elementType.required) {
+          val nMissingBytes = cb.memoize(pArray.nMissingBytes(sv.length))
+          cb += out.writeBytes(sv.a + pArray.missingBytesOffset, nMissingBytes)
+        }
 
-      fields.foreach { field =>
-        val pFieldType = tcoerce[PBaseStruct](pArray.elementType).fieldByName(field.name).typ
-        require(EStructOfArrays.supportsFieldType(pFieldType.virtualType))
-        val arrayType = PCanonicalArray(pFieldType, required = false)
-        transposeAndWriteField(cb, field, arrayType, sv, r, out)
-      }
+        fields.foreach { field =>
+          val pFieldType = tcoerce[PBaseStruct](pArray.elementType).fieldByName(field.name).typ
+          require(EStructOfArrays.supportsFieldType(pFieldType.virtualType))
+          val arrayType = PCanonicalArray(pFieldType, required = false)
+          transposeAndWriteField(cb, field, arrayType, sv, r, out)
+        }
 
-      cb += r.invalidate()
-  }
+        cb += r.invalidate()
+    }
 
   private[this] def transposeAndWriteField(
     cb: EmitCodeBuilder,
@@ -217,7 +225,7 @@ final case class EStructOfArrays(
     arrayEncoder(cb, arrayValue, out)
   }
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
     val length = cb.memoize(in.readInt())
     val nMissingBytes =
       cb.memoize(UnsafeUtils.packBitsToBytes(length)) // valid for all top level arrays
@@ -227,12 +235,12 @@ final case class EStructOfArrays(
     fields.foreach(field => field.typ.buildSkip(cb.emb.ecb)(cb, r, in))
   }
 
-  def setRequired(newRequired: Boolean): EStructOfArrays =
+  override def setRequired(newRequired: Boolean): EStructOfArrays =
     EStructOfArrays(fields, required = newRequired, structRequired = structRequired)
 
-  def _asIdent: String = s"struct_of_arrays_from_${elementType.asIdent}"
+  override def _asIdent: String = s"struct_of_arrays_from_${elementType.asIdent}"
 
-  def _toPretty: String = {
+  override def _toPretty: String = {
     val sb = new StringBuilder
     _pretty(sb, 0, compact = true)
     sb.result()

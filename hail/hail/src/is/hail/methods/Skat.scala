@@ -2,8 +2,10 @@ package is.hail.methods
 
 import is.hail.annotations.{Annotation, Region, UnsafeRow}
 import is.hail.backend.ExecuteContext
-import is.hail.expr.ir.{IntArrayBuilder, MatrixValue, TableValue}
+import is.hail.collection.{FastSeq, IntArrayBuilder}
+import is.hail.expr.ir.{MatrixValue, TableValue}
 import is.hail.expr.ir.functions.MatrixToTableFunction
+import is.hail.linalg.implicits._
 import is.hail.stats.{
   eigSymD, GeneralizedChiSquaredDistribution, LogisticRegressionModel, RegressionUtils,
 }
@@ -168,9 +170,9 @@ case class Skat(
     TableType(skatSchema, FastSeq("id"), TStruct.empty)
   }
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
 
     if (maxSize <= 0 || maxSize > 46340)
       fatal(s"Maximum group size must be in [1, 46340], got $maxSize")

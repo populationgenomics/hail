@@ -169,7 +169,8 @@ def test_image(submit, tmp_path, client):
 
     b = get_batch_from_json_output(res, client)
     j = b.get_job(1)
-    assert j.status()['spec']['process']['image'] == image, str(j.status())
+    # Assert ends with because we might be going via the dockerhubproxy image:
+    assert j.status()['spec']['process']['image'].endswith(image), str(j.status())
 
 
 def test_image_environment_variable(submit, tmp_path, client):
@@ -183,7 +184,8 @@ def test_image_environment_variable(submit, tmp_path, client):
 
     b = get_batch_from_json_output(res, client)
     j = b.get_job(1)
-    assert j.status()['spec']['process']['image'] == 'busybox:latest', str(j.status())
+    # Assert ends with because we might be going via the dockerhubproxy image:
+    assert j.status()['spec']['process']['image'].endswith('busybox:latest'), str(j.status())
 
 
 @pytest.mark.xfail(reason='Executable files are not supported.')

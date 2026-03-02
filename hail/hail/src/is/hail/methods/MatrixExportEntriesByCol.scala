@@ -2,13 +2,14 @@ package is.hail.methods
 
 import is.hail.annotations.{UnsafeIndexedSeq, UnsafeRow}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.TableAnnotationImpex
-import is.hail.expr.ir.MatrixValue
+import is.hail.expr.ir.{partFile, MatrixValue}
 import is.hail.expr.ir.functions.MatrixToValueFunction
 import is.hail.types.{RTable, TypeWithRequiredness}
 import is.hail.types.virtual.{MatrixType, TVoid, Type}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import java.io.{BufferedOutputStream, OutputStreamWriter}
 
@@ -22,11 +23,11 @@ case class MatrixExportEntriesByCol(
   headerJsonInFile: Boolean,
   useStringKeyAsFileName: Boolean,
 ) extends MatrixToValueFunction with Logging {
-  def typ(childType: MatrixType): Type = TVoid
+  override def typ(childType: MatrixType): Type = TVoid
 
-  def unionRequiredness(childType: RTable, resultType: TypeWithRequiredness): Unit = ()
+  override def unionRequiredness(childType: RTable, resultType: TypeWithRequiredness): Unit = ()
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): Any = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): Any = {
     val fs = ctx.fs
 
     fs.delete(path, recursive = true) // overwrite by default

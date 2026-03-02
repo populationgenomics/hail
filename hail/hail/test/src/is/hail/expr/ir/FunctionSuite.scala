@@ -3,11 +3,11 @@ package is.hail.expr.ir
 import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.defs.{ApplyBinaryPrimOp, I32, In}
 import is.hail.expr.ir.functions.{IRFunctionRegistry, RegistryFunctions}
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 import is.hail.variant.Call2
 
 import org.testng.annotations.Test
@@ -25,7 +25,7 @@ class ScalaTestCompanion {
 }
 
 object TestRegisterFunctions extends RegistryFunctions {
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     registerIR1("addone", TInt32, TInt32)((_, a, _) => ApplyBinaryPrimOp(Add(), a, I32(1)))
     registerJavaStaticFunction("compare", Array(TInt32, TInt32), TInt32, null)(
       classOf[java.lang.Integer],
@@ -82,22 +82,22 @@ class FunctionSuite extends HailSuite {
 
   @Test
   def testVariableUnification(): Unit = {
-    assert(IRFunctionRegistry.lookupUnseeded(
+    assert(IRFunctionRegistry.lookup(
       "testCodeUnification",
       TInt32,
       Seq(TInt32, TInt32),
     ).isDefined)
-    assert(IRFunctionRegistry.lookupUnseeded(
+    assert(IRFunctionRegistry.lookup(
       "testCodeUnification",
       TInt32,
       Seq(TInt64, TInt32),
     ).isEmpty)
-    assert(IRFunctionRegistry.lookupUnseeded(
+    assert(IRFunctionRegistry.lookup(
       "testCodeUnification",
       TInt64,
       Seq(TInt32, TInt32),
     ).isEmpty)
-    assert(IRFunctionRegistry.lookupUnseeded(
+    assert(IRFunctionRegistry.lookup(
       "testCodeUnification2",
       TArray(TInt32),
       Seq(TArray(TInt32)),

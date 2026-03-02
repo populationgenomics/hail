@@ -2,14 +2,17 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, IEmitCode}
 import is.hail.io.{BufferSpec, InputBuffer, OutputBuffer}
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.concrete.{SBaseStructPointer, SBaseStructPointerValue}
 import is.hail.types.virtual.{TFloat64, TInt32, Type}
-import is.hail.utils._
 
 class ApproxCDFState(val kb: EmitClassBuilder[_]) extends AggregatorState {
   override val regionSize: Region.Size = Region.TINIER
@@ -61,9 +64,10 @@ class ApproxCDFState(val kb: EmitClassBuilder[_]) extends AggregatorState {
       aggr.invoke[Region, Long]("rvResult", region),
     )
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit = cb += region.getNewRegion(regionSize)
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+    cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit =
+  override def createState(cb: EmitCodeBuilder): Unit =
     cb.if_(region.isNull, cb.assign(r, Region.stagedCreate(regionSize, kb.pool())))
 
   override def load(
@@ -144,11 +148,13 @@ class ApproxCDFState(val kb: EmitClassBuilder[_]) extends AggregatorState {
 class ApproxCDFAggregator extends StagedAggregator {
   type State = ApproxCDFState
 
-  def resultEmitType: EmitType = EmitType(SBaseStructPointer(QuantilesAggregator.resultPType), true)
+  override def resultEmitType: EmitType =
+    EmitType(SBaseStructPointer(QuantilesAggregator.resultPType), true)
+
   val initOpTypes: Seq[Type] = FastSeq(TInt32)
   val seqOpTypes: Seq[Type] = FastSeq(TFloat64)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     val Array(k) = init
     k.toI(cb)
       .consume(
@@ -158,7 +164,7 @@ class ApproxCDFAggregator extends StagedAggregator {
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(x) = seq
     x.toI(cb)
       .consume(
@@ -168,7 +174,7 @@ class ApproxCDFAggregator extends StagedAggregator {
       )
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -177,6 +183,7 @@ class ApproxCDFAggregator extends StagedAggregator {
   ): Unit =
     state.comb(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     IEmitCode.present(cb, state.result(cb, region))
 }

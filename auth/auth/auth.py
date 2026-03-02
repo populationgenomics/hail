@@ -9,6 +9,7 @@ from typing import List, NoReturn, Optional, Union
 from urllib.parse import urlparse
 
 import aiohttp_session
+import jinja2
 import kubernetes_asyncio.client
 import kubernetes_asyncio.client.rest
 import kubernetes_asyncio.config
@@ -67,6 +68,8 @@ log = logging.getLogger('auth')
 
 CLOUD = get_global_config()['cloud']
 DEFAULT_NAMESPACE = os.environ['HAIL_DEFAULT_NAMESPACE']
+INACTIVE_USER_TIMEOUT_DAYS = int(os.environ.get('INACTIVE_USER_TIMEOUT_DAYS', '60'))
+AUTH_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 is_test_deployment = DEFAULT_NAMESPACE != 'default'
 
@@ -219,9 +222,7 @@ def validate_next_page_url(next_page):
     actual_next_page_domain = urlparse(next_page).netloc
 
     if actual_next_page_domain not in valid_next_domains:
-        raise web.HTTPBadRequest(
-            text=f'Invalid next page: \'{next_page}\'. Domain \'{actual_next_page_domain}\' not in {valid_next_domains}'
-        )
+        raise web.HTTPBadRequest(text='Invalid next page.')
 
 
 @routes.get('/healthcheck')
@@ -241,6 +242,22 @@ async def swagger(request):
 async def openapi(request):
     page_context = {'base_path': deploy_config.base_path('auth'), 'spec_version': __version__}
     return await render_template('auth', request, None, 'openapi.yaml', page_context)
+
+
+@routes.get('/auth/static/js/{filename}')
+@web_security_headers
+async def fetch_js_file(request):
+    filename = request.match_info['filename']
+    if filename.endswith('.js'):
+        page_context = {'base_path': deploy_config.base_path('auth')}
+        try:
+            response = await render_template('auth', request, None, f'js/{filename}', page_context)
+            response.content_type = 'application/javascript'
+            return response
+        except jinja2.exceptions.TemplateNotFound as error:
+            raise web.HTTPNotFound() from error
+    else:
+        raise web.HTTPNotFound()
 
 
 @routes.get('')
@@ -271,7 +288,12 @@ async def creating_account(request: web.Request, userdata: Optional[UserData]) -
             set_message(session, f'Account does not exist for login id {login_id}.', 'error')
             raise web.HTTPFound(deploy_config.external_url('auth', ''))
 
-        page_context = {'username': user['username'], 'state': user['state'], 'login_id': user['login_id']}
+        page_context = {
+            'username': user['username'],
+            'state': user['state'],
+            'login_id': user['login_id'],
+            'inactive_timeout_days': INACTIVE_USER_TIMEOUT_DAYS,
+        }
 
         if user['state'] in ('deleting', 'deleted'):
             return await render_template('auth', request, userdata, 'account-error.html', page_context)
@@ -422,9 +444,16 @@ async def callback(request) -> web.Response:
 
         raise web.HTTPFound(creating_url)
 
-    if user['state'] in ('deleting', 'deleted'):
-        page_context = {'username': user['username'], 'state': user['state'], 'login_id': user['login_id']}
-        return await render_template('auth', request, user, 'account-error.html', page_context)
+    if user['state'] in ('deleting', 'deleted', 'inactive'):
+        page_context = {
+            'username': user['username'],
+            'state': user['state'],
+            'login_id': user['login_id'],
+            'inactive_timeout_days': INACTIVE_USER_TIMEOUT_DAYS,
+        }
+        return await render_template(
+            'auth', request, user, 'account-error.html', page_context, status_code=web.HTTPUnauthorized.status_code
+        )
 
     if user['state'] == 'creating':
         if caller == 'signup':
@@ -1239,7 +1268,7 @@ def run():
         ]
     )
 
-    setup_aiohttp_jinja2(app, 'auth')
+    setup_aiohttp_jinja2(app, 'auth', jinja2.FileSystemLoader(f'{AUTH_ROOT}/static/'))
     setup_aiohttp_session(app)
 
     setup_common_static_routes(routes)

@@ -4,17 +4,21 @@ import is.hail.annotations._
 import is.hail.asm4s.{theHailClassLoaderForSparkWorkers, HailClassLoader}
 import is.hail.backend.{ExecuteContext, HailStateManager, HailTaskContext}
 import is.hail.backend.spark.{SparkBackend, SparkTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.{arrayToRichIndexedSeq, toRichIterable, toRichOrderedArray}
 import is.hail.expr.ir.InferPType
 import is.hail.expr.ir.PruneDeadFields.isSupertype
 import is.hail.expr.ir.agg.AggExecuteContextExtensions
 import is.hail.io._
 import is.hail.io.index.IndexWriter
+import is.hail.rvd.RVD.RichIteratorLong
 import is.hail.sparkextras._
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.{PCanonicalStruct, PInt64, PStruct}
 import is.hail.types.virtual.{MatrixType, TInterval, TStruct}
 import is.hail.utils._
 import is.hail.utils.PartitionCounts.{getPCSubsetOffset, incrementalPCSubsetOffset, PCSubsetOffset}
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.parallel.CollectionConverters._
 import scala.reflect.ClassTag
@@ -186,9 +190,9 @@ class RVD(
         new Iterator[Long] {
           var first = true
 
-          def hasNext: Boolean = it.hasNext
+          override def hasNext: Boolean = it.hasNext
 
-          def next(): Long = {
+          override def next(): Long = {
             val ptr = it.next()
 
             if (first)
@@ -1016,9 +1020,9 @@ class RVD(
     val sorted: RDD[((Int, Interval), Array[Byte])] = new ShuffledRDD(
       partitionKeyedIntervals,
       new Partitioner {
-        def getPartition(key: Any): Int = key.asInstanceOf[(Int, Interval)]._1
+        override def getPartition(key: Any): Int = key.asInstanceOf[(Int, Interval)]._1
 
-        def numPartitions: Int = nParts
+        override def numPartitions: Int = nParts
       },
     ).setKeyOrdering(Ordering.by[(Int, Interval), Interval](_._2)(intervalOrd))
 
@@ -1188,7 +1192,7 @@ object RVD extends Logging {
     type CRDD = ContextRDD[Long]
 
     val unkeyedCoercer: RVDCoercer = new RVDCoercer(fullType) {
-      def _coerce(typ: RVDType, crdd: CRDD): RVD = {
+      override def _coerce(typ: RVDType, crdd: CRDD): RVD = {
         assert(typ.key.isEmpty)
         unkeyed(typ.rowType, crdd)
       }
@@ -1198,7 +1202,7 @@ object RVD extends Logging {
       return unkeyedCoercer
 
     val emptyCoercer: RVDCoercer = new RVDCoercer(fullType) {
-      def _coerce(typ: RVDType, crdd: CRDD): RVD = empty(execCtx, typ)
+      override def _coerce(typ: RVDType, crdd: CRDD): RVD = empty(execCtx, typ)
     }
 
     val keyInfo = getKeyInfo(execCtx, fullType, partitionKey, keys)
@@ -1243,7 +1247,7 @@ object RVD extends Logging {
           bounds,
         )
 
-        def _coerce(typ: RVDType, crdd: CRDD): RVD =
+        override def _coerce(typ: RVDType, crdd: CRDD): RVD =
           RVD(typ, unfixedPartitioner, orderPartitions(crdd))
             .repartition(execCtx, newPartitioner, shuffle = false)
       }
@@ -1273,7 +1277,7 @@ object RVD extends Logging {
           pkBounds,
         )
 
-        def _coerce(typ: RVDType, crdd: CRDD): RVD = {
+        override def _coerce(typ: RVDType, crdd: CRDD): RVD = {
           RVD(
             typ.copy(key = typ.key.take(partitionKey)),
             unfixedPartitioner,
@@ -1292,7 +1296,7 @@ object RVD extends Logging {
         val newPartitioner =
           calculateKeyRanges(execCtx, this.fullType, keyInfo, keys.getNumPartitions, partitionKey)
 
-        def _coerce(typ: RVDType, crdd: CRDD): RVD =
+        override def _coerce(typ: RVDType, crdd: CRDD): RVD =
           RVD.unkeyed(typ.rowType, crdd)
             .repartition(execCtx, newPartitioner, shuffle = true, filter = false)
       }
@@ -1469,6 +1473,13 @@ object RVD extends Logging {
     )
 
     fileData
+  }
+
+  implicit class RichIteratorLong(private val it: Iterator[Long]) extends AnyVal {
+    def toIteratorRV(region: Region): Iterator[RegionValue] = {
+      val rv = RegionValue(region)
+      it.map { ptr => rv.setOffset(ptr); rv }
+    }
   }
 }
 

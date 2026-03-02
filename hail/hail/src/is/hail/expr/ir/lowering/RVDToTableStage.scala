@@ -4,6 +4,7 @@ import is.hail.annotations.{BroadcastRow, Region, RegionValue}
 import is.hail.asm4s._
 import is.hail.backend.{BroadcastValue, ExecuteContext}
 import is.hail.backend.spark.{AnonymousDependency, SparkTaskContext}
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs.{
@@ -17,7 +18,6 @@ import is.hail.types.{RTable, VirtualTypeWithReq}
 import is.hail.types.physical.{PArray, PStruct}
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual.{TStruct, TableType}
-import is.hail.utils.FastSeq
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 
@@ -81,15 +81,16 @@ case class RVDTableReader(rvd: RVD, globals: IR, rt: RTable) extends TableReader
 
   override def isDistinctlyKeyed: Boolean = false
 
-  def rowRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
+  override def rowRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
     VirtualTypeWithReq.subset(requestedType.rowType, rt.rowType)
 
-  def globalRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
+  override def globalRequiredness(ctx: ExecuteContext, requestedType: TableType)
+    : VirtualTypeWithReq =
     VirtualTypeWithReq.subset(requestedType.globalType, rt.globalType)
 
   override def toJValue: JValue = JString("RVDTableReader")
 
-  def renderShort(): String = "RVDTableReader"
+  override def renderShort(): String = "RVDTableReader"
 
   override def defaultRender(): String = "RVDTableReader"
 

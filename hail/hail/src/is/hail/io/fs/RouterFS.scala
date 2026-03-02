@@ -1,8 +1,9 @@
 package is.hail.io.fs
 
 import is.hail.HailFeatureFlags
+import is.hail.collection.FastSeq
 import is.hail.services.oauth2.{AzureCloudCredentials, GoogleCloudCredentials}
-import is.hail.utils.{FastSeq, SerializableHadoopConfiguration}
+import is.hail.utils.SerializableHadoopConfiguration
 
 import java.io.Serializable
 import java.nio.file.Path
@@ -91,28 +92,28 @@ class RouterFS(fss: IndexedSeq[FS]) extends FS {
   override def createNoCompression(url: RouterFSURL): PositionedDataOutputStream =
     url.fs.createNoCompression(url.url)
 
-  def openNoCompression(url: URL): SeekableDataInputStream =
+  override def openNoCompression(url: URL): SeekableDataInputStream =
     url.fs.openNoCompression(url.url)
 
   override def mkDir(url: URL): Unit = url.fs.mkDir(url.url)
 
-  def delete(url: URL, recursive: Boolean) = url.fs.delete(url.url, recursive)
+  override def delete(url: URL, recursive: Boolean) = url.fs.delete(url.url, recursive)
 
-  def listDirectory(url: URL): Array[FileListEntry] = url.fs.listDirectory(url.url)
+  override def listDirectory(url: URL): Array[FileListEntry] = url.fs.listDirectory(url.url)
 
-  def glob(url: URL): Array[FileListEntry] = url.fs.glob(url.url)
+  override def glob(url: URL): Array[FileListEntry] = url.fs.glob(url.url)
 
-  def fileStatus(url: URL): FileStatus = url.fs.fileStatus(url.url)
+  override def fileStatus(url: URL): FileStatus = url.fs.fileStatus(url.url)
 
-  def fileListEntry(url: URL): FileListEntry = url.fs.fileListEntry(url.url)
+  override def fileListEntry(url: URL): FileListEntry = url.fs.fileListEntry(url.url)
 
   override def eTag(url: URL): Option[String] = url.fs.eTag(url.url)
 
-  def makeQualified(path: String): String = lookupFS(path).makeQualified(path)
+  override def makeQualified(path: String): String = lookupFS(path).makeQualified(path)
 
-  def getConfiguration(): Any = fss.map(_.getConfiguration())
+  override def getConfiguration(): Any = fss.map(_.getConfiguration())
 
-  def setConfiguration(config: Any): Unit =
+  override def setConfiguration(config: Any): Unit =
     fss.zip(config.asInstanceOf[IndexedSeq[_]]).foreach { case (fs: FS, config: Any) =>
       fs.setConfiguration(config)
     }

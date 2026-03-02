@@ -3,11 +3,13 @@ package is.hail.expr.ir
 import is.hail.HailSuite
 import is.hail.annotations.{Region, SafeRow}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.valueToRichCodeRegion
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits._
 import is.hail.expr.ir.agg.TakeByRVAS
 import is.hail.types.VirtualTypeWithReq
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.primitives.SInt32Value
-import is.hail.utils._
 
 import org.scalatest.Inspectors.forAll
 import org.scalatest.enablers.InspectorAsserting.assertingNatureOfAssertion
@@ -106,8 +108,7 @@ class TakeByAggregatorSuite extends HailSuite {
           new TakeByRVAS(VirtualTypeWithReq(PInt32Required), VirtualTypeWithReq(PInt32Required), kb)
         val ab = new agg.StagedArrayBuilder(PInt32Required, kb, argR)
         val rt = PCanonicalArray(tba.valueType)
-        val er = new EmitRegion(fb.apply_method, argR)
-        val rng = er.mb.newRNG(0)
+        val rng = fb.apply_method.threefryRandomEngine
 
         fb.emitWithBuilder { cb =>
           tba.createState(cb)

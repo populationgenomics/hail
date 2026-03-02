@@ -1,19 +1,25 @@
 package is.hail.expr
 
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.IRFunctionRegistry
 import is.hail.expr.ir.lowering.TableStageDependency
 import is.hail.rvd.RVDPartitioner
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.stypes.SValue
 import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.types.virtual.TIterable.elementType
-import is.hail.utils._
+import is.hail.utils.fatal
 
 import scala.collection.BufferedIterator
 
 import java.util.UUID
+
+import org.apache.commons.lang3.StringUtils
+import org.apache.spark.TaskContext
 
 package object ir {
   type TokenIterator = BufferedIterator[Token]
@@ -31,8 +37,6 @@ package object ir {
 
   def uuid4(): String = UUID.randomUUID().toString
 
-  def genSym(base: String): Sym = Sym.gen(base)
-
   // Build consistent expression for a filter-condition with keep polarity,
   // using Let to manage missing-ness.
   def filterPredicateWithKeep(irPred: IR, keep: Boolean): IR =
@@ -41,7 +45,7 @@ package object ir {
     }
 
   def invoke(name: String, rt: Type, typeArgs: Seq[Type], errorID: Int, args: IR*): IR =
-    IRFunctionRegistry.lookupUnseeded(name, rt, typeArgs, args.map(_.typ)) match {
+    IRFunctionRegistry.lookup(name, rt, typeArgs, args.map(_.typ)) match {
       case Some(f) => f(args, errorID)
       case None => fatal(
           s"no conversion found for $name[${typeArgs.mkString(", ")}](${args.map(_.typ).mkString(", ")}) => $rt"
@@ -56,13 +60,6 @@ package object ir {
 
   def invoke(name: String, rt: Type, errorID: Int, args: IR*): IR =
     invoke(name, rt, Array.empty[Type], errorID, args: _*)
-
-  def invokeSeeded(name: String, staticUID: Long, rt: Type, rngState: IR, args: IR*): IR =
-    IRFunctionRegistry.lookupSeeded(name, staticUID, rt, args.map(_.typ)) match {
-      case Some(f) => f(args, rngState)
-      case None =>
-        fatal(s"no seeded function found for $name(${args.map(_.typ).mkString(", ")}) => $rt")
-    }
 
   implicit def irToPrimitiveIR(ir: IR): PrimitiveIR = new PrimitiveIR(ir)
 
@@ -423,6 +420,15 @@ package object ir {
   }
 
   def logIR(result: IR, messages: AnyRef*): IR = ConsoleLog(strConcat(messages: _*), result)
+
+  def partFile(numDigits: Int, i: Int): String = {
+    val is = i.toString
+    assert(is.length <= numDigits)
+    "part-" + StringUtils.leftPad(is, numDigits, "0")
+  }
+
+  def partFile(d: Int, i: Int, ctx: TaskContext): String =
+    s"${partFile(d, i)}-${ctx.partSuffix}"
 
   implicit def toRichIndexedSeqEmitSettable(s: IndexedSeq[EmitSettable])
     : RichIndexedSeqEmitSettable = new RichIndexedSeqEmitSettable(s)

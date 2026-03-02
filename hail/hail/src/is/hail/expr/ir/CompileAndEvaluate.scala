@@ -3,13 +3,13 @@ package is.hail.expr.ir
 import is.hail.annotations.{Region, SafeRow}
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs.{Begin, EncodedLiteral, Literal, MakeTuple, NA}
-import is.hail.expr.ir.lowering.{Invariant, LoweringPipeline}
+import is.hail.expr.ir.lowering.LoweringPipeline
 import is.hail.types.physical.PTuple
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 
 import java.io.PrintWriter
 
@@ -49,7 +49,6 @@ object CompileAndEvaluate {
   ): Either[Unit, (PTuple, Long)] =
     ctx.time {
       val ir = lower(ctx, ir0).asInstanceOf[IR]
-      Invariant.CompilableIR.verify(ctx, ir)
 
       ir.typ match {
         case TVoid =>

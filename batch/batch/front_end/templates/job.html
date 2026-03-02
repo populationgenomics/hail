@@ -1,5 +1,5 @@
 {% from "components/metadata_tables.html" import collapsible_li, resource_cost_table, kv_table %}
-{% from "utils.html" import success_check, fail_cross, progress_spinner, job_state_indicator %}
+{% from "utils.html" import success_check, fail_cross, progress_spinner, job_state_indicator, auto_refresh %}
 {% extends "layout.html" %}
 {% block title %}Batch {{ batch_id }} Job {{ job_id }}{% endblock %}
 
@@ -84,6 +84,9 @@
           {{ job['attributes']['name'] }}
           {% endif %}
         </div>
+        {% if job['state'] not in ('Success', 'Failed', 'Error', 'Cancelled') %}
+        {{ auto_refresh() }}
+        {% endif %}
         <div class='flex justify-between'>
           <div>
             <div class='font-light text-zinc-500'>Submitted by {{ job['user'] }}</div>
@@ -128,7 +131,7 @@
       {% endif %}
 
       {% if plot_job_durations is not none %}
-      <div id="plotly-job-durations"></div>
+      <div data-graph='{{plot_job_durations | safe }}' id="plotly-job-durations"></div>
       {% endif %}
     </div>
   </div>
@@ -160,7 +163,7 @@
   {% if plot_resource_usage is not none %}
   <div class='relative overflow-hidden transition-all bg-white'>
     <div class='w-full overflow-auto flex justify-center'>
-      <div id="plotly-job-resource-usage"></div>
+      <div data-graph='{{plot_resource_usage | safe }}' id="plotly-job-resource-usage"></div>
     </div>
   </div>
   {% endif %}
@@ -231,18 +234,9 @@
   </div>
   {% endif %}
 </div>
-{% if plot_job_durations is not none %}
+<script defer src="{{ base_path }}/batch/static/js/auto_refresh.js"></script>
+{% if plot_job_durations is not none or plot_resource_usage is not none %}
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<script>
-  var graph = {{plot_job_durations | safe }};
-  Plotly.plot('plotly-job-durations', graph, {});
-</script>
-{% endif %}
-{% if plot_resource_usage is not none %}
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<script>
-  var graph = {{plot_resource_usage | safe }};
-  Plotly.plot('plotly-job-resource-usage', graph, {});
-</script>
+<script defer src="{{ base_path }}/batch/static/js/job.js"></script>
 {% endif %}
 {% endblock %}

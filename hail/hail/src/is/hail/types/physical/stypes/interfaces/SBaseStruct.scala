@@ -2,6 +2,7 @@ package is.hail.types.physical.stypes.interfaces
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{EmitCode, EmitCodeBuilder, EmitValue, IEmitCode}
 import is.hail.types.{RStruct, RTuple, TypeWithRequiredness}
 import is.hail.types.physical.PCanonicalStruct
@@ -9,7 +10,6 @@ import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.concrete._
 import is.hail.types.physical.stypes.primitives.{SInt32Value, SInt64Value}
 import is.hail.types.virtual.{TBaseStruct, TStruct, TTuple}
-import is.hail.utils._
 
 object SBaseStruct {
   def merge(cb: EmitCodeBuilder, s1: SBaseStructValue, s2: SBaseStructValue): SBaseStructValue = {
@@ -33,7 +33,7 @@ object SBaseStruct {
 }
 
 trait SBaseStruct extends SType {
-  def virtualType: TBaseStruct
+  override def virtualType: TBaseStruct
 
   def size: Int
 
@@ -42,7 +42,7 @@ trait SBaseStruct extends SType {
 
   def fieldIdx(fieldName: String): Int
 
-  def _typeWithRequiredness: TypeWithRequiredness = {
+  override def _typeWithRequiredness: TypeWithRequiredness = {
     virtualType match {
       case ts: TStruct => RStruct.fromNamesAndTypes(ts.fieldNames.zip(fieldEmitTypes).map {
           case (name, et) => (name, et.typeWithRequiredness.r)
@@ -57,7 +57,7 @@ trait SBaseStruct extends SType {
 trait SBaseStructSettable extends SBaseStructValue with SSettable
 
 trait SBaseStructValue extends SValue {
-  def st: SBaseStruct
+  override def st: SBaseStruct
 
   def isFieldMissing(cb: EmitCodeBuilder, fieldIdx: Int): Value[Boolean]
 

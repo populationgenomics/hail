@@ -3,6 +3,7 @@ package is.hail.types.encoded
 import is.hail.annotations.Region
 import is.hail.asm4s.{coerce => _, _}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{
   EmitClassBuilder, EmitCodeBuilder, EmitFunctionBuilder, EmitMethodBuilder, IRParser, ParamType,
   PunctuationToken, TokenIterator,
@@ -167,7 +168,7 @@ abstract class EType extends BaseType with Serializable with Requiredness {
 
   def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit
 
-  final def pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
+  final override def pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
     if (required)
       sb.append("+")
     _pretty(sb, indent, compact)

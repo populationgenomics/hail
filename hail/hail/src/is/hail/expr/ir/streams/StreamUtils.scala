@@ -2,6 +2,7 @@ package is.hail.expr.ir.streams
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{codeToRichCodeRegion, valueToRichCodeRegion}
 import is.hail.expr.ir.{
   EmitCode, EmitCodeBuilder, EmitMethodBuilder, IEmitCode, IR, Name, StagedArrayBuilder,
 }
@@ -254,7 +255,7 @@ object StreamUtils {
 
     def implInit(cb: EmitCodeBuilder, outerRegion: Value[Region]): Unit
 
-    final def initialize(cb: EmitCodeBuilder, outerRegion: Value[Region]): Unit = {
+    final override def initialize(cb: EmitCodeBuilder, outerRegion: Value[Region]): Unit = {
       implInit(cb, outerRegion)
       cb.assign(bracket, Code.newArray[Int](k))
       cb.assign(heads, Code.newArray[Long](k))
@@ -265,7 +266,7 @@ object StreamUtils {
 
     def implClose(cb: EmitCodeBuilder): Unit
 
-    final def close(cb: EmitCodeBuilder): Unit = {
+    final override def close(cb: EmitCodeBuilder): Unit = {
       implClose(cb)
       cb.assign(bracket, Code._null)
       cb.assign(heads, Code._null)

@@ -1,10 +1,12 @@
 package is.hail.annotations
 
 import is.hail.backend.HailStateManager
+import is.hail.collection.{FlipbookIterator, StagingIterator, StateMachine}
+import is.hail.collection.compat.mutable.Growable
+import is.hail.collection.implicits.toRichIterator
 import is.hail.rvd.{RVDContext, RVDType}
 import is.hail.types.physical.PInterval
 import is.hail.utils._
-import is.hail.utils.compat.mutable.Growable
 
 import scala.collection.mutable
 
@@ -95,7 +97,7 @@ case class OrderedRVIterator(
         }
       }
 
-      def advance(): Unit = {
+      override def advance(): Unit = {
         left.advance()
         setValue()
       }
@@ -190,9 +192,9 @@ case class OrderedRVIterator(
       private val rvb = new RegionValueBuilder(sm, consumerRegion)
       private val rv = RegionValue()
 
-      def hasNext: Boolean = bit.hasNext || q.nonEmpty
+      override def hasNext: Boolean = bit.hasNext || q.nonEmpty
 
-      def next(): RegionValue = {
+      override def next(): RegionValue = {
         if (q.isEmpty) {
           do {
             val rv = bit.next()

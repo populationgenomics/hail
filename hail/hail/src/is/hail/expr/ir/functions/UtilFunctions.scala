@@ -13,6 +13,7 @@ import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.physical.stypes.primitives._
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.implicits.toRichString
 
 import scala.reflect.ClassTag
 
@@ -201,7 +202,7 @@ object UtilFunctions extends RegistryFunctions {
         )
     }
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     val thisClass = getClass
 
     registerSCode4(
@@ -215,14 +216,14 @@ object UtilFunctions extends RegistryFunctions {
         case (_: Type, _: SType, _: SType, _: SType, _: SType) => SBoolean
       },
     ) {
-      case (er, cb, _, l, r, tol, abs, _) =>
+      case (region, cb, _, l, r, tol, abs, _) =>
         assert(
           l.st.virtualType == r.st.virtualType,
           s"\n  lt=${l.st.virtualType}\n  rt=${r.st.virtualType}",
         )
-        val lb = svalueToJavaValue(cb, er.region, l)
-        val rb = svalueToJavaValue(cb, er.region, r)
-        primitive(cb.memoize(er.mb.getType(l.st.virtualType).invoke[
+        val lb = svalueToJavaValue(cb, region, l)
+        val rb = svalueToJavaValue(cb, region, r)
+        primitive(cb.memoize(cb.emb.getType(l.st.virtualType).invoke[
           Any,
           Any,
           Double,
@@ -517,7 +518,7 @@ object UtilFunctions extends RegistryFunctions {
       (_: Type, _: SType, _: SType) => SJavaString,
     ) {
       case (r, cb, st: SJavaString.type, format, args, _) =>
-        val javaObjArgs = Code.checkcast[Row](svalueToJavaValue(cb, r.region, args))
+        val javaObjArgs = Code.checkcast[Row](svalueToJavaValue(cb, r, args))
         val formatted = Code.invokeScalaObject2[String, Row, String](
           thisClass,
           "format",

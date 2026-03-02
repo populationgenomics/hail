@@ -2,6 +2,7 @@ package is.hail.types.encoded
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer}
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.io.{InputBuffer, OutputBuffer}
 import is.hail.types.physical.PCanonicalNDArray
@@ -9,7 +10,6 @@ import is.hail.types.physical.stypes.{SType, SValue}
 import is.hail.types.physical.stypes.concrete.SNDArrayPointer
 import is.hail.types.physical.stypes.interfaces.{SNDArray, SNDArrayValue}
 import is.hail.types.virtual.{TNDArray, Type}
-import is.hail.utils._
 
 case class ENDArrayColumnMajor(elementType: EType, nDims: Int, required: Boolean = false)
     extends EContainer {
@@ -62,7 +62,7 @@ case class ENDArrayColumnMajor(elementType: EType, nDims: Int, required: Boolean
     pndFinisher(cb)
   }
 
-  def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
+  override def _buildSkip(cb: EmitCodeBuilder, r: Value[Region], in: Value[InputBuffer]): Unit = {
     val skip = elementType.buildSkip(cb.emb.ecb)
 
     val numElements = cb.newLocal[Long](
@@ -73,7 +73,7 @@ case class ENDArrayColumnMajor(elementType: EType, nDims: Int, required: Boolean
     cb.for_(cb.assign(i, 0L), i < numElements, cb.assign(i, i + 1L), skip(cb, r, in))
   }
 
-  def _decodedSType(requestedType: Type): SType = {
+  override def _decodedSType(requestedType: Type): SType = {
     val requestedTNDArray = requestedType.asInstanceOf[TNDArray]
     val elementPType = elementType.decodedPType(requestedTNDArray.elementType)
     SNDArrayPointer(PCanonicalNDArray(elementPType, requestedTNDArray.nDims, false))

@@ -2,10 +2,11 @@ package is.hail.types.virtual
 
 import is.hail.annotations._
 import is.hail.backend.HailStateManager
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{Env, IRParser, Name}
+import is.hail.sparkextras.implicits.toRichRow
 import is.hail.utils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.compat._
 import scala.collection.mutable
@@ -65,7 +66,7 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
     }
   }
 
-  def size: Int = fields.length
+  override def size: Int = fields.length
 
   override def truncate(newSize: Int): TStruct = TStruct(fields.take(newSize))
 
@@ -296,7 +297,7 @@ final case class TStruct(fields: IndexedSeq[Field]) extends TBaseStruct {
       ab += fields(i)
       i += 1
     }
-    val it = fieldsToInsert.toIterator
+    val it = fieldsToInsert.iterator
     while (it.hasNext) {
       val (name, typ) = it.next()
       if (fieldIdx.contains(name)) {

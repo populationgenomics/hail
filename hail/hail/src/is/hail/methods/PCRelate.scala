@@ -5,6 +5,7 @@ import is.hail.expr.ir.TableValue
 import is.hail.expr.ir.functions.BlockMatrixToTableFunction
 import is.hail.linalg.BlockMatrix
 import is.hail.linalg.BlockMatrix.ops._
+import is.hail.linalg.implicits._
 import is.hail.types.virtual._
 import is.hail.utils._
 
@@ -152,10 +153,10 @@ case class PCRelate(
 
   def storageLevel: StorageLevel = PCRelate.defaultStorageLevel
 
-  def typ(bmType: BlockMatrixType, auxType: Type): TableType =
+  override def typ(bmType: BlockMatrixType, auxType: Type): TableType =
     TableType(sig, keys, TStruct.empty)
 
-  def execute(ctx: ExecuteContext, g: M, value: Any): TableValue = {
+  override def execute(ctx: ExecuteContext, g: M, value: Any): TableValue = {
     val pcs = rowsToBDM(value.asInstanceOf[IndexedSeq[IndexedSeq[java.lang.Double]]])
     assert(pcs.rows == g.nCols)
     val r = computeResult(ctx, g, pcs)
