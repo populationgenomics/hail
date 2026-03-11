@@ -5,6 +5,9 @@ import is.hail.annotations.Memory
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.{Backend, ExecuteContext, OwningTempFileManager}
 import is.hail.backend.service._
+import is.hail.backend.service.ServiceBackend.DefaultMaxReadParallelism
+import is.hail.collection.ImmutableMap
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs.{CloudStorageFSConfig, FS, RouterFS}
 import is.hail.io.reference.{IndexedFastaSequenceFile, LiftOver}
@@ -193,6 +196,7 @@ object BatchQueryDriver extends HttpLikeRpc with Logging {
         JarUrl(jarLocation),
         BatchConfig.fromConfigFile(Path.of(scratchDir, "batch-config/batch-config.json")),
         jobConfig,
+        rpcConfig.max_read_parallelism.getOrElse(DefaultMaxReadParallelism),
       )
 
     // FIXME: when can the classloader be shared? (optimizer benefits!)
@@ -254,4 +258,5 @@ case class ServiceBackendRPCPayload(
   custom_references: Array[String],
   liftovers: Map[String, Map[String, String]],
   sequences: Map[String, SequenceConfig],
+  max_read_parallelism: Option[Int],
 )

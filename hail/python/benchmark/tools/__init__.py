@@ -1,5 +1,8 @@
 import logging
-from typing import Any, Callable, Generator, List, Optional, Sequence, TypeVar
+from typing import Any, List, Optional
+
+from hail.expr import ArrayStructExpression
+from hail.expr import enumerate as hl_enumerate
 
 A = TypeVar('A')
 
