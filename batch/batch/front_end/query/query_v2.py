@@ -294,8 +294,14 @@ def parse_job_group_jobs_query_v2(
         attempts_table_join_str = ''
 
     sql = f"""
-SELECT jobs.*, batches.user, batches.billing_project, batches.format_version, job_attributes.value AS name, cost_t.cost,
-  cost_t.cost_breakdown
+SELECT STRAIGHT_JOIN jobs.*
+                   , batches.user
+                   , batches.billing_project
+                   , batches.format_version
+                   , job_attributes.value AS name
+                   , cost_t.cost
+                   , cost_t.cost_breakdown
+                   , latest_attempt.end_time
 FROM jobs
 INNER JOIN batches ON jobs.batch_id = batches.id
 INNER JOIN batch_updates ON jobs.batch_id = batch_updates.batch_id AND jobs.update_id = batch_updates.update_id
@@ -303,7 +309,10 @@ LEFT JOIN job_attributes
   ON jobs.batch_id = job_attributes.batch_id AND
     jobs.job_id = job_attributes.job_id AND
     job_attributes.`key` = 'name'
-{attempts_table_join_str}
+LEFT JOIN attempts AS latest_attempt
+    ON  jobs.batch_id   = latest_attempt.batch_id
+    AND jobs.job_id     = latest_attempt.job_id
+    AND jobs.attempt_id = latest_attempt.attempt_id
 LEFT JOIN LATERAL (
 SELECT COALESCE(SUM(`usage` * rate), 0) AS cost, JSON_OBJECTAGG(resources.resource, COALESCE(`usage` * rate, 0)) AS cost_breakdown
 FROM (SELECT resource_id, CAST(COALESCE(SUM(`usage`), 0) AS SIGNED) AS `usage`
