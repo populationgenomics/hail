@@ -6,8 +6,6 @@ import is.hail.asm4s.HailClassLoader
 import is.hail.backend.{Backend, ExecuteContext, OwningTempFileManager}
 import is.hail.backend.service._
 import is.hail.backend.service.ServiceBackend.DefaultMaxReadParallelism
-import is.hail.collection.ImmutableMap
-import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs.{CloudStorageFSConfig, FS, RouterFS}
 import is.hail.io.reference.{IndexedFastaSequenceFile, LiftOver}

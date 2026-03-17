@@ -6,8 +6,6 @@ import is.hail.backend.Backend.PartitionFn
 import is.hail.backend.ExecutionCache.Flags.UseFastRestarts
 import is.hail.backend.local.LocalTaskContext
 import is.hail.backend.service.ServiceBackend.Flags._
-import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Validate
 import is.hail.expr.ir.{
   CompileAndEvaluate, IR, IRSize, LoweringAnalyses, SortField, TableIR, TableReader, TypeCheck,
