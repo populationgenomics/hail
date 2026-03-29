@@ -3,11 +3,10 @@ package is.hail
 import is.hail.backend.ExecutionCache
 import is.hail.backend.service.ServiceBackend
 import is.hail.backend.spark.SparkBackend
-import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{agg, Optimize}
-import is.hail.io.fs.RequesterPaysConfig
 import is.hail.types.encoded.EType
 
+import scala.collection.compat._
 import scala.collection.mutable
 
 import org.json4s.JsonAST.{JArray, JObject, JString}
@@ -43,8 +42,6 @@ object HailFeatureFlags {
     (ExecutionCache.Flags.UseFastRestarts, "HAIL_USE_FAST_RESTARTS" -> null),
     (Optimize.Flags.MaxOptimizerIterations, "HAIL_OPTIMIZER_ITERATIONS" -> null),
     (Optimize.Flags.Optimize, "HAIL_QUERY_OPTIMIZE" -> "1"),
-    (RequesterPaysConfig.Flags.RequesterPaysBuckets, "HAIL_GCS_REQUESTER_PAYS_BUCKETS" -> null),
-    (RequesterPaysConfig.Flags.RequesterPaysProject, "HAIL_GCS_REQUESTER_PAYS_PROJECT" -> null),
     (ServiceBackend.Flags.UseAsyncProfiler, "HAIL_PROFILE" -> null),
     (
       SparkBackend.Flags.MaxStageParallelism,
@@ -54,11 +51,9 @@ object HailFeatureFlags {
 
   def fromEnv(m: Map[String, String] = sys.env): HailFeatureFlags =
     new HailFeatureFlags(
-      mutable.Map(
-        HailFeatureFlags.defaults.map {
-          case (flagName, (_, default)) => (flagName, m.getOrElse(flagName, default))
-        }.toFastSeq: _*
-      )
+      mutable.Map.from(HailFeatureFlags.defaults.view.map {
+        case (flagName, (_, default)) => (flagName, m.getOrElse(flagName, default))
+      })
     )
 }
 

@@ -4,6 +4,7 @@ import is.hail.asm4s.{
   arrayInfo, ByteInfo, ClassInfo, DoubleInfo, FloatInfo, IntInfo, LongInfo, TypeInfo,
 }
 import is.hail.collection.ObjectArrayStack
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.utils._
 import is.hail.utils.implicits.toRichBoolean
 
@@ -230,8 +231,11 @@ class Method private[lir] (
         blocksb += L
 
         val x = L.last.asInstanceOf[ControlX]
-        for (i <- x.targetIndices.reverse)
-          s.push(x.target(i))
+        var t = x.targetArity() - 1
+        while (t >= 0) {
+          s.push(x.target(t))
+          t -= 1
+        }
 
         visited += L
       }
@@ -348,7 +352,9 @@ class Block {
 
   def wellFormed: Boolean =
     first != null && (last match {
-      case ctrl: ControlX => ctrl.targetIndices.forall(ctrl.target(_) != null)
+      case ctrl: ControlX =>
+        val T = ctrl.targetArity()
+        (T == 0) || (0 until T).forall(ctrl.target(_) != null)
       case _ => false
     })
 
@@ -588,10 +594,7 @@ abstract class ControlX extends StmtX {
 
   def setTarget(i: Int, b: Block): Unit
 
-  def targetIndices: IndexedSeq[Int] =
-    0 until targetArity()
-
-  protected def setTargetHelper(i: Int, Lold: Block, Lnew: Block): Block = {
+  final protected def setTargetHelper(i: Int, Lold: Block, Lnew: Block): Block = {
     if (Lold != null) Lold.removeUse(this, i)
     if (Lnew != null) Lnew.addUse(this, i)
     Lnew
@@ -638,6 +641,7 @@ class GotoX(var lineNumber: Int = 0) extends ControlX {
     assert(i == 0)
     _L = setTargetHelper(i, _L, b)
   }
+
 }
 
 class IfX(val op: Int, var lineNumber: Int = 0) extends ControlX {
@@ -678,17 +682,25 @@ class SwitchX(var lineNumber: Int = 0) extends ControlX {
 
   def setLdefault(newLdefault: Block): Unit = setTarget(0, newLdefault)
 
-  def Lcases: IndexedSeq[Block] = _Lcases
+  def Lcases: IndexedSeq[Block] = ArraySeq.unsafeWrapArray(_Lcases)
 
   def setLcases(newLcases: IndexedSeq[Block]): Unit = {
-    for ((block, i) <- _Lcases.zipWithIndex)
-      if (block != null) block.removeUse(this, i + 1)
+    var i = 0
+    while (i < _Lcases.length) {
+      val block = _Lcases(i)
+      i += 1
+      if (block != null) block.removeUse(this, i)
+    }
 
     // don't allow sharing
     _Lcases = Array(newLcases: _*)
 
-    for ((block, i) <- _Lcases.zipWithIndex)
-      if (block != null) block.addUse(this, i + 1)
+    i = 0
+    while (i < _Lcases.length) {
+      val block = _Lcases(i)
+      i += 1
+      if (block != null) block.addUse(this, i)
+    }
   }
 
   override def targetArity(): Int = 1 + _Lcases.length

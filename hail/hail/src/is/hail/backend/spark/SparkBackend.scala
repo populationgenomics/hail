@@ -4,12 +4,12 @@ import is.hail.annotations._
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
 import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits._
 import is.hail.expr.Validate
 import is.hail.expr.ir._
 import is.hail.expr.ir.analyses.SemanticHash
 import is.hail.expr.ir.lowering._
 import is.hail.io.{BufferSpec, TypedCodecSpec}
-import is.hail.io.fs._
 import is.hail.rvd.RVD
 import is.hail.types._
 import is.hail.types.physical.{PStruct, PTuple}
@@ -254,13 +254,13 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
             dep <- rvdDep.deps
           } yield new AnonymousDependency(dep.asInstanceOf[RVDDependency].rvd.crdd.rdd)
 
+        val globalsBc = sc.broadcast(globals)
+        val fsBc = ctx.fsBc
+
         val rdd: RDD[Array[Byte]] =
           new RDD[Array[Byte]](sc, sparkDeps) {
 
             case class RDDPartition(data: Array[Byte], override val index: Int) extends Partition
-
-            val fsConfig: SerializableHadoopConfiguration =
-              ctx.fs.getConfiguration().asInstanceOf[SerializableHadoopConfiguration]
 
             override protected val getPartitions: Array[Partition] =
               Array.tabulate(contexts.length)(index => RDDPartition(contexts(index), index))
@@ -269,8 +269,8 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
               : Iterator[Array[Byte]] = {
               val htc = SparkTaskContext.get()
               htc.getRegionPool().scopedRegion { r =>
-                val g = f(unsafeHailClassLoaderForSparkWorkers, new HadoopFS(fsConfig), htc, r)
-                Iterator.single(g(globals, partition.asInstanceOf[RDDPartition].data))
+                val g = f(unsafeHailClassLoaderForSparkWorkers, fsBc.value, htc, r)
+                Iterator.single(g(globalsBc.value, partition.asInstanceOf[RDDPartition].data))
               }
             }
           }
@@ -278,7 +278,7 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
         val todo: IndexedSeq[Int] =
           partitions.getOrElse(contexts.indices)
 
-        val buffer = ArraySeq.newBuilder[(Array[Byte], Int)]
+        val buffer = ArraySeq.newSortedByBuilder[(Array[Byte], Int)](_._2)
         buffer.sizeHint(todo.length)
 
         var failure: Option[Throwable] =
@@ -304,11 +304,13 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
           case e: ExecutionException => failure = failure.orElse(Some(e.getCause))
           case _: InterruptedException =>
             sc.cancelJobGroup(stageIdentifier)
-            Thread.currentThread().interrupt()
             throw new CancellationException()
-        } finally sc.clearJobGroup()
+        } finally {
+          sc.clearJobGroup()
+          globalsBc.destroy()
+        }
 
-        (failure, buffer.result().sortBy(_._2))
+        (failure, buffer.result())
       }
     }
 
@@ -405,7 +407,7 @@ class SparkBackend(val spark: SparkSession) extends Backend with Logging {
       val f = rowType.fields(i)
       val fo = f.typ.ordering(ctx.stateManager)
       if (so == Ascending) fo else fo.reverse
-    }.toArray
+    }
 
     val ord: Ordering[Annotation] = ExtendedOrdering.rowOrdering(sortColIndexOrd).toOrdering
 

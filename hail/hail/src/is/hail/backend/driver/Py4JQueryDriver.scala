@@ -5,6 +5,7 @@ import is.hail.asm4s.HailClassLoader
 import is.hail.backend._
 import is.hail.backend.spark.SparkBackend
 import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.{JSONAnnotationImpex, SparkAnnotationImpex}
 import is.hail.expr.ir._
@@ -55,7 +56,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
   private[this] var localTmpdir: String = _
 
   private[this] var tmpFileManager = new OwningTempFileManager(
-    newFs(CloudStorageFSConfig.fromFlagsAndEnv(None, flags))
+    newFs(CloudStorageConfig.readEnv(None))
   )
 
   def pyFs: FS =
@@ -97,7 +98,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
     synchronized {
       tmpFileManager.close()
 
-      val cloudfsConf = CloudStorageFSConfig.fromFlagsAndEnv(None, flags)
+      val cloudfsConf = CloudStorageConfig.readEnv(None)
 
       val rpConfig: Option[RequesterPaysConfig] =
         (
@@ -115,7 +116,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
         cloudfsConf.copy(
           google = (cloudfsConf.google, rpConfig) match {
             case (Some(gconf), _) => Some(gconf.copy(requester_pays_config = rpConfig))
-            case (None, Some(_)) => Some(GoogleStorageFSConfig(None, rpConfig))
+            case (None, Some(_)) => Some(GoogleStorageConfig(None, rpConfig))
             case _ => None
           }
         )
@@ -189,9 +190,9 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
       IRFunctionRegistry.registerIR(
         ctx,
         name,
-        typeParamStrs.asScala.toArray,
-        argNameStrs.asScala.toArray,
-        argTypeStrs.asScala.toArray,
+        typeParamStrs.asScala.to(ArraySeq),
+        argNameStrs.asScala.to(ArraySeq),
+        argTypeStrs.asScala.to(ArraySeq),
         returnType,
         bodyStr,
       ): Unit
@@ -211,7 +212,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
 
   def pyFromDF(df: DataFrame, jKey: java.util.List[String]): (Int, String) =
     withExecuteContext(selfContainedExecution = false) { ctx =>
-      val key = jKey.asScala.toArray.toFastSeq
+      val key = jKey.asScala.toFastSeq
       val signature =
         SparkAnnotationImpex.importType(df.schema).setRequired(true).asInstanceOf[PStruct]
       val tir = TableLiteral(
@@ -354,7 +355,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
       }
     }
 
-  private[this] def newFs(cloudfsConfig: CloudStorageFSConfig): FS =
+  private[this] def newFs(cloudfsConfig: CloudStorageConfig): FS =
     backend match {
       case s: SparkBackend =>
         val conf = new Configuration(s.sc.hadoopConfiguration)
