@@ -58,7 +58,9 @@ object oauth2 {
   case class GoogleCloudCredentials(value: GoogleCredentials) extends CloudCredentials {
     override def accessToken: String = {
       value.refreshIfExpired()
-      value.getAccessToken.getTokenValue
+      val token = value.getAccessToken.getTokenValue
+      assert(token != null && token.nonEmpty)
+      token
     }
 
     override def scoped(scopes: Array[String]): GoogleCloudCredentials =
