@@ -262,7 +262,7 @@ class SourceCopier:
                             assert written == len(b)
                             source_report.finish_bytes(written)
                             n -= len(b)
-        except asyncio.TimeoutError as e:
+        except asyncio.TimeoutError:
             source_report.timeout()
             # This is an internal transient error, so ignore return_exceptions and always retry
             raise
