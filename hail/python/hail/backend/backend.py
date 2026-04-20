@@ -3,7 +3,7 @@ import logging
 import os
 import warnings
 import zipfile
-from dataclasses import astuple, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from typing import AbstractSet, Any, ClassVar, Dict, List, Mapping, Optional, Set, Tuple, TypeVar, Union
 
@@ -50,10 +50,7 @@ Error summary: {short_message}""",
 class LocalJarInfo:
     dev: bool
     hail_jar: str
-    extra_classpath: List[str]
-
-    def __iter__(self):
-        return iter(astuple(self))
+    extra_classpath: list[str]
 
 
 def local_jar_information() -> LocalJarInfo:
@@ -63,7 +60,7 @@ def local_jar_information() -> LocalJarInfo:
 
     if (hail_jar := __resource('backend/hail.jar')).is_file():
         warnings.warn('!!! THIS IS A DEVELOPMENT VERSION OF HAIL !!!')
-        return LocalJarInfo(True, str(hail_jar), [__resource_str('backend/extra_classpath')])
+        return LocalJarInfo(True, str(hail_jar), __resource_str('backend/extra_classpath').split(':'))
 
     if (hail_all_spark_jar := __resource('backend/hail-all-spark.jar')).is_file():
         return LocalJarInfo(False, str(hail_all_spark_jar), [])
@@ -288,11 +285,12 @@ class Backend(abc.ABC):
     def initialize_references(self):
         from hail.genetics.reference_genome import ReferenceGenome
 
-        _, jar_path, *_ = local_jar_information()
-        for path_in_jar in BUILTIN_REFERENCE_RESOURCE_PATHS.values():
-            rg_config = orjson.loads(zipfile.ZipFile(jar_path).open(path_in_jar).read())
-            rg = ReferenceGenome._from_config(rg_config, _builtin=True)
-            self._references[rg.name] = rg
+        with zipfile.ZipFile(local_jar_information().hail_jar) as hail_jar:
+            for path_in_jar in BUILTIN_REFERENCE_RESOURCE_PATHS.values():
+                with hail_jar.open(path_in_jar) as f:
+                    rg_config = orjson.loads(f.read())
+                    rg = ReferenceGenome._from_config(rg_config, _builtin=True)
+                    self._references[rg.name] = rg
 
     def remove_reference(self, name):
         del self._references[name]
