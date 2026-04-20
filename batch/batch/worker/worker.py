@@ -325,7 +325,9 @@ class NetworkAllocator:
         for subnet_index in range(N_PUBLIC_INTERFACES):
             public = NetworkNamespace(subnet_index, private=False, internet_interface=self.internet_interface)
             await public.init()
-            log.info(f'ipallocdebug: Adding public network: {public.network_ns_name} (subnet index: {subnet_index} job ip: {public.job_ip}, host ip {public.host_ip}) to list')
+            log.info(
+                f'ipallocdebug: Adding public network: {public.network_ns_name} (subnet index: {subnet_index} job ip: {public.job_ip}, host ip {public.host_ip}) to list'
+            )
             self.public_networks.put_nowait(public)
 
         N_PRIVATE_INTERFACES = min(255, N_SLOTS)
@@ -334,17 +336,23 @@ class NetworkAllocator:
             private = NetworkNamespace(subnet_index, private=True, internet_interface=self.internet_interface)
 
             await private.init()
-            log.info(f'ipallocdebug: Adding private network: {private.network_ns_name} (subnet index: {subnet_index} job ip: {private.job_ip}, host ip {private.host_ip}) to list')
+            log.info(
+                f'ipallocdebug: Adding private network: {private.network_ns_name} (subnet index: {subnet_index} job ip: {private.job_ip}, host ip {private.host_ip}) to list'
+            )
             self.private_networks.put_nowait(private)
 
     async def allocate_private(self) -> NetworkNamespace:
         network = await self.private_networks.get()
-        log.info(f'ipallocdebug: Allocating private network {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})')
+        log.info(
+            f'ipallocdebug: Allocating private network {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})'
+        )
         return network
 
     async def allocate_public(self) -> NetworkNamespace:
         network = await self.public_networks.get()
-        log.info(f'ipallocdebug: Allocating public network: {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})')
+        log.info(
+            f'ipallocdebug: Allocating public network: {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})'
+        )
         return network
 
     def free(self, netns: NetworkNamespace):
@@ -352,7 +360,9 @@ class NetworkAllocator:
 
     async def _free(self, netns: NetworkNamespace):
         network_type = 'private' if netns.private else 'public'
-        log.info(f'ipallocdebug: Freeing {network_type} network namespace: {netns.network_ns_name} (subnet index: {netns.subnet_index} job ip: {netns.job_ip}, host ip {netns.host_ip}')
+        log.info(
+            f'ipallocdebug: Freeing {network_type} network namespace: {netns.network_ns_name} (subnet index: {netns.subnet_index} job ip: {netns.job_ip}, host ip {netns.host_ip}'
+        )
         await netns.cleanup()
         if netns.private:
             self.private_networks.put_nowait(netns)
@@ -1039,7 +1049,9 @@ class Container:
                 )
                 await self.metadata_app_runner.setup()
                 network_type = 'private' if self.netns.private else 'public'
-                log.info(f'ipallocdebug: Starting metadata server on {network_type} {self.netns.network_ns_name} {self.netns.host_ip}')
+                log.info(
+                    f'ipallocdebug: Starting metadata server on {network_type} {self.netns.network_ns_name} {self.netns.host_ip}'
+                )
                 site = web.TCPSite(self.metadata_app_runner, self.netns.host_ip, 5555)
                 await site.start()
         except asyncio.TimeoutError:

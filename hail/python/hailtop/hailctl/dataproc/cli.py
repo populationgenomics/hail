@@ -191,9 +191,7 @@ def start(
     debug_mode: Ann[
         bool, Opt(help='Enable debug features on created cluster (heap dump on out-of-memory error)')
     ] = False,
-    public_ip_address: Ann[
-        bool, Opt(help='Deprecated -- Hail 0.2.133 always enables public IP address.')
-    ] = False,
+    public_ip_address: Ann[bool, Opt(help='Deprecated -- Hail 0.2.133 always enables public IP address.')] = False,
 ):
     """
     Start a Dataproc cluster configured for Hail.

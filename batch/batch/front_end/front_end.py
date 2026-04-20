@@ -421,7 +421,9 @@ async def _query_job_group_jobs(
 @add_metadata_to_request
 async def get_completed_batches_ordered_by_completed_time(request, userdata):
     db = request.app['db']
-    where_args = [userdata['username'], ]
+    where_args = [
+        userdata['username'],
+    ]
     wheres = [
         'billing_project_users.`user` = %s',
         'billing_project_users.billing_project = batches.billing_project',
@@ -481,7 +483,10 @@ LIMIT %s;
     """
 
     records = [
-        batch async for batch in db.select_and_fetchall(sql, (ROOT_JOB_GROUP_ID, ROOT_JOB_GROUP_ID, *where_args, limit), query_name='get_completed_batches')
+        batch
+        async for batch in db.select_and_fetchall(
+            sql, (ROOT_JOB_GROUP_ID, ROOT_JOB_GROUP_ID, *where_args, limit), query_name='get_completed_batches'
+        )
     ]
     # this comes out as a timestamp (rather than a formed date)
     last_completed_timestamp = records[-1]['time_completed']
