@@ -2,7 +2,7 @@ name: Static Analysis and Unit Tests
 
 on:
   pull_request:
-#    branches: [main]
+    branches: [main]
 
 # Cancel in-progress runs for the same PR
 concurrency:
