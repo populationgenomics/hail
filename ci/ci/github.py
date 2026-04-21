@@ -870,7 +870,7 @@ class WatchedBranch(Code):
         for pr in new_prs.values():
             await pr._update_github(gh)
 
-    async def _update_deploy(self, batch_client, db: Database):
+    async def _update_deploy(self, batch_client, db: Database): # pylint: disable=unused-argument
         assert self.deployable
 
         if self.deploy_state:

@@ -315,7 +315,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
             limit = int(query_limit)
         except ValueError as e:
             raise web.HTTPBadRequest(reason=f'Bad value for "limit": {e}')
-    if not (0 < limit < 1e4):
+    if not 0 < limit < 1e4:
         raise web.HTTPBadRequest(reason=f'Limit must be between 1 and 10,000 (limit={limit})')
 
     if last_job_id is not None:
@@ -578,7 +578,7 @@ async def _api_get_job_group_jobs(request, batch_id: int, job_group_id: int, ver
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/resources')
 @billing_project_users_only()
 @add_metadata_to_request
-async def get_jobs_for_billing(request, userdata, batch_id):
+async def get_jobs_for_billing(request, userdata, batch_id): # pylint: disable=unused-argument
     """
     Get jobs for batch to check the amount of resources used.
     Takes a "last_job_id" and "limit" parameter that can be used to implement paging.

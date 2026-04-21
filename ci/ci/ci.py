@@ -746,7 +746,7 @@ async def prod_deploy(request, userdata):
     await watched_branch._start_deploy(db=app[AppKeys.DB], batch_client=app[AppKeys.BATCH_CLIENT], steps=steps)
 
     batch = watched_branch.deploy_batch
-    if not isinstance(batch, MergeFailureBatch):
+    if batch is not None and not isinstance(batch, MergeFailureBatch):
         url = deploy_config.external_url('ci', f'/batches/{batch.id}')
         return web.Response(text=f'{url}\n')
     else:
