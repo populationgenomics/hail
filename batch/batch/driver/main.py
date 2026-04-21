@@ -10,7 +10,7 @@ import warnings
 from collections import defaultdict, namedtuple
 from contextlib import AsyncExitStack
 from functools import wraps
-from typing import Any, Awaitable, Callable, Dict, NoReturn, Set, Tuple, reveal_type
+from typing import Any, Awaitable, Callable, Dict, NoReturn, Set, Tuple
 
 import aiohttp_session
 import dictdiffer
