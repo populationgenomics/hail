@@ -752,7 +752,8 @@ async def prod_deploy(request, userdata):
     else:
         message = traceback.format_exc()
         log.info('prod deploy failed: ' + message, exc_info=True)
-        raise web.HTTPBadRequest(text=f'starting prod deploy failed due to\n{message}') from batch.exception
+        cause = batch.exception if isinstance(batch, MergeFailureBatch) else None
+        raise web.HTTPBadRequest(text=f'starting prod deploy failed due to\n{message}') from cause
 
 
 @routes.post('/api/v1alpha/batch_callback')
