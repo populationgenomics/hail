@@ -24,7 +24,6 @@ from hailtop.utils import RETRY_FUNCTION_SCRIPT, check_shell, check_shell_output
 from .build import BuildConfiguration, Code
 from .constants import AUTHORIZED_USERS, COMPILER_TEAM, GITHUB_CLONE_URL, GITHUB_STATUS_CONTEXT, SERVICES_TEAM
 from .environment import DEPLOY_STEPS
-from .globals import is_test_deployment
 from .utils import GithubStatus, add_deployed_services, github_status
 
 repos_lock = asyncio.Lock()
