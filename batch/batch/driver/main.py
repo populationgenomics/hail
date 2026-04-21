@@ -674,7 +674,7 @@ async def pool_config_update(request: web.Request, _) -> NoReturn:
             f'a non-negative integer less than or equal to max_live_instances {max_live_instances}',
         )
 
-        label = post['label'] # pyright: ignore[reportArgumentType] Type of "post['label']" is "str | bytes | FileField"
+        label = post['label']  # pyright: ignore[reportArgumentType] Type of "post['label']" is "str | bytes | FileField"
 
         possible_worker_cores = []
         for cores in possible_cores_from_worker_type(pool.cloud, worker_type):
@@ -771,7 +771,7 @@ async def pool_config_update(request: web.Request, _) -> NoReturn:
             worker_max_idle_time_secs=worker_max_idle_time_secs,
             standing_worker_max_idle_time_secs=standing_worker_max_idle_time_secs,
             job_queue_scheduling_window_secs=job_queue_scheduling_window_secs,
-            label=label, # pyright: ignore[reportArgumentType]
+            label=label,  # pyright: ignore[reportArgumentType]
         )
 
         current_client_pool_config = json.loads(str(post['_pool_config_json']))
