@@ -315,7 +315,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
             limit = int(query_limit)
         except ValueError as e:
             raise web.HTTPBadRequest(reason=f'Bad value for "limit": {e}')
-    if not 0 < limit < 1e4:
+    if not (0 < limit < 1e4):  # pylint: disable=superfluous-parens
         raise web.HTTPBadRequest(reason=f'Limit must be between 1 and 10,000 (limit={limit})')
 
     if last_job_id is not None:
