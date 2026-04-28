@@ -191,12 +191,18 @@ def start(
     debug_mode: Ann[
         bool, Opt(help='Enable debug features on created cluster (heap dump on out-of-memory error)')
     ] = False,
+    public_ip_address: Ann[
+        bool, Opt(help='Deprecated -- Hail 0.2.133 always enables public IP address.')
+    ] = False,
 ):
     """
     Start a Dataproc cluster configured for Hail.
     """
     assert num_secondary_workers is not None
     assert num_workers is not None
+
+    if public_ip_address:
+        print('Info: public_ip_address is unnecessary, cpg-utils should omit it', file=sys.stderr)
 
     dataproc_start(
         name,
