@@ -208,7 +208,7 @@ CASE
   WHEN service.id = "6F81-5844-456A" THEN "unknown"
   ELSE NULL
 END AS source
-FROM `broad-ctsa.hail_billing.gcp_billing_export_v1_0055E5_9CA197_B9B894`
+FROM `hail-vdc.hail_vdc_billing.gcp_billing_export_v1_00E7E5_D339BE_C54ACE`
 WHERE DATE(_PARTITIONTIME) >= "{start_str}" AND DATE(_PARTITIONTIME) <= "{end_str}" AND project.name = "{PROJECT}" AND invoice.month = "{invoice_month}"
 GROUP BY service_id, service_description, sku_id, sku_description, source;
 """
@@ -280,7 +280,7 @@ async def monitor_disks(app):
     disk_counts = defaultdict(list)
 
     for zone in app[AppKeys.ZONES]:
-        async for disk in await compute_client.list(f'/zones/{zone}/disks', params={'filter': '(labels.batch = 1)'}):
+        async for disk in compute_client.list(f'/zones/{zone}/disks', params={'filter': '(labels.batch = 1)'}):
             namespace = disk['labels']['namespace']
             size_gb = int(disk['sizeGb'])
 
@@ -316,7 +316,7 @@ async def monitor_instances(app):
     instance_counts: Dict[InstanceLabels, int] = defaultdict(int)
 
     for zone in app[AppKeys.ZONES]:
-        async for instance in await compute_client.list(
+        async for instance in compute_client.list(
             f'/zones/{zone}/instances', params={'filter': '(labels.role = batch2-agent)'}
         ):
             instance_labels = InstanceLabels(
