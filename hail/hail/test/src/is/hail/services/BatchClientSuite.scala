@@ -1,7 +1,8 @@
 package is.hail.services
 
-import is.hail.{services, HAIL_REVISION}
+import is.hail.{services, Revision}
 import is.hail.backend.service.Main
+import is.hail.collection.FastSeq
 import is.hail.services.JobGroupStates.Failure
 import is.hail.services.oauth2.CloudCredentials
 import is.hail.utils._
@@ -89,7 +90,8 @@ class BatchClientSuite extends TestNGSuite {
     )
     val result = client.waitForJobGroup(batchId, jobGroupId)
     assert(result.state == Failure)
-    assert(result.n_cancelled == 1)
+    assert(result.n_jobs == 2)
+    assert(result.n_failed == 1)
   }
 
   @Test
@@ -122,6 +124,7 @@ class BatchClientSuite extends TestNGSuite {
       forAll(client.getJobGroupJobs(batchId, jobGroupId, Some(state))) { jobs =>
         assert(jobs.length == 1)
         assert(jobs(0).state == state)
+        assert(jobs.head.end_time.isDefined)
       }
     }
   }
@@ -165,7 +168,7 @@ class BatchClientSuite extends TestNGSuite {
             always_run = false,
             process = JvmJob(
               command = Array(Main.TEST),
-              spec = GitRevision(HAIL_REVISION),
+              spec = GitRevision(Revision),
               profile = false,
             ),
           )

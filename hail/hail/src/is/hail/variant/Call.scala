@@ -1,7 +1,10 @@
 package is.hail.variant
 
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.Parser
 import is.hail.utils._
+import is.hail.utils.implicits.toRichBoolean
 
 import scala.annotation.switch
 import scala.jdk.CollectionConverters._
@@ -135,10 +138,10 @@ object Call extends Serializable {
       alleleRepr(c)
   }
 
-  def alleles(c: Call): Array[Int] = {
+  def alleles(c: Call): IndexedSeq[Int] = {
     (ploidy(c): @switch) match {
-      case 0 => Array.empty[Int]
-      case 1 => Array(alleleByIndex(c, 0))
+      case 0 => ArraySeq()
+      case 1 => ArraySeq(alleleByIndex(c, 0))
       case 2 => AllelePair.alleleIndices(allelePair(c))
       case _ => throw new UnsupportedOperationException
     }
@@ -444,9 +447,9 @@ object Call extends Serializable {
     }
 
     new IndexedSeq[Int] with Serializable {
-      def length: Int = nAlleles
+      override def length: Int = nAlleles
 
-      def apply(idx: Int): Int = {
+      override def apply(idx: Int): Int = {
         if (idx < 0 || idx >= nAlleles)
           throw new ArrayIndexOutOfBoundsException(idx)
 

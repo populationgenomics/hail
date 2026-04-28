@@ -1,10 +1,9 @@
 package is.hail.types.virtual
 
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs.{I64, If}
 import is.hail.linalg.{BlockMatrix, MatrixSparsity}
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.utils.fatal
 
 import scala.collection.compat._
@@ -76,6 +75,27 @@ case class BlockMatrixType(
     val c = If(j.ceq(nColBlocks - 1), I64(nCols) - (j.toL * blockSize.toLong), blockSize.toLong)
     r -> c
   }
+
+  private[this] def getBlockDependencies(keep: IndexedSeq[IndexedSeq[Long]])
+    : IndexedSeq[IndexedSeq[Int]] =
+    keep.map(keeps =>
+      ArraySeq.range(
+        BlockMatrixType.getBlockIdx(keeps.head, blockSize),
+        BlockMatrixType.getBlockIdx(keeps.last, blockSize) + 1,
+      )
+    )
+
+  def rowBlockDependents(keepRows: IndexedSeq[IndexedSeq[Long]]): IndexedSeq[IndexedSeq[Int]] =
+    if (keepRows.isEmpty)
+      ArraySeq.tabulate(nRowBlocks)(i => ArraySeq(i))
+    else
+      getBlockDependencies(keepRows)
+
+  def colBlockDependents(keepCols: IndexedSeq[IndexedSeq[Long]]): IndexedSeq[IndexedSeq[Int]] =
+    if (keepCols.isEmpty)
+      ArraySeq.tabulate(nColBlocks)(i => ArraySeq(i))
+    else
+      getBlockDependencies(keepCols)
 
   override def pretty(sb: StringBuilder, indent: Int, compact: Boolean): Unit = {
     val space: String = if (compact) "" else " "

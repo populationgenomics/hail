@@ -4,8 +4,10 @@ import is.hail.{ExecStrategy, HailSuite}
 import is.hail.ExecStrategy.ExecStrategy
 import is.hail.annotations.{Region, SafeRow, ScalaToRegionValue}
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.agg.{CollectStateSig, PhysicalAggSig, TypedStateSig}
-import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.LoweringPipeline
 import is.hail.expr.ir.streams.{EmitStream, StreamUtils}
@@ -120,7 +122,7 @@ class EmitStreamSuite extends HailSuite {
         var _eltRegion: Region = _
         var eos: Boolean = _
 
-        def init(outerRegion: Region, eltRegion: Region): Unit = _eltRegion = eltRegion
+        override def init(outerRegion: Region, eltRegion: Region): Unit = _eltRegion = eltRegion
 
         override def next(): Long =
           if (eos || !it.hasNext) {
@@ -239,7 +241,7 @@ class EmitStreamSuite extends HailSuite {
       step <- 1 to 3
     }
       assert(
-        range(Row(start, stop, step)) == Array.range(start, stop, step).toFastSeq,
+        range(Row(start, stop, step)) == ArraySeq.range(start, stop, step),
         s"($start, $stop, $step)",
       )
     assert(range(Row(null, 10, 1)) == null)
@@ -662,13 +664,13 @@ class EmitStreamSuite extends HailSuite {
 
     def lElts(xs: (Int, String)*): IR =
       MakeStream(
-        xs.toArray.map { case (a, b) => MakeStruct(IndexedSeq("k" -> I32(a), "v" -> Str(b))) },
+        xs.toFastSeq.map { case (a, b) => MakeStruct(IndexedSeq("k" -> I32(a), "v" -> Str(b))) },
         TStream(lEltType),
       )
 
     def rElts(xs: ((Char, Any, Any, Char), String)*): IR =
       MakeStream(
-        xs.toArray.map {
+        xs.toFastSeq.map {
           case ((is, s, e, ie), v) =>
             val start = if (s == null) NA(TInt32) else I32(s.asInstanceOf[Int])
             val end = if (e == null) NA(TInt32) else I32(e.asInstanceOf[Int])

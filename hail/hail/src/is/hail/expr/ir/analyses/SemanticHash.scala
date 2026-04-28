@@ -8,7 +8,8 @@ import is.hail.io.fs.FS
 import is.hail.io.vcf.MatrixVCFReader
 import is.hail.methods._
 import is.hail.types.virtual._
-import is.hail.utils.{toRichBoolean, Logging, TreeTraversal}
+import is.hail.utils.{Logging, TreeTraversal}
+import is.hail.utils.implicits.toRichBoolean
 
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -109,12 +110,6 @@ case object SemanticHash extends Logging {
       case ApplyIR(fname, tyArgs, _, _, _) =>
         buffer ++= fname.getBytes
         tyArgs.foreach(buffer ++= EncodeTypename(_))
-
-      case ApplySeeded(fname, _, _, staticUID, retTy) =>
-        buffer ++=
-          fname.getBytes ++=
-          Bytes.fromLong(staticUID) ++=
-          EncodeTypename(retTy): Unit
 
       case ApplySpecial(fname, tyArgs, _, retTy, _) =>
         buffer ++= fname.getBytes
@@ -219,6 +214,9 @@ case object SemanticHash extends Logging {
       case RelationalRef(name, _) =>
         buffer ++= name.str.getBytes
 
+      case RNGSplitStatic(_, staticUid) =>
+        buffer ++= Bytes.fromLong(staticUid)
+
       case SelectFields(struct, names) =>
         val getFieldIndex = struct.typ.asInstanceOf[TStruct].fieldIdx
         names.map(getFieldIndex).foreach(buffer ++= Bytes.fromInt(_))
@@ -226,9 +224,10 @@ case object SemanticHash extends Logging {
       case StreamZip(_, _, _, behaviour, _) =>
         buffer ++= Bytes.fromInt(behaviour.id)
 
-      case TableKeyBy(table, keys, _) =>
+      case TableKeyBy(table, keys, _, nPartitions) =>
         val getFieldIndex = table.typ.rowType.fieldIdx
         keys.map(getFieldIndex).foreach(buffer ++= Bytes.fromInt(_))
+        nPartitions.foreach(buffer ++= Bytes.fromInt(_))
 
       case TableKeyByAndAggregate(_, _, _, nPartitions, bufferSize) =>
         nPartitions.foreach {
@@ -306,7 +305,6 @@ case object SemanticHash extends Logging {
           _: InsertFields |
           _: IsNA |
           _: Block |
-          _: LiftMeOut |
           _: MakeArray |
           _: MakeNDArray |
           _: MakeStream |
@@ -357,8 +355,7 @@ case object SemanticHash extends Logging {
           _: ToArray |
           _: ToDict |
           _: ToSet |
-          _: ToStream |
-          _: Trap =>
+          _: ToStream =>
         ()
 
       // Discrete values

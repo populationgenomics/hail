@@ -3,20 +3,21 @@ package is.hail.io.index
 import is.hail.annotations._
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.{ExecuteContext, HailStateManager}
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIndexedSeq
 import is.hail.io._
 import is.hail.io.fs.FS
 import is.hail.rvd.{AbstractIndexSpec, PartitionBoundOrdering}
 import is.hail.types.physical.PStruct
 import is.hail.types.virtual.{TStruct, Type, TypeSerializer}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import java.io.InputStream
 import java.util
 import java.util.Map.Entry
 
 import org.apache.spark.sql.Row
-import org.json4s.Formats
+import org.json4s.{DefaultFormats, Formats}
 import org.json4s.jackson.JsonMethods
 
 object IndexReaderBuilder {
@@ -53,7 +54,7 @@ object IndexReader {
       JsonMethods.parse(in)
         .removeField { case (f, _) => f == "keyType" || f == "annotationType" }
     }
-    implicit val formats: Formats = defaultJSONFormats
+    implicit val formats: Formats = DefaultFormats
     jv.extract[IndexMetadataUntypedJSON]
   }
 
@@ -64,7 +65,7 @@ object IndexReader {
 
   def readTypes(fs: FS, path: String): (Type, Type) = {
     val jv = using(fs.open(path + "/metadata.json.gz"))(in => JsonMethods.parse(in))
-    implicit val formats: Formats = defaultJSONFormats + new TypeSerializer
+    implicit val formats: Formats = DefaultFormats + new TypeSerializer
     val metadata = jv.extract[IndexMetadata]
     metadata.keyType -> metadata.annotationType
   }
@@ -250,7 +251,7 @@ class IndexReader(
     var localPos = 0
     var leafNode: LeafNode = _
 
-    def next(): LeafChild = {
+    override def next(): LeafChild = {
       assert(hasNext)
 
       if (leafNode == null || localPos >= leafNode.children.length) {
@@ -265,7 +266,7 @@ class IndexReader(
       child
     }
 
-    def hasNext: Boolean = pos < end
+    override def hasNext: Boolean = pos < end
 
     def seek(key: Annotation): Unit = {
       val newPos = lowerBound(key)
@@ -281,7 +282,7 @@ class IndexReader(
   def iterateUntil(key: Annotation): Iterator[LeafChild] =
     iterator(0, lowerBound(key))
 
-  def close(): Unit = {
+  override def close(): Unit = {
     leafDecoder.close()
     internalDecoder.close()
     logger.info(s"Index reader cache queries: ${cacheHits + cacheMisses}")

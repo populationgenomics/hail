@@ -2,7 +2,9 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
-import is.hail.expr.ir.{IntArrayBuilder, MatrixValue, TableValue}
+import is.hail.collection.IntArrayBuilder
+import is.hail.collection.implicits.toRichIterator
+import is.hail.expr.ir.{MatrixValue, TableValue}
 import is.hail.expr.ir.functions.MatrixToTableFunction
 import is.hail.stats._
 import is.hail.types.physical.PStruct
@@ -39,9 +41,9 @@ case class LinearRegressionRowsSingle(
     )
   }
 
-  def preservesPartitionCounts: Boolean = true
+  override def preservesPartitionCounts: Boolean = true
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
     val (y, cov, completeColIdx) =
       RegressionUtils.getPhenosCovCompleteSamples(mv, yFields.toArray, covFields.toArray)
 
@@ -86,13 +88,13 @@ case class LinearRegressionRowsSingle(
     val tableType = typ(mv.typ)
     val rvdType = tableType.canonicalRVDType
 
-    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(fullRowType.fieldIdx(_)).toArray
+    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(fullRowType.fieldIdx(_))
     val nDependentVariables = yFields.length
 
     val sm = ctx.stateManager
     val newRVD = mv.rvd.mapPartitionsWithContext(
       rvdType
-    ) { (consumerCtx, it) =>
+    ) { (hcl, consumerCtx, it) =>
       val producerCtx = consumerCtx.freshContext()
       val rvb = new RegionValueBuilder(sm)
 
@@ -106,7 +108,7 @@ case class LinearRegressionRowsSingle(
         i += 1
       }
 
-      it(producerCtx).trueGroupedIterator(rowBlockSize)
+      it(hcl, producerCtx).trueGroupedIterator(rowBlockSize)
         .flatMap { git =>
           var i = 0
           while (git.hasNext) {
@@ -219,9 +221,9 @@ case class LinearRegressionRowsChained(
     )
   }
 
-  def preservesPartitionCounts: Boolean = true
+  override def preservesPartitionCounts: Boolean = true
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
 
     val localData = yFields.map(y =>
       RegressionUtils.getPhenosCovCompleteSamples(mv, y.toArray, covFields.toArray)
@@ -266,12 +268,12 @@ case class LinearRegressionRowsChained(
 
     val tableType = typ(mv.typ)
     val rvdType = tableType.canonicalRVDType
-    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(fullRowType.fieldIdx(_)).toArray
+    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(fullRowType.fieldIdx(_))
 
     val sm = ctx.stateManager
     val newRVD = mv.rvd.mapPartitionsWithContext(
       rvdType
-    ) { (consumerCtx, it) =>
+    ) { (hcl, consumerCtx, it) =>
       val producerCtx = consumerCtx.freshContext()
       val rvb = new RegionValueBuilder(sm)
 
@@ -286,7 +288,7 @@ case class LinearRegressionRowsChained(
         i += 1
       }
 
-      it(producerCtx).trueGroupedIterator(rowBlockSize)
+      it(hcl, producerCtx).trueGroupedIterator(rowBlockSize)
         .flatMap { git =>
           var i = 0
           while (git.hasNext) {

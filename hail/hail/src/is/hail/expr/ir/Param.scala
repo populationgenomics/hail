@@ -1,22 +1,24 @@
 package is.hail.expr.ir
 
 import is.hail.asm4s.{BooleanInfo, TypeInfo, Value}
+import is.hail.collection.FastSeq
 import is.hail.types.physical.stypes.{EmitType, SType, SValue, SingleCodeType}
 import is.hail.types.virtual.Type
-import is.hail.utils.FastSeq
 
 sealed trait ParamType {
-  def nCodes: Int
+  def codeTypes: IndexedSeq[TypeInfo[_]]
+
+  def nCodes: Int = codeTypes.length
 }
 
 case class CodeParamType(ti: TypeInfo[_]) extends ParamType {
-  def nCodes: Int = 1
+  override def codeTypes: IndexedSeq[TypeInfo[_]] = FastSeq(ti)
 
   override def toString: String = s"CodeParam($ti)"
 }
 
 case class SCodeParamType(st: SType) extends ParamType {
-  def nCodes: Int = st.nSettables
+  override def codeTypes: IndexedSeq[TypeInfo[_]] = st.settableTupleTypes()
 
   override def toString: String = s"SCodeParam($st, $nCodes)"
 }
@@ -26,7 +28,7 @@ trait EmitParamType extends ParamType {
 
   def virtualType: Type
 
-  final lazy val valueTupleTypes: IndexedSeq[TypeInfo[_]] = {
+  final override lazy val codeTypes: IndexedSeq[TypeInfo[_]] = {
     val ts = definedValueTupleTypes()
     if (required)
       ts
@@ -34,25 +36,23 @@ trait EmitParamType extends ParamType {
       ts :+ BooleanInfo
   }
 
-  final def nCodes: Int = valueTupleTypes.length
-
   protected def definedValueTupleTypes(): IndexedSeq[TypeInfo[_]]
 }
 
 case class SingleCodeEmitParamType(required: Boolean, sct: SingleCodeType) extends EmitParamType {
-  def virtualType: Type = sct.virtualType
+  override def virtualType: Type = sct.virtualType
 
-  def definedValueTupleTypes(): IndexedSeq[TypeInfo[_]] = FastSeq(sct.ti)
+  override def definedValueTupleTypes(): IndexedSeq[TypeInfo[_]] = FastSeq(sct.ti)
 
   override def toString: String = s"SingleCodeEmitParamType($required, $sct)"
 }
 
 case class SCodeEmitParamType(et: EmitType) extends EmitParamType {
-  def required: Boolean = et.required
+  override def required: Boolean = et.required
 
-  def virtualType: Type = et.st.virtualType
+  override def virtualType: Type = et.st.virtualType
 
-  def definedValueTupleTypes(): IndexedSeq[TypeInfo[_]] = et.st.settableTupleTypes()
+  override def definedValueTupleTypes(): IndexedSeq[TypeInfo[_]] = et.st.settableTupleTypes()
 }
 
 sealed trait Param

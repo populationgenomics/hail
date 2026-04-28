@@ -3,6 +3,7 @@ package is.hail.expr.ir.agg
 import is.hail.annotations.{Region, RegionValueBuilder, UnsafeRow}
 import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailStateManager}
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, IEmitCode}
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.EmitType
@@ -110,8 +111,8 @@ class LinearRegressionAggregator() extends StagedAggregator {
   override def resultEmitType: EmitType =
     EmitType(SBaseStructPointer(LinearRegressionAggregator.resultPType), true)
 
-  val initOpTypes: Seq[Type] = Array(TInt32, TInt32)
-  val seqOpTypes: Seq[Type] = Array(TFloat64, TArray(TFloat64))
+  val initOpTypes: IndexedSeq[Type] = ArraySeq(TInt32, TInt32)
+  val seqOpTypes: IndexedSeq[Type] = ArraySeq(TFloat64, TArray(TFloat64))
 
   def initOpF(state: State)(cb: EmitCodeBuilder, kc: Code[Int], k0c: Code[Int]): Unit = {
     val k = cb.newLocal[Int]("lra_init_k", kc)
@@ -134,7 +135,7 @@ class LinearRegressionAggregator() extends StagedAggregator {
     cb += Region.storeInt(stateType.loadField(state.off, 2), k0)
   }
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     val Array(kt, k0t) = init
     kt.toI(cb)
       .consume(
@@ -254,7 +255,7 @@ class LinearRegressionAggregator() extends StagedAggregator {
     )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(y, x) = seq
     y.toI(cb)
       .consume(
@@ -321,7 +322,7 @@ class LinearRegressionAggregator() extends StagedAggregator {
     )
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -330,7 +331,8 @@ class LinearRegressionAggregator() extends StagedAggregator {
   ): Unit =
     combOpF(state, other)(cb)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode = {
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode = {
     val resAddr = cb.newLocal[Long](
       "linear_regression_agg_res",
       Code.invokeScalaObject4[Region, Long, Long, Int, Long](

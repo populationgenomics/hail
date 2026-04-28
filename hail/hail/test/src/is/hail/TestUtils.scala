@@ -1,14 +1,15 @@
 package is.hail
 
 import is.hail.annotations.{Region, RegionPool, RegionValueBuilder, SafeRow}
-import is.hail.asm4s._
+import is.hail.asm4s.{implicits => _, _}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{
-  freshName, streamAggIR, BindingEnv, Env, IR, Interpret, MapIR, MatrixIR, MatrixRead, Name,
-  SingleCodeEmitParamType, Subst,
+  freshName, streamAggIR, BindingEnv, Compile, Env, IR, Interpret, MapIR, MatrixIR, MatrixRead,
+  Name, SingleCodeEmitParamType, Subst,
 }
 import is.hail.expr.ir.Optimize.Flags.Optimize
-import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs.{GetField, GetTupleElement, In, MakeTuple, Ref, ToStream}
 import is.hail.expr.ir.lowering.LowererUnsupportedOperation
 import is.hail.io.vcf.MatrixVCFReader
@@ -16,7 +17,6 @@ import is.hail.types.physical.{PBaseStruct, PCanonicalArray, PType}
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant._
 
 import java.io.PrintWriter
@@ -354,7 +354,7 @@ trait TestUtils extends Assertions {
 
     val reader = MatrixVCFReader(
       ctx,
-      Array(file),
+      ArraySeq(file),
       callFields,
       entryFloatType,
       headerFile,

@@ -4,8 +4,8 @@ import is.hail.annotations.{BroadcastRow, Region, RegionValue}
 import is.hail.asm4s._
 import is.hail.backend.{BroadcastValue, ExecuteContext}
 import is.hail.backend.spark.{AnonymousDependency, SparkTaskContext}
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
-import is.hail.expr.ir.compile.Compile
 import is.hail.expr.ir.defs.{
   GetField, In, Let, MakeStruct, ReadPartition, Ref, StreamRange, ToArray,
 }
@@ -17,7 +17,6 @@ import is.hail.types.{RTable, VirtualTypeWithReq}
 import is.hail.types.physical.{PArray, PStruct}
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual.{TStruct, TableType}
-import is.hail.utils.FastSeq
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 
@@ -67,9 +66,9 @@ case class RVDTableReader(rvd: RVD, globals: IR, rt: RTable) extends TableReader
       ctx,
       requestedType,
       globRow,
-      rvd.mapPartitionsWithIndex(RVDType(newRowType, requestedType.key)) { case (_, ctx, it) =>
+      rvd.mapPartitionsWithIndex(RVDType(newRowType, requestedType.key)) { case (_, hcl, ctx, it) =>
         val partF = rowF(
-          theHailClassLoaderForSparkWorkers,
+          hcl,
           fsBc.value,
           SparkTaskContext.get(),
           ctx.partitionRegion,
@@ -81,15 +80,16 @@ case class RVDTableReader(rvd: RVD, globals: IR, rt: RTable) extends TableReader
 
   override def isDistinctlyKeyed: Boolean = false
 
-  def rowRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
+  override def rowRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
     VirtualTypeWithReq.subset(requestedType.rowType, rt.rowType)
 
-  def globalRequiredness(ctx: ExecuteContext, requestedType: TableType): VirtualTypeWithReq =
+  override def globalRequiredness(ctx: ExecuteContext, requestedType: TableType)
+    : VirtualTypeWithReq =
     VirtualTypeWithReq.subset(requestedType.globalType, rt.globalType)
 
   override def toJValue: JValue = JString("RVDTableReader")
 
-  def renderShort(): String = "RVDTableReader"
+  override def renderShort(): String = "RVDTableReader"
 
   override def defaultRender(): String = "RVDTableReader"
 
@@ -204,19 +204,19 @@ object TableStageToRVD {
     val rdd = new TableStageToRDD(fsBc, sparkContext, encodedContexts, sparkDeps)
 
     val crdd = ContextRDD.weaken(rdd)
-      .cflatMap { case (rvdContext, (encodedContext, _)) =>
+      .cflatMap { case (hcl, rvdContext, (encodedContext, _)) =>
         val decodedContext = makeContextDec(
           new ByteArrayInputStream(encodedContext),
-          theHailClassLoaderForSparkWorkers,
+          hcl,
         )
           .readRegionValue(rvdContext.partitionRegion)
         val decodedBroadcastVals = makeBcDec(
           new ByteArrayInputStream(encodedBcVals.value),
-          theHailClassLoaderForSparkWorkers,
+          hcl,
         )
           .readRegionValue(rvdContext.partitionRegion)
         makeIterator(
-          theHailClassLoaderForSparkWorkers,
+          hcl,
           fsBc.value,
           SparkTaskContext.get(),
           rvdContext,

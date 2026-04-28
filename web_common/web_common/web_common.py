@@ -10,6 +10,7 @@ import sass
 from aiohttp import web
 
 from gear import UserData, new_csrf_token
+from gear.cloud_config import get_global_config
 from hailtop.config import get_deploy_config
 
 deploy_config = get_deploy_config()
@@ -60,6 +61,12 @@ def set_message(session, text, type):
 
 
 def base_context(session, userdata, service):
+    try:
+        global_config = get_global_config()
+        support_email = global_config.get('support_email', '')
+    except (FileNotFoundError, OSError):
+        # Fallback to empty if global config is not available (e.g., local development)
+        support_email = ''
     context = {
         'base_path': deploy_config.base_path(service),
         'base_url': deploy_config.external_url(service, ''),
@@ -70,6 +77,8 @@ def base_context(session, userdata, service):
         'ci_base_url': deploy_config.external_url('ci', ''),
         'grafana_base_url': deploy_config.external_url('grafana', ''),
         'monitoring_base_url': deploy_config.external_url('monitoring', ''),
+        'k8s_namespace': deploy_config.default_namespace(),
+        'support_email': support_email,
         'userdata': userdata,
     }
     if 'message' in session:
@@ -83,6 +92,8 @@ async def render_template(
     userdata: Optional[UserData],
     file: str,
     page_context: Dict[str, Any],
+    *,
+    status_code: int = 200,
 ) -> web.Response:
     if request.headers.get('x-hail-return-jinja-context'):
         if userdata and userdata['is_developer']:
@@ -97,10 +108,10 @@ async def render_template(
     session = await aiohttp_session.get_session(request)
     context = base_context(session, userdata, service)
     context.update(page_context)
-    context['use_tailwind'] = service in TAILWIND_SERVICES
+    context['use_tailwind'] = page_context.get('use_tailwind', service in TAILWIND_SERVICES)
     context['csrf_token'] = csrf_token
 
-    response = aiohttp_jinja2.render_template(file, request, context)
+    response = aiohttp_jinja2.render_template(file, request, context, status=status_code)
     response.set_cookie('_csrf', csrf_token, secure=True, httponly=True, samesite='strict')
     return response
 
@@ -117,11 +128,17 @@ def web_security_headers_swagger(fun):
     )
 
 
-def web_security_headers_unsafe_eval(fun):
-    return web_security_header_generator(fun, extra_script='\'unsafe-eval\'')
+def web_security_headers_login_page(fun):
+    # Login/signup forms redirect through auth.hail.is/login to the OAuth provider. Chrome follows
+    # the redirect chain when enforcing form-action, so OAuth domains must be allowed.
+    return web_security_header_generator(
+        fun, extra_form_action='https://accounts.google.com https://login.microsoftonline.com'
+    )
 
 
-def web_security_header_generator(fun, extra_script: str = '', extra_style: str = '', extra_img: str = ''):
+def web_security_header_generator(
+    fun, extra_script: str = '', extra_style: str = '', extra_img: str = '', extra_form_action: str = ''
+):
     @wraps(fun)
     async def wrapped(request, *args, **kwargs):
         response = await fun(request, *args, **kwargs)
@@ -129,12 +146,13 @@ def web_security_header_generator(fun, extra_script: str = '', extra_style: str 
         default_src = 'default-src \'self\';'
         style_src = f'style-src \'self\' \'unsafe-inline\' {extra_style} fonts.googleapis.com fonts.gstatic.com;'
         font_src = 'font-src \'self\' fonts.gstatic.com;'
-        script_src = f'script-src \'self\' \'unsafe-inline\' {extra_script} cdn.jsdelivr.net cdn.plot.ly;'
+        script_src = f'script-src \'self\' {extra_script} cdn.jsdelivr.net cdn.plot.ly;'
         img_src = f'img-src \'self\' {extra_img};'
         frame_ancestors = 'frame-ancestors \'self\';'
+        form_action = f"form-action 'self'{' ' + extra_form_action if extra_form_action else ''};"
 
         response.headers['Content-Security-Policy'] = (
-            f'{default_src} {font_src} {style_src} {script_src} {img_src} {frame_ancestors}'
+            f'{default_src} {font_src} {style_src} {script_src} {img_src} {frame_ancestors} {form_action}'
         )
         return response
 

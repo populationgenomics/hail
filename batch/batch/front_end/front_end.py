@@ -19,6 +19,7 @@ import aiohttp
 import aiohttp.web_exceptions
 import aiohttp_session
 import humanize
+import jinja2
 import pandas as pd
 import plotly
 import plotly.express as px
@@ -78,11 +79,10 @@ from web_common import (
     setup_common_static_routes,
     web_security_headers,
     web_security_headers_swagger,
-    web_security_headers_unsafe_eval,
 )
 
 from ..batch import batch_record_to_dict, cancel_job_group_in_db, job_group_record_to_dict, job_record_to_dict
-from ..batch_configuration import BATCH_STORAGE_URI, CLOUD, DEFAULT_NAMESPACE, SCOPE
+from ..batch_configuration import BATCH_STORAGE_URI, CLOUD, DEFAULT_NAMESPACE, DOCKERHUB_PREFIX, SCOPE
 from ..batch_format_version import BatchFormatVersion
 from ..cloud.azure.resource_utils import azure_cores_mcpu_to_memory_bytes
 from ..cloud.gcp.resource_utils import GCP_MACHINE_FAMILY, gcp_cores_mcpu_to_memory_bytes
@@ -117,6 +117,7 @@ from ..utils import (
     query_billing_projects_with_cost,
     query_billing_projects_without_cost,
     regions_to_bits_rep,
+    rewrite_dockerhub_image,
     unavailable_if_frozen,
 )
 from .query import (
@@ -144,6 +145,8 @@ routes = web.RouteTableDef()
 deploy_config = get_deploy_config()
 
 auth = get_authenticator()
+
+FRONT_END_ROOT = os.path.dirname(__file__)
 
 BATCH_JOB_DEFAULT_CPU = os.environ.get('HAIL_BATCH_JOB_DEFAULT_CPU', '1')
 BATCH_JOB_DEFAULT_MEMORY = os.environ.get('HAIL_BATCH_JOB_DEFAULT_MEMORY', 'standard')
@@ -312,7 +315,7 @@ async def _query_batch_jobs_for_billing(request, batch_id):
             limit = int(query_limit)
         except ValueError as e:
             raise web.HTTPBadRequest(reason=f'Bad value for "limit": {e}')
-    if not (0 < limit < 1e4):
+    if limit < 1 or limit > 10000:
         raise web.HTTPBadRequest(reason=f'Limit must be between 1 and 10,000 (limit={limit})')
 
     if last_job_id is not None:
@@ -418,7 +421,9 @@ async def _query_job_group_jobs(
 @add_metadata_to_request
 async def get_completed_batches_ordered_by_completed_time(request, userdata):
     db = request.app['db']
-    where_args = [userdata['username'], ]
+    where_args = [
+        userdata['username'],
+    ]
     wheres = [
         'billing_project_users.`user` = %s',
         'billing_project_users.billing_project = batches.billing_project',
@@ -478,7 +483,10 @@ LIMIT %s;
     """
 
     records = [
-        batch async for batch in db.select_and_fetchall(sql, (ROOT_JOB_GROUP_ID, ROOT_JOB_GROUP_ID, *where_args, limit), query_name='get_completed_batches')
+        batch
+        async for batch in db.select_and_fetchall(
+            sql, (ROOT_JOB_GROUP_ID, ROOT_JOB_GROUP_ID, *where_args, limit), query_name='get_completed_batches'
+        )
     ]
     # this comes out as a timestamp (rather than a formed date)
     last_completed_timestamp = records[-1]['time_completed']
@@ -570,7 +578,7 @@ async def _api_get_job_group_jobs(request, batch_id: int, job_group_id: int, ver
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/resources')
 @billing_project_users_only()
 @add_metadata_to_request
-async def get_jobs_for_billing(request, userdata, batch_id):
+async def get_jobs_for_billing(request, userdata, batch_id):  # pylint: disable=unused-argument
     """
     Get jobs for batch to check the amount of resources used.
     Takes a "last_job_id" and "limit" parameter that can be used to implement paging.
@@ -1405,6 +1413,18 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
 
         if machine_type and pool_label:
             raise web.HTTPBadRequest(reason='cannot specify pool label with machine_type')
+
+        # Rewrite Docker Hub images if feature flag is enabled
+        if (
+            spec['process']['type'] == 'docker'
+            and DOCKERHUB_PREFIX
+            and app['feature_flags'].get('dockerhub_proxy', False)
+        ):
+            original_image = spec['process']['image']
+            rewritten_image = rewrite_dockerhub_image(original_image, DOCKERHUB_PREFIX)
+            if rewritten_image is not None:
+                spec['process']['image'] = rewritten_image
+                log.info(f'Rewrote Docker Hub image {original_image} to {rewritten_image} for job {batch_id}/{job_id}')
 
         if spec['process']['type'] == 'jvm':
             jvm_requested_cpu = parse_cpu_in_mcpu(resources.get('cpu', BATCH_JOB_DEFAULT_CPU))
@@ -2435,7 +2455,7 @@ async def delete_batch(request: web.Request, _, batch_id: int) -> web.Response:
 
 
 @routes.get('/batches/{batch_id}', name='batch_details_page')
-@web_security_headers_unsafe_eval
+@web_security_headers
 @billing_project_users_only()
 @catch_ui_error_in_dev
 async def ui_batch(request, userdata, batch_id):
@@ -2547,7 +2567,13 @@ async def _get_job(app, batch_id, job_id) -> GetJobResponseV1Alpha:
     record = await db.select_and_fetchone(
         """
 WITH base_t AS (
-SELECT jobs.*, user, billing_project, ip_address, format_version, t.attempt_id AS last_cancelled_attempt_id
+SELECT jobs.*
+     , user
+     , billing_project
+     , ip_address
+     , format_version
+     , t.attempt_id AS last_cancelled_attempt_id
+     , attempts.end_time
 FROM jobs
 INNER JOIN batches
   ON jobs.batch_id = batches.id
@@ -2916,7 +2942,7 @@ async def ui_get_jvm_profile(request: web.Request, _, batch_id: int) -> web.Resp
 
 
 @routes.get('/batches/{batch_id}/jobs/{job_id}')
-@web_security_headers_unsafe_eval
+@web_security_headers
 @billing_project_users_only()
 @catch_ui_error_in_dev
 async def ui_get_job(request, userdata, batch_id):
@@ -3214,7 +3240,7 @@ GROUP BY billing_project, `user`;
 
 
 @routes.get('/billing')
-@web_security_headers_unsafe_eval
+@web_security_headers
 @auth.authenticated_users_only()
 @catch_ui_error_in_dev
 async def ui_get_billing(request, userdata):
@@ -3262,7 +3288,7 @@ async def ui_get_billing(request, userdata):
 
 
 @routes.get('/billing_projects')
-@web_security_headers_unsafe_eval
+@web_security_headers
 @auth.authenticated_developers_only()
 @catch_ui_error_in_dev
 async def ui_get_billing_projects(request, userdata):
@@ -3707,6 +3733,22 @@ async def privacy(request):
     return await render_template('batch', request, None, 'privacy.html', {})
 
 
+@routes.get('/batch/static/js/{filename}')
+@web_security_headers
+async def fetch_js_file(request):
+    filename = request.match_info['filename']
+    if filename.endswith('.js'):
+        page_context = {'base_path': deploy_config.base_path('batch')}
+        try:
+            response = await render_template('batch', request, None, f'js/{filename}', page_context)
+            response.content_type = 'application/javascript'
+            return response
+        except jinja2.exceptions.TemplateNotFound as error:
+            raise web.HTTPNotFound() from error
+    else:
+        raise web.HTTPNotFound()
+
+
 async def cancel_batch_loop_body(app):
     client_session = app[CommonAiohttpAppKeys.CLIENT_SESSION]
     await retry_transient_errors(
@@ -3791,6 +3833,9 @@ SELECT instance_id, n_tokens, frozen FROM globals;
 
     app['frozen'] = row['frozen']
 
+    row = await db.select_and_fetchone('SELECT * FROM feature_flags')
+    app['feature_flags'] = row
+
     regions: Dict[str, int] = {
         record['region']: record['region_id']
         async for record in db.select_and_fetchall('SELECT region_id, region from regions')
@@ -3856,7 +3901,7 @@ def run():
     )
     setup_aiohttp_session(app)
 
-    setup_aiohttp_jinja2(app, 'batch.front_end')
+    setup_aiohttp_jinja2(app, 'batch.front_end', jinja2.FileSystemLoader(f'{FRONT_END_ROOT}/static/'))
     setup_common_static_routes(routes)
     app.add_routes(routes)
     app.router.add_get("/metrics", server_stats)

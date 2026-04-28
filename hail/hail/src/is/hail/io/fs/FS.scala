@@ -1,10 +1,10 @@
 package is.hail.io.fs
 
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.io.compress.{BGzipInputStream, BGzipOutputStream}
 import is.hail.io.fs.FSUtil.{containsWildcard, dropTrailingSlash}
 import is.hail.utils._
 
-import scala.collection.mutable
 import scala.io.Source
 
 import java.io._
@@ -18,14 +18,14 @@ import org.apache.hadoop
 
 class WrappedSeekableDataInputStream(is: SeekableInputStream)
     extends DataInputStream(is) with Seekable {
-  def getPosition: Long = is.getPosition
+  override def getPosition: Long = is.getPosition
 
-  def seek(pos: Long): Unit = is.seek(pos)
+  override def seek(pos: Long): Unit = is.seek(pos)
 }
 
 class WrappedPositionedDataOutputStream(os: PositionedOutputStream)
     extends DataOutputStream(os) with Positioned {
-  def getPosition: Long = os.getPosition
+  override def getPosition: Long = os.getPosition
 }
 
 class WrappedPositionOutputStream(os: OutputStream) extends OutputStream with Positioned {
@@ -44,7 +44,7 @@ class WrappedPositionOutputStream(os: OutputStream) extends OutputStream with Po
   override def close(): Unit =
     os.close()
 
-  def getPosition: Long = count
+  override def getPosition: Long = count
 }
 
 abstract class FSURL[URL <: FSURL[URL]] {
@@ -74,15 +74,15 @@ class BlobStorageFileStatus(
   size: Long,
 ) extends FileStatus {
   // NB: it is called getPath but it *must* return the URL *with* the scheme.
-  def getPath: String =
+  override def getPath: String =
     dropTrailingSlash(
       actualUrl
     ) // getPath is a backwards compatible method: in the past, Hail dropped trailing slashes
-  def getActualUrl: String = actualUrl
-  def getModificationTime: java.lang.Long = modificationTime
-  def getLen: Long = size
-  def isSymlink: Boolean = false
-  def getOwner: String = null
+  override def getActualUrl: String = actualUrl
+  override def getModificationTime: java.lang.Long = modificationTime
+  override def getLen: Long = size
+  override def isSymlink: Boolean = false
+  override def getOwner: String = null
 }
 
 class BlobStorageFileListEntry(
@@ -95,8 +95,8 @@ class BlobStorageFileListEntry(
       modificationTime,
       size,
     ) with FileListEntry {
-  def isDirectory: Boolean = isDir
-  def isFile: Boolean = !isDir
+  override def isDirectory: Boolean = isDir
+  override def isFile: Boolean = !isDir
   override def isFileOrFileAndDirectory = isFile
   override def toString: String = s"BSFLE($actualUrl $modificationTime $size $isDir)"
 
@@ -110,15 +110,16 @@ trait CompressionCodec {
 
 object GZipCompressionCodec extends CompressionCodec {
   // java.util.zip.GZIPInputStream does not support concatenated files/multiple blocks
-  def makeInputStream(is: InputStream): InputStream = new GzipCompressorInputStream(is, true)
+  override def makeInputStream(is: InputStream): InputStream =
+    new GzipCompressorInputStream(is, true)
 
-  def makeOutputStream(os: OutputStream): OutputStream = new GZIPOutputStream(os)
+  override def makeOutputStream(os: OutputStream): OutputStream = new GZIPOutputStream(os)
 }
 
 object BGZipCompressionCodec extends CompressionCodec {
-  def makeInputStream(is: InputStream): InputStream = new BGzipInputStream(is)
+  override def makeInputStream(is: InputStream): InputStream = new BGzipInputStream(is)
 
-  def makeOutputStream(os: OutputStream): OutputStream = new BGzipOutputStream(os)
+  override def makeOutputStream(os: OutputStream): OutputStream = new BGzipOutputStream(os)
 }
 
 class FileAndDirectoryException(message: String) extends RuntimeException(message)
@@ -203,7 +204,7 @@ abstract class FSSeekableInputStream extends InputStream with Seekable {
 
   protected def physicalSeek(newPos: Long): Unit
 
-  def seek(newPos: Long): Unit = {
+  override def seek(newPos: Long): Unit = {
     eof = false
     val distance = newPos - pos
     val bufferSeekPosition = bb.position() + distance
@@ -218,7 +219,7 @@ abstract class FSSeekableInputStream extends InputStream with Seekable {
     pos = newPos
   }
 
-  def getPosition: Long = pos
+  override def getPosition: Long = pos
 }
 
 abstract class FSPositionedOutputStream(val capacity: Int) extends OutputStream with Positioned {
@@ -226,9 +227,9 @@ abstract class FSPositionedOutputStream(val capacity: Int) extends OutputStream 
   protected[this] val bb: ByteBuffer = ByteBuffer.allocate(capacity)
   protected[this] var pos: Long = 0
 
-  def flush(): Unit
+  override def flush(): Unit
 
-  def write(i: Int): Unit = {
+  override def write(i: Int): Unit = {
     if (bb.remaining() == 0)
       flush()
     bb.put(i.toByte)
@@ -249,7 +250,7 @@ abstract class FSPositionedOutputStream(val capacity: Int) extends OutputStream 
     }
   }
 
-  def getPosition: Long = pos
+  override def getPosition: Long = pos
 }
 
 trait FS extends Serializable with Logging {
@@ -320,21 +321,21 @@ trait FS extends Serializable with Logging {
 
   def mkDir(url: URL): Unit = ()
 
-  final def listDirectory(filename: String): Array[FileListEntry] =
+  final def listDirectory(filename: String): IndexedSeq[FileListEntry] =
     listDirectory(parseUrl(filename))
 
-  def listDirectory(url: URL): Array[FileListEntry]
+  def listDirectory(url: URL): IndexedSeq[FileListEntry]
 
   final def delete(filename: String, recursive: Boolean): Unit =
     delete(parseUrl(filename), recursive)
 
   def delete(url: URL, recursive: Boolean): Unit
 
-  final def glob(filename: String): Array[FileListEntry] = glob(parseUrl(filename))
+  final def glob(filename: String): IndexedSeq[FileListEntry] = glob(parseUrl(filename))
 
-  def glob(url: URL): Array[FileListEntry]
+  def glob(url: URL): IndexedSeq[FileListEntry]
 
-  def globWithPrefix(prefix: URL, path: String): Array[FileListEntry] = {
+  def globWithPrefix(prefix: URL, path: String): IndexedSeq[FileListEntry] = {
     val components =
       if (path == "")
         Array.empty[String]
@@ -343,7 +344,7 @@ trait FS extends Serializable with Logging {
 
     val javaFS = FileSystems.getDefault
 
-    val ab = new mutable.ArrayBuffer[FileListEntry]()
+    val ab = ArraySeq.newBuilder[FileListEntry]
     def f(prefix: URL, fs: FileListEntry, i: Int): Unit = {
       if (i == components.length) {
         var t = fs
@@ -375,11 +376,11 @@ trait FS extends Serializable with Logging {
     }
 
     f(prefix, null, 0)
-    ab.toArray
+    ab.result()
   }
 
-  def globAll(filenames: Iterable[String]): Array[FileListEntry] =
-    filenames.flatMap((x: String) => glob(x)).toArray
+  def globAll(filenames: Iterable[String]): IndexedSeq[FileListEntry] =
+    ArraySeq.from(filenames.flatMap((x: String) => glob(x)))
 
   final def eTag(filename: String): Option[String] = eTag(parseUrl(filename))
 
@@ -626,9 +627,9 @@ trait FS extends Serializable with Logging {
     else if (!header && headerFileListEntry.nonEmpty)
       fatal(s"Found unexpected header file")
 
-    val partFileStatuses: Array[_ <: FileStatus] = partFilesOpt match {
+    val partFileStatuses = partFilesOpt match {
       case None => glob(sourceFolder + "/part-*")
-      case Some(files) => files.map(f => fileStatus(sourceFolder + "/" + f)).toArray
+      case Some(files) => files.map(f => fileStatus(sourceFolder + "/" + f))
     }
 
     val sortedPartFileStatuses = partFileStatuses.sortBy { fileStatus =>
@@ -638,7 +639,7 @@ trait FS extends Serializable with Logging {
     if (sortedPartFileStatuses.length != numPartFilesExpected)
       fatal(s"Expected $numPartFilesExpected part files but found ${sortedPartFileStatuses.length}")
 
-    val filesToMerge: Array[FileStatus] = headerFileListEntry ++ sortedPartFileStatuses
+    val filesToMerge = headerFileListEntry ++ sortedPartFileStatuses
 
     logger.info(s"merging ${filesToMerge.length} files totalling " +
       s"${readableBytes(filesToMerge.map(_.getLen).sum)}...")
@@ -657,12 +658,12 @@ trait FS extends Serializable with Logging {
   }
 
   def copyMergeList(
-    srcFileStatuses: Array[_ <: FileStatus],
+    srcFileStatuses: IndexedSeq[FileStatus],
     destFilename: String,
     deleteSource: Boolean = true,
   ): Unit = {
     val codec = Option(getCodecFromPath(destFilename))
-    val isBGzip = codec.exists(_ == BGZipCompressionCodec)
+    val isBGzip = codec.contains(BGZipCompressionCodec)
 
     require(srcFileStatuses.forall {
       fileStatus => fileStatus.getPath != destFilename && fileStatus.isFileOrFileAndDirectory
@@ -689,7 +690,7 @@ trait FS extends Serializable with Logging {
   }
 
   def concatenateFiles(sourceNames: Array[String], destFilename: String): Unit = {
-    val fileStatuses = sourceNames.map(fileStatus(_))
+    val fileStatuses = ArraySeq.unsafeWrapArray(sourceNames).map(fileStatus)
 
     logger.info(s"merging ${fileStatuses.length} files totalling " +
       s"${readableBytes(fileStatuses.map(_.getLen).sum)}...")

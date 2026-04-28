@@ -1,21 +1,28 @@
 package is.hail.expr
 
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.IRFunctionRegistry
 import is.hail.expr.ir.lowering.TableStageDependency
 import is.hail.rvd.RVDPartitioner
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.stypes.SValue
 import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.types.virtual.TIterable.elementType
-import is.hail.utils._
+import is.hail.utils.fatal
 
 import scala.collection.BufferedIterator
 
 import java.util.UUID
 
-package object ir {
+import org.apache.commons.lang3.StringUtils
+import org.apache.spark.TaskContext
+
+package object ir extends CompileOps {
   type TokenIterator = BufferedIterator[Token]
   type IEmitCode = IEmitCodeGen[SValue]
 
@@ -31,8 +38,6 @@ package object ir {
 
   def uuid4(): String = UUID.randomUUID().toString
 
-  def genSym(base: String): Sym = Sym.gen(base)
-
   // Build consistent expression for a filter-condition with keep polarity,
   // using Let to manage missing-ness.
   def filterPredicateWithKeep(irPred: IR, keep: Boolean): IR =
@@ -41,7 +46,7 @@ package object ir {
     }
 
   def invoke(name: String, rt: Type, typeArgs: Seq[Type], errorID: Int, args: IR*): IR =
-    IRFunctionRegistry.lookupUnseeded(name, rt, typeArgs, args.map(_.typ)) match {
+    IRFunctionRegistry.lookup(name, rt, typeArgs, args.map(_.typ)) match {
       case Some(f) => f(args, errorID)
       case None => fatal(
           s"no conversion found for $name[${typeArgs.mkString(", ")}](${args.map(_.typ).mkString(", ")}) => $rt"
@@ -52,17 +57,10 @@ package object ir {
     invoke(name, rt, typeArgs, ErrorIDs.NO_ERROR, args: _*)
 
   def invoke(name: String, rt: Type, args: IR*): IR =
-    invoke(name, rt, Array.empty[Type], ErrorIDs.NO_ERROR, args: _*)
+    invoke(name, rt, ArraySeq.empty, ErrorIDs.NO_ERROR, args: _*)
 
   def invoke(name: String, rt: Type, errorID: Int, args: IR*): IR =
-    invoke(name, rt, Array.empty[Type], errorID, args: _*)
-
-  def invokeSeeded(name: String, staticUID: Long, rt: Type, rngState: IR, args: IR*): IR =
-    IRFunctionRegistry.lookupSeeded(name, staticUID, rt, args.map(_.typ)) match {
-      case Some(f) => f(args, rngState)
-      case None =>
-        fatal(s"no seeded function found for $name(${args.map(_.typ).mkString(", ")}) => $rt")
-    }
+    invoke(name, rt, ArraySeq.empty, errorID, args: _*)
 
   implicit def irToPrimitiveIR(ir: IR): PrimitiveIR = new PrimitiveIR(ir)
 
@@ -167,12 +165,12 @@ package object ir {
     result: IndexedSeq[Ref] => IR
   ): IR = {
     val elt = Ref(freshName(), tcoerce[TStream](stream.typ).elementType)
-    val accums = inits.map(i => Ref(freshName(), i.typ)).toFastSeq
+    val accums = inits.toFastSeq.map(i => Ref(freshName(), i.typ))
     StreamFold2(
       stream,
       accums.lazyZip(inits).map((acc, i) => (acc.name, i)),
       elt.name,
-      seqs.map(f => f(elt, accums)).toFastSeq,
+      seqs.toFastSeq.map(f => f(elt, accums)),
       result(accums),
     )
   }
@@ -252,9 +250,9 @@ package object ir {
   def rangeIR(start: IR, stop: IR): IR = StreamRange(start, stop, 1)
 
   def insertIR(old: IR, fields: (String, IR)*): InsertFields =
-    InsertFields(old, fields.toArray[(String, IR)])
+    InsertFields(old, fields.toFastSeq)
 
-  def selectIR(old: IR, fields: String*): SelectFields = SelectFields(old, fields.toArray[String])
+  def selectIR(old: IR, fields: String*): SelectFields = SelectFields(old, fields.toFastSeq)
 
   def zip2(s1: IR, s2: IR, behavior: ArrayZipBehavior.ArrayZipBehavior)(f: (Ref, Ref) => IR): IR = {
     val r1 = Ref(freshName(), tcoerce[TStream](s1.typ).elementType)
@@ -300,10 +298,10 @@ package object ir {
     BlockMatrixMap(bm, ref.name, f(ref), needsDense)
   }
 
-  def makestruct(fields: (String, IR)*): MakeStruct = MakeStruct(fields.toArray[(String, IR)])
+  def makestruct(fields: (String, IR)*): MakeStruct = MakeStruct(fields.toFastSeq)
 
   def maketuple(fields: IR*): MakeTuple =
-    MakeTuple(fields.toArray.zipWithIndex.map { case (field, idx) => (idx, field) })
+    MakeTuple(fields.toFastSeq.zipWithIndex.map { case (field, idx) => (idx, field) })
 
   def aggBindIR(v: IR, isScan: Boolean = false)(body: Ref => IR): IR = {
     val ref = Ref(freshName(), v.typ)
@@ -423,6 +421,15 @@ package object ir {
   }
 
   def logIR(result: IR, messages: AnyRef*): IR = ConsoleLog(strConcat(messages: _*), result)
+
+  def partFile(numDigits: Int, i: Int): String = {
+    val is = i.toString
+    assert(is.length <= numDigits)
+    "part-" + StringUtils.leftPad(is, numDigits, "0")
+  }
+
+  def partFile(d: Int, i: Int, ctx: TaskContext): String =
+    s"${partFile(d, i)}-${ctx.partSuffix}"
 
   implicit def toRichIndexedSeqEmitSettable(s: IndexedSeq[EmitSettable])
     : RichIndexedSeqEmitSettable = new RichIndexedSeqEmitSettable(s)

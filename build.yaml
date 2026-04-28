@@ -45,14 +45,9 @@ steps:
       - name: test-azure-key
         clouds:
           - gcp
-      - name: zulip-config
-      - name: billing-monitor-gsa-key
         clouds:
           - gcp
       - name: hail-ci-0-1-service-account-key
-      - name: batch-worker-ssh-public-key
-        clouds:
-          - azure
   - kind: runImage
     name: copy_third_party_images
     image: quay.io/skopeo/stable:v1.13.2
@@ -69,17 +64,13 @@ steps:
 
       {% if global.cloud == "gcp" %}
       cat $GOOGLE_APPLICATION_CREDENTIALS | base64 -w 0 | skopeo login -u _json_key_base64 --password-stdin $REGISTRY
-      {% elif global.cloud == "azure" %}
-      dnf install -y jq
-      USERNAME=$(cat $AZURE_APPLICATION_CREDENTIALS | jq -jr '.appId')
-      cat $AZURE_APPLICATION_CREDENTIALS | jq -jr '.password' | skopeo login -u $USERNAME --password-stdin $REGISTRY
       {% else %}
       echo "unknown cloud {{ global.cloud }}"
       exit 1
       {% endif %}
 
       cd /io/docker/third-party
-      DOCKER_PREFIX={{ global.docker_prefix }} retry bash copy_images.sh
+      DOCKER_PREFIX={{ global.docker_prefix }} {% if global.dockerhub_prefix %}DOCKERHUB_PREFIX={{ global.dockerhub_prefix }} {% endif %}retry bash copy_images.sh
     inputs:
       - from: /repo/docker
         to: /io/docker
@@ -310,47 +301,38 @@ steps:
     image:
       valueFrom: create_certs_image.image
     script: |
-      # Check if secret exists and get its age
+      # Check if secret exists and whether its certificate has expired
       # First, set +ex to (e) allow the command to fail, (x) avoid logging the password
       set +ex
-      echo 'Running: SECRET_JSON=$(kubectl get secret database-server-config -n {{ default_ns.name }} -o json --show-managed-fields)'
-      SECRET_JSON=$(kubectl get secret database-server-config -n {{ default_ns.name }} -o json --show-managed-fields)
+      echo 'Running: SECRET_JSON=$(kubectl get secret database-server-config -n {{ default_ns.name }} -o json)'
+      SECRET_JSON=$(kubectl get secret database-server-config -n {{ default_ns.name }} -o json)
       SECRET_EXISTS_EXIT_CODE=$?
       echo "SECRET_EXISTS_EXIT_CODE=$SECRET_EXISTS_EXIT_CODE"
       set -ex
 
       if [ "$SECRET_EXISTS_EXIT_CODE" -eq 0 ]; then
-          echo "Secret exists, checking age..."
+          echo "Secret exists, checking certificate expiration..."
 
-          # Extract the latest timestamp from managed fields
           set +x
-          echo "Running: LATEST_TIME=\$(echo \"\$SECRET_JSON\" | jq -r '.metadata.managedFields[] | .time' | sort -r | head -n1)"
-          LATEST_TIME=$(echo "$SECRET_JSON" | jq -r '.metadata.managedFields[] | .time' | sort -r | head -n1)
+          # set -e will abort the script so the error is surfaced rather than silently regenerating.
+          CERT_FILE=$(mktemp)
+          echo "$SECRET_JSON" | jq -r '.data["server-ca.pem"]' | base64 -d > "$CERT_FILE"
           set -x
-          
-          echo "Latest secret modification time: $LATEST_TIME"
-          
-          # Convert to timestamp and check if over 1 year old (365 days)
-          TIMESTAMP=$(date -d "$LATEST_TIME" +%s 2>/dev/null || echo "0")
-          CURRENT_TIME=$(date +%s)
-          AGE_DAYS=$(( (CURRENT_TIME - TIMESTAMP) / 86400 ))
-          
-          echo "Secret age: $AGE_DAYS days"
-          
-          if [ "$AGE_DAYS" -gt 365 ]; then
-              echo "Secret is over 1 year old, regenerating certificates while preserving password..."
-              
-              # Turn off set -x to avoid logging password:
-              set +x
+          echo "Certificate expiration: $(openssl x509 -enddate -noout -in "$CERT_FILE")"
+
+          # openssl x509 -checkend 0: exit code 0 = not expired, 1 = expired
+          if openssl x509 -checkend 0 -noout -in "$CERT_FILE"; then
+              echo "Certificate is still valid, skipping regeneration"
+          else
+              echo "Certificate has expired, regenerating certificates while preserving password..."
               echo "Running: EXISTING_PASSWORD=\$(echo \"\$SECRET_JSON\" | jq -r '.data[\"db-root-password\"]' | base64 -d)"
+              set +x
               EXISTING_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.data["db-root-password"]' | base64 -d)
-              # Regenerate certificates with existing password (disable set -x to avoid logging password)
               echo "Running: NAMESPACE={{ default_ns.name }} KEEP_PASSWORD=\"\$EXISTING_PASSWORD\" bash /create_test_db_config.sh"
               NAMESPACE={{ default_ns.name }} KEEP_PASSWORD="$EXISTING_PASSWORD" bash /create_test_db_config.sh
               set -x
-          else
-              echo "Secret is less than 1 year old, skipping regeneration"
           fi
+          rm -f "$CERT_FILE"
       else
           echo "Secret does not exist, creating new one..."
           NAMESPACE={{ default_ns.name }} bash /create_test_db_config.sh
@@ -727,6 +709,35 @@ steps:
     dependsOn:
       - merge_code
       - hail_ubuntu_image
+  - kind: runImage
+    name: build_ui
+    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
+    script: |
+      set -ex
+      cd /io/repo/services/ui
+      npm ci
+      npm run build
+    inputs:
+      - from: /repo/services/ui
+        to: /io/repo/services/ui
+    outputs:
+      - from: /io/repo/services/ui/dist/ci
+        to: /compiled-js/ci
+    dependsOn:
+      - merge_code
+  - kind: runImage
+    name: check_ui
+    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
+    script: |
+      set -ex
+      cd /io/repo/services/ui
+      npm ci
+      npm run check
+    inputs:
+      - from: /repo/services/ui
+        to: /io/repo/services/ui
+    dependsOn:
+      - merge_code
   - kind: buildImage2
     name: ci_image
     dockerFile: /io/repo/ci/Dockerfile
@@ -745,9 +756,13 @@ steps:
         to: /io/repo/gear
       - from: /repo/web_common
         to: /io/repo/web_common
+      - from: /compiled-js/ci
+        to: /io/repo/ci/ci/static/compiled-js
     dependsOn:
       - hail_ubuntu_image
       - merge_code
+      - build_ui
+      - check_ui
   - kind: buildImage2
     name: hail_buildkit_image
     dockerFile: /io/repo/ci/buildkit/Dockerfile
@@ -803,6 +818,28 @@ steps:
     dependsOn:
       - base_image
       - merge_code
+  - kind: runImage
+    name: test_install_in_isolation_python3_11
+    image:
+      valueFrom: base_image.image
+    script: |
+      set -ex
+      cd /io/
+      
+      uv venv --python 3.11 --seed _venv
+      source _venv/bin/activate
+      
+      pip install /io/wheel/hail-*-py3-none-any.whl
+      cat << EOF | python3
+      import hail as hl
+      hl.utils.range_table(10)._force_count()
+      EOF
+    inputs:
+      - from: /derived/release/hail/build/deploy/dist
+        to: /io/wheel
+    dependsOn:
+      - base_image
+      - build_hail_jar_and_wheel
   - kind: runImage
     name: upload_temporary_hailctl_artifacts
     image:
@@ -930,37 +967,6 @@ steps:
     dependsOn:
       - base_image
       - merge_code
-  - kind: runImage
-    name: build_azure_wheel
-    image:
-      valueFrom: base_image.image
-    resources:
-      memory: standard
-      cpu: '2'
-    script: |
-      set -ex
-      cd /io/repo/hail
-
-      export SPARK_VERSION="3.0.2" SCALA_VERSION="2.12.13" HAIL_BUILD_MODE=Release MILLOPTS='--no-daemon'
-      time retry sh mill --no-daemon --version
-
-      # See `build_hail_jar_and_wheel`
-      time retry make shadowJar
-      if [ ! -f out/hail/2.12/assembly.dest/out.jar ]; then
-          echo 'no out.jar found after mill assembly returned. going to sleep'
-          sleep 5
-      fi
-
-      time retry make wheel
-    inputs:
-      - from: /repo
-        to: /io/repo
-    outputs:
-      - from: /io/repo/hail/build/deploy/dist
-        to: /azure-wheel
-    dependsOn:
-      - base_image
-      - merge_code
   - kind: buildImage2
     name: hail_run_image
     dockerFile: /io/repo/hail/Dockerfile.hail-run
@@ -1037,7 +1043,6 @@ steps:
       set -ex
       cd /io/repo/hail/
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       python3 -m hailtop.aiotools.copy 'null' '[
       {"from": "hail/test/resources",
        "to":   "{{ global.test_storage_uri }}/{{ token }}/test/resources"},
@@ -1126,7 +1131,7 @@ steps:
       export HAIL_DOCTEST_DATA_DIR=$(realpath ./data)
       export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}/{{ token }}
       export PYSPARK_SUBMIT_ARGS="--driver-memory 6g pyspark-shell"
-      
+
       python3 -m pytest \
               -Werror:::hail -Werror::ResourceWarning \
               --log-cli-level=INFO \
@@ -1176,17 +1181,9 @@ steps:
 
       export HAIL_TEST_GCS_BUCKET={{ global.hail_test_gcs_bucket }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       export HAIL_TEST_S3_BUCKET=hail-test-dy5rg
       export AWS_SHARED_CREDENTIALS_FILE=/test-aws-key/credentials
-
-      export HAIL_TEST_AZURE_ACCOUNT=hailtest
-      export HAIL_TEST_AZURE_CONTAINER=hail-test-4nxei
-      # Required for SAS testing on Azure
-      export HAIL_TEST_AZURE_RESGRP=hail-dev
-      export HAIL_TEST_AZURE_SUBID=22cd45fe-f996-4c51-af67-ef329d977519
-      export AZURE_APPLICATION_CREDENTIALS=/test-azure-key/credentials.json
 
       python3 -m pytest \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
@@ -1213,10 +1210,6 @@ steps:
         namespace:
           valueFrom: default_ns.name
         mountPath: /test-aws-key
-      - name: test-azure-key
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /test-azure-key
     dependsOn:
       - default_ns
       - hailgenetics_hailtop_image
@@ -1299,7 +1292,6 @@ steps:
 
       # The test should use the test credentials, not CI's credentials
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       export HAIL_QUERY_N_CORES=2
       export OMP_NUM_THREADS=2
@@ -1814,7 +1806,6 @@ steps:
     script: |
       set -ex
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
 
       {% if default_ns.name == "default" %}
@@ -1918,7 +1909,6 @@ steps:
     script: |
       set -ex
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
 
       python3 -m pytest \
@@ -2143,6 +2133,9 @@ steps:
         online: true
       - name: add-service-rate-limits
         script: /io/sql/006-add-service-rate-limits.sql
+        online: true
+      - name: retried-tests
+        script: /io/sql/007-retried-tests.sql
         online: true
     inputs:
       - from: /repo/ci/sql
@@ -2476,6 +2469,10 @@ steps:
         online: true
       - name: is-job-cancelled
         script: /io/sql/119-is-job-cancelled.sql
+        online: true
+      - name: add-dockerhub-proxy-flag
+        script: /io/sql/120-add-dockerhub-proxy-flag.sql
+        online: true
     inputs:
       - from: /repo/batch/sql
         to: /io/sql
@@ -2526,7 +2523,6 @@ steps:
       set -ex
 
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       {% for user in code.get("developers", []) %}
       {% if user['username'] != 'test-dev' %}
@@ -2556,7 +2552,6 @@ steps:
     script: |
       set -ex
       export GOOGLE_APPLICATION_CREDENTIALS=/batch-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/batch-gsa-key/key.json
 
       {% if deploy %}
       HAIL_QUERY_JAR_URL={{ global.query_storage_uri }}
@@ -2605,7 +2600,6 @@ steps:
       export HAIL_GENETICS_VEP_GRCH37_85_IMAGE={{ hailgenetics_vep_grch37_85_image.image }}
       export HAIL_GENETICS_VEP_GRCH38_95_IMAGE={{ hailgenetics_vep_grch38_95_image.image }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       export GCS_REQUESTER_PAYS_PROJECT=broad-ctsa
 
@@ -2656,83 +2650,6 @@ steps:
       - hailgenetics_vep_grch38_95_image
     clouds:
       - gcp
-  - kind: runImage
-    name: test_hail_python_service_backend_azure
-    numSplits: 16
-    image:
-      valueFrom: hail_run_image.image
-    resources:
-      cpu: '0.25'
-      preemptible: False
-    script: |
-      set -ex
-      python3 -m pip install --no-dependencies /io/wheel/hail-*-py3-none-any.whl
-
-      cd /io/repo/hail/python
-
-      export HAIL_CLOUD={{ global.cloud }}
-      export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
-      export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}/{{ token }}
-      export HAIL_TEST_RESOURCES_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/test/resources/"
-      export HAIL_DOCTEST_DATA_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/doctest/data/"
-      export HAIL_GENETICS_VEP_GRCH37_85_IMAGE={{ hailgenetics_vep_grch37_85_image.image }}
-      export HAIL_GENETICS_VEP_GRCH38_95_IMAGE={{ hailgenetics_vep_grch38_95_image.image }}
-      export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-
-      export HAIL_AZURE_SUBSCRIPTION_ID={{ global.azure_subscription_id }}
-      export HAIL_AZURE_RESOURCE_GROUP={{ global.azure_resource_group }}
-
-      export HAIL_SHUFFLE_MAX_BRANCH=4
-      export HAIL_SHUFFLE_CUTOFF=1000000
-      export HAIL_QUERY_BACKEND=batch
-      export HAIL_BATCH_REGIONS={{ global.azure_location }}
-      export HAIL_BATCH_BILLING_PROJECT=test
-      export HAIL_BATCH_REMOTE_TMPDIR={{ global.test_storage_uri }}
-
-      python3 -m pytest \
-              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
-              --log-cli-level=INFO \
-              -s \
-              -r A \
-              -vv \
-              --instafail \
-              --durations=50 \
-              --ignore=test/hailtop/ \
-              --ignore=test/hail/matrixtable/test_file_formats.py \
-              -m backend \
-              --timeout=600 \
-              test
-    timeout: 5400
-    inputs:
-      - from: /derived/release/hail/build/deploy/dist
-        to: /io/wheel
-      - from: /repo/hail/python/pytest.ini
-        to: /io/repo/hail/python/pytest.ini
-      - from: /repo/hail/python/test
-        to: /io/repo/hail/python/test
-    secrets:
-      - name: test-gsa-key
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /test-gsa-key
-    dependsOn:
-      - default_ns
-      - merge_code
-      - deploy_batch
-      - create_deploy_config
-      - create_accounts
-      - hail_run_image
-      - upload_query_jar
-      - upload_test_resources_to_blob_storage
-      - build_hail_jar_and_wheel
-      - hailgenetics_vep_grch37_85_image
-      - hailgenetics_vep_grch38_95_image
-    scopes:
-      - deploy
-      - dev
-    clouds:
-      - azure
   - kind: runImage
     name: test_hail_spark_conf_requester_pays_parsing
     image:
@@ -2819,7 +2736,6 @@ steps:
 
       # Use the test identity's credentials instead of CI's
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       export HAIL_TEST_GSA_KEY_FILE=/test-gsa-key/key.json
       export HAIL_TEST_DEV_GSA_KEY_FILE=/test-dev-gsa-key/key.json
@@ -2855,7 +2771,7 @@ steps:
               --log-format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d:%(funcName)s %(message)s" \
               -k "not test_scale and not test_invariants" \
               --timeout=360 \
-              /io/test/
+              /io/test/test_batch.py
     inputs:
       - from: /repo/batch/test
         to: /io/test
@@ -2887,6 +2803,80 @@ steps:
       - workdir_image
       - hail_ubuntu_image
       - gpu_image
+  - kind: runImage
+    name: test_batch_job_private_machines
+    numSplits: 1
+    image:
+      valueFrom: batch_image.image
+    script: |
+      set -ex
+
+      # Use the test identity's credentials instead of CI's
+      export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
+
+      export HAIL_TEST_GSA_KEY_FILE=/test-gsa-key/key.json
+      export HAIL_TEST_DEV_GSA_KEY_FILE=/test-dev-gsa-key/key.json
+
+      export HAIL_GSA_KEY_FILE=/test-gsa-key/key.json
+      export CI_UTILS_IMAGE={{ ci_utils_image.image }}
+      export HAIL_CURL_IMAGE={{ hail_ubuntu_image.image }}
+      export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
+      export HAIL_NETCAT_UBUNTU_IMAGE={{ netcat_ubuntu_image.image }}
+      export HAIL_VOLUME_IMAGE={{ volume_image.image }}
+      export HAIL_WORKDIR_IMAGE={{ workdir_image.image }}
+      export DOCKER_PREFIX="{{ global.docker_prefix }}"
+      export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
+      export HAIL_GENETICS_HAILTOP_IMAGE="{{ hailgenetics_hailtop_image.image }}"
+      export HAIL_GENETICS_HAIL_IMAGE="{{ hailgenetics_hail_image.image }}"
+      export HAIL_TOKEN="{{ token }}"
+      export HAIL_CLOUD="{{ global.cloud }}"
+      export HAIL_PRODUCTION_DOMAIN="{{ global.domain }}"
+      export HAIL_BATCH_REMOTE_TMPDIR="{{ global.test_storage_uri }}/test_batch/{{ token }}/"
+
+      hail-pip-install -r /io/dev-requirements.txt
+
+      python3 -m pytest \
+              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              --log-date-format="%Y-%m-%dT%H:%M:%S" \
+              --log-format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d:%(funcName)s %(message)s" \
+              --timeout=660 \
+              /io/test/test_batch_rare_instances.py
+    inputs:
+      - from: /repo/batch/test
+        to: /io/test
+      - from: /repo/hail/python/dev/pinned-requirements.txt
+        to: /io/dev-requirements.txt
+    port: 5000
+    timeout: 1500
+    secrets:
+      - name: test-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-gsa-key
+      - name: test-dev-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-dev-gsa-key
+    dependsOn:
+      - create_deploy_config
+      - create_accounts
+      - default_ns
+      - merge_code
+      - deploy_batch
+      - batch_image
+      - ci_utils_image
+      - hailgenetics_hail_image
+      - hailgenetics_hailtop_image
+      - netcat_ubuntu_image
+      - volume_image
+      - workdir_image
+      - hail_ubuntu_image
   - kind: runImage
     name: test_auth
     numSplits: 1
@@ -2929,7 +2919,6 @@ steps:
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_TEST_DEV_GSA_KEY_FILE=/test-dev-gsa-key/key.json
       export HAIL_TOKEN="{{ test_batch.token }}"
       cd /io/test
@@ -3109,7 +3098,6 @@ steps:
       set -ex
       export ORGANIZATION=hail-ci-test
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export REPO_NAME=ci-test-"{{ create_ci_test_repo.token }}"
       export NAMESPACE="{{ default_ns.name }}"
@@ -3160,7 +3148,6 @@ steps:
       python3 -m pip install --no-dependencies /io/debug-wheel/hail-*-py3-none-any.whl
 
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
 
       export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
       export HAIL_CLOUD={{ global.cloud }}
@@ -3222,8 +3209,6 @@ steps:
 
       {% if global.cloud == "gcp" %}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      {% elif global.cloud == "azure" %}
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       {% else %}
       echo "unknown cloud {{ global.cloud }}"
       exit 1
@@ -3245,12 +3230,12 @@ steps:
       hl.init(app_name='test-hailctl-batch-submit-query')
       hl.utils.range_table(10).collect()
       EOF
-      
-      # https://stackoverflow.com/questions/3524978/logging-functions-in-bash-and-stdout 
+
+      # https://stackoverflow.com/questions/3524978/logging-functions-in-bash-and-stdout
       exec 3>&1
-      
+
       function log { echo "$@" 1>&3; }
-      
+
       function submit {
         local status=$(hailctl batch submit --quiet --output json --wait "$@")
         log "$status"
@@ -3259,7 +3244,7 @@ steps:
       }
 
       submit -v simple_hail.py:/ -v foo/:/foo/ --workdir / --name=test-hailctl-batch-submit python3 simple_hail.py
-      
+
       cat >hail_with_args.py <<EOF
       import hail as hl
       import sys
@@ -3272,7 +3257,7 @@ steps:
       EOF
 
       submit -v hail_with_args.py:/ -v foo/:/foo/ --workdir / --name=test-hailctl-batch-submit python3 hail_with_args.py 100
-      
+
       cat >file.sh <<EOF
       set -ex
 
@@ -3281,7 +3266,7 @@ steps:
       EOF
 
       submit --shell /bin/sh --name=test-hailctl-batch-submit -v file.sh:/ -v foo/:/foo/ -o json --image busybox:latest sh file.sh
-      
+
       cat >file-with-args.sh <<EOF
       [ "$#" -eq 2 ]
 
@@ -3311,7 +3296,6 @@ steps:
       set -ex
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       hailctl config set batch/billing_project test
       hailctl config set batch/remote_tmpdir {{ global.test_storage_uri }}/test_batch_docs/{{ token }}/
       python3 -m pytest \
@@ -3402,7 +3386,8 @@ steps:
     dependsOn:
       - ci_utils_image
       - default_ns
-      - merge_code
+      - build_hail_jar_and_wheel
+      - test_install_in_isolation_python3_11
       - upload_temporary_hailctl_artifacts
     inputs:
       - from: /repo
@@ -3446,7 +3431,8 @@ steps:
     dependsOn:
       - ci_utils_image
       - default_ns
-      - merge_code
+      - build_hail_jar_and_wheel
+      - test_install_in_isolation_python3_11
       - upload_temporary_hailctl_artifacts
     inputs:
       - from: /repo
@@ -3509,7 +3495,6 @@ steps:
       HAIL_GENETICS_HAILTOP_IMAGE=docker://{{ hailgenetics_hailtop_image.image }} \
       HAIL_GENETICS_VEP_GRCH37_85_IMAGE=docker://{{ hailgenetics_vep_grch37_85_image.image }} \
       HAIL_GENETICS_VEP_GRCH38_95_IMAGE=docker://{{ hailgenetics_vep_grch38_95_image.image }} \
-      AZURE_WHEEL=/io/azure-wheel/hail-*-py3-none-any.whl \
       WEBSITE_TAR=/io/www.tar.gz \
       bash scripts/release.sh
 
@@ -3519,8 +3504,6 @@ steps:
         to: /io/repo
       - from: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
         to: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
-      - from: /azure-wheel
-        to: /io/azure-wheel
       - from: /www.tar.gz
         to: /io/www.tar.gz
     outputs:
@@ -3558,13 +3541,11 @@ steps:
       - hailgenetics_vep_grch37_85_image
       - hailgenetics_vep_grch38_95_image
       - build_hail_jar_and_wheel
-      - build_azure_wheel
       - test_hail_java
       - test_hail_python
       - test_hailtop_python
       - test_hail_python_local_backend
       - test_hail_python_service_backend_gcp
-      - test_hail_python_service_backend_azure
       - test_hail_scala_fs
       - test_hail_services_java
       - test_hail_spark_conf_requester_pays_parsing
@@ -3671,10 +3652,6 @@ steps:
       set +x
       {% if global.cloud == "gcp" %}
       cat $GOOGLE_APPLICATION_CREDENTIALS | base64 -w 0 | skopeo login -u _json_key_base64 --password-stdin $REGISTRY
-      {% elif global.cloud == "azure" %}
-      dnf install -y jq
-      USERNAME=$(cat $AZURE_APPLICATION_CREDENTIALS | jq -jr '.appId')
-      cat $AZURE_APPLICATION_CREDENTIALS | jq -jr '.password' | skopeo login -u $USERNAME --password-stdin $REGISTRY
       {% else %}
       echo "unknown cloud {{ global.cloud }}"
       exit 1
@@ -3684,6 +3661,9 @@ steps:
       cd /io/docker/hailgenetics
       export HAIL_PIP_VERSION=$(cat /io/HAIL_PIP_VERSION)
       export DOCKER_PREFIX={{ global.docker_prefix }}
+      {% if global.dockerhub_prefix %}
+      export DOCKERHUB_PREFIX={{ global.dockerhub_prefix }}
+      {% endif %}
       bash mirror_images.sh
     inputs:
       - from: /repo/hail/env/HAIL_PIP_VERSION
@@ -3751,7 +3731,6 @@ steps:
     script: |
       set -ex
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       hailctl curl {{ default_ns.name }} www / \
               -vvv \
               -fsSL \
@@ -3785,7 +3764,6 @@ steps:
       export HAIL_CLOUD={{ global.cloud }}
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
       export HAIL_FS_TEST_CLOUD_RESOURCES_URI={{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/test/resources/fs
       export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}
 
@@ -3922,7 +3900,6 @@ steps:
     script: |
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
 
       cat >cancel_all_running_test_batches.py <<'EOF'
       from hailtop.batch_client.aioclient import BatchClient
@@ -3960,7 +3937,6 @@ steps:
       - test_ci
       - test_hailtop_python
       - test_hail_python_service_backend_gcp
-      - test_hail_python_service_backend_azure
       - test_hail_services_java
       - test_batch_docs
       - test_hailctl_batch
@@ -3970,7 +3946,6 @@ steps:
       valueFrom: hail_dev_image.image
     script: |
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
-      export AZURE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       export DOCKER_PREFIX="{{ global.docker_prefix }}"
       export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
@@ -4009,7 +3984,6 @@ steps:
       - test_ci
       - test_hailtop_python
       - test_hail_python_service_backend_gcp
-      - test_hail_python_service_backend_azure
       - cancel_all_running_test_batches
   - kind: runImage
     name: delete_gcp_batch_instances
@@ -4056,57 +4030,6 @@ steps:
       - test_ci
       - test_hailtop_python
       - test_hail_python_service_backend_gcp
-      - test_hail_python_service_backend_azure
-      - cancel_all_running_test_batches
-  - kind: runImage
-    name: delete_azure_batch_instances
-    image: mcr.microsoft.com/azure-cli:azurelinux3.0
-    alwaysRun: true
-    script: |
-      set -e -o pipefail
-      AZURE_USERNAME=$(jq -r '.appId' /batch-gsa-key/key.json)
-      AZURE_PASSWORD=$(jq -r '.password' /batch-gsa-key/key.json)
-      AZURE_TENANT_ID=$(jq -r '.tenant' /batch-gsa-key/key.json)
-      az login --service-principal -u $AZURE_USERNAME -p $AZURE_PASSWORD --tenant $AZURE_TENANT_ID
-      set +e
-      set -x
-      export AZURE_RESOURCE_GROUP="{{ global.azure_resource_group }}"
-      az aks install-cli
-      kubectl -n {{ default_ns.name }} scale deployment batch-driver --replicas=0
-      az vm list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
-          --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
-        | xargs -n1 -r sh -c 'az vm delete --force-deletion true --resource-group $AZURE_RESOURCE_GROUP --name "$1" --yes || true' argv0
-      az network nic list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
-          --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
-        | xargs -n1 -r sh -c 'az network nic delete --resource-group $AZURE_RESOURCE_GROUP --name "$1" || true' argv0
-      az network public-ip list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
-          --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
-        | xargs -n1 -r sh -c 'az network public-ip delete --resource-group $AZURE_RESOURCE_GROUP --name "$1" || true' argv0
-      az deployment group list --resource-group $AZURE_RESOURCE_GROUP -o tsv \
-          --query "[?tags.namespace == '{{ default_ns.name }}'].name" \
-        | xargs -n1 -r sh -c 'az deployment delete --name "$1" || true' argv0
-    secrets:
-      - name: batch-gsa-key
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /batch-gsa-key
-    scopes:
-      - dev
-      - test
-    serviceAccount:
-      name: admin
-      namespace:
-        valueFrom: default_ns.name
-    clouds:
-      - azure
-    dependsOn:
-      - default_ns
-      - test_batch_invariants
-      - test_batch
-      - test_ci
-      - test_hailtop_python
-      - test_hail_python_service_backend_gcp
-      - test_hail_python_service_backend_azure
       - cancel_all_running_test_batches
   - kind: runImage
     name: setup_dev_namespace_autoscaledown

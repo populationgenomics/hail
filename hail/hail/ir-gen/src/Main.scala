@@ -1,5 +1,6 @@
 import scala.annotation.nowarn
 import scala.collection.compat._
+import scala.collection.compat.immutable.ArraySeq
 
 import mainargs.{main, ParserForMethods}
 
@@ -25,7 +26,7 @@ trait IRDSL {
   protected def oneOrMore[T](x: Type[T]): Type[Seq[T]]
   protected def optional[T](x: Type[T]): Type[Option[T]]
 
-  def name: Type[Name] = att("Name").asInstanceOf[Type[Name]]
+  final def name: Type[Name] = att("Name").asInstanceOf[Type[Name]]
   def child: Type[Child]
   def tableChild: Type[Child]
   def matrixChild: Type[Child]
@@ -81,10 +82,10 @@ trait IRDSL {
 
   // Implicits for common names
 
-  implicit def nameDefaultName(t: Type[Name]): Declaration[Name] =
+  implicit final def nameDefaultName(t: Type[Name]): Declaration[Name] =
     in("name", t)
 
-  implicit def childDefaultName(t: Type[Child]): Declaration[Child] =
+  implicit final def childDefaultName(t: Type[Child]): Declaration[Child] =
     in("child", t)
 }
 
@@ -192,7 +193,7 @@ object IRDSL_Impl extends IRDSL {
 
     override def copyWithNewChildren(newChildren: SeqRepr[Child]): Repr[Child] = {
       assert(newChildren.hasStaticLen(1))
-      ChildRepr(typ, newChildren(0) + s".asInstanceOf[$typ]")
+      ChildRepr(typ, s"${newChildren(0)}.asInstanceOf[$typ]")
     }
   }
 
@@ -247,7 +248,7 @@ object IRDSL_Impl extends IRDSL {
         case (SeqRepr.Static(Seq(), _), r) => r
         case (l, SeqRepr.Static(Seq(), _)) => l
         case (SeqRepr.Static(l, t), SeqRepr.Static(r, _)) => SeqRepr.Static(l ++ r, t)
-        case _ => SeqRepr.Dynamic(this + " ++ " + other, eltType)
+        case _ => SeqRepr.Dynamic(s"$this ++ $other", eltType)
       }
     }
 
@@ -558,7 +559,7 @@ object IRDSL_Impl extends IRDSL {
       s"object $name extends ${name}CompanionExt\n"
     else ""
 
-    def generateDef: String = companionDef + classDef + "\n"
+    override def generateDef: String = companionDef + classDef + "\n"
   }
 }
 
@@ -737,8 +738,9 @@ object Main {
       in("onKey", att("Boolean")),
     )
 
-    r += node("RNGStateLiteral")
     r += node("RNGSplit", in("state", child), in("dynBitstring", child))
+    r += node("RNGSplitStatic", in("state", child), in("staticUid", att("Long")))
+    r += node("RNGStateLiteral")
 
     val key = in("key", att("String").*)
 
@@ -1083,13 +1085,6 @@ object Main {
       .withDocstring("Function input").withCompanionExtension
 
     r += node("Die", in("message", child), in("_typ", att("Type")), errorID).withCompanionExtension
-    r += node("Trap", in("child", child)).withDocstring(
-      """The Trap node runs the `child` node with an exception handler. If the child throws a
-        |HailException (user exception), then we return the tuple ((msg, errorId), NA). If the child
-        |throws any other exception, we raise that exception. If the child does not throw, then we
-        |return the tuple (NA, child value).
-        |""".stripMargin
-    )
     r += node("ConsoleLog", in("message", child), in("result", child))
 
     r += node(
@@ -1112,17 +1107,6 @@ object Main {
     ).withTraits(ApplyNode())
 
     r += node(
-      "ApplySeeded",
-      in("function", att("String")),
-      in("_args", child.*),
-      in("rngState", child),
-      in("staticUID", att("Long")),
-      in("returnType", att("Type")),
-    ).withTraits(ApplyNode())
-      .withPreamble("val args = rngState +: _args")
-      .withPreamble("val typeArgs: Seq[Type] = Seq.empty[Type]")
-
-    r += node(
       "ApplySpecial",
       in("function", att("String")),
       in("typeArgs", att("Seq[Type]")),
@@ -1130,8 +1114,6 @@ object Main {
       in("returnType", att("Type")),
       errorID,
     ).withTraits(ApplyNode(missingnessAware = true))
-
-    r += node("LiftMeOut", in("child", child))
 
     r += node("TableCount", tableChild)
     r += node("MatrixCount", matrixChild)
@@ -1213,9 +1195,10 @@ object Main {
     val pack = "package is.hail.expr.ir.defs"
     val imports = Seq(
       "is.hail.annotations.Annotation",
+      "is.hail.collection.FastSeq",
       "is.hail.io.{AbstractTypedCodecSpec, BufferSpec}",
       "is.hail.types.virtual.{Type, TArray, TStream, TVoid, TStruct, TTuple}",
-      "is.hail.utils.{FastSeq, StringEscapeUtils}",
+      "is.hail.utils.StringEscapeUtils",
       "is.hail.expr.ir.{AggOp, BaseIR, IR, TableIR, MatrixIR, BlockMatrixIR, Name, UnaryOp, BinaryOp, " +
         "ComparisonOp, CanEmit, EmitParamType, TableWriter, " +
         "WrappedMatrixNativeMultiWriter, MatrixWriter, MatrixNativeMultiWriter, BlockMatrixWriter, " +
@@ -1235,6 +1218,6 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val _ = ParserForMethods(this).runOrExit(args)
+    val _ = ParserForMethods(this).runOrExit(ArraySeq.unsafeWrapArray(args))
   }
 }

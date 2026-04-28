@@ -51,7 +51,7 @@ package asm4s {
     val astoreOp = AASTORE
     val returnOp = ARETURN
 
-    def newArray(): AbstractInsnNode = new TypeInsnNode(ANEWARRAY, iname)
+    override def newArray(): AbstractInsnNode = new TypeInsnNode(ANEWARRAY, iname)
 
     override def uninitializedValue: Value[_] = Code._uncheckednull(this)
   }
@@ -65,17 +65,13 @@ package asm4s {
     val astoreOp = AASTORE
     val returnOp = ARETURN
 
-    def newArray() = new TypeInsnNode(ANEWARRAY, iname)
+    override def newArray() = new TypeInsnNode(ANEWARRAY, iname)
 
     override def uninitializedValue: Value[_] = Code._null[Array[T]](this)
   }
 }
 
 package object asm4s {
-  lazy val theHailClassLoaderForSparkWorkers =
-    // FIXME: how do I ensure this is only created in Spark workers?
-    new HailClassLoader(getClass().getClassLoader())
-
   def genName(tag: String, baseName: String): String = lir.genName(tag, baseName)
 
   def typeInfo[T](implicit tti: TypeInfo[T]): TypeInfo[T] = tti
@@ -130,7 +126,7 @@ package object asm4s {
     val returnOp = IRETURN
     val newarrayOp = NEWARRAY
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_BOOLEAN)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_BOOLEAN)
 
     override def uninitializedValue: Value[_] = const(false)
   }
@@ -144,7 +140,7 @@ package object asm4s {
     val returnOp = IRETURN
     val newarrayOp = NEWARRAY
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_BYTE)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_BYTE)
 
     override def uninitializedValue: Value[_] = const(0.toByte)
   }
@@ -158,7 +154,7 @@ package object asm4s {
     val returnOp = IRETURN
     val newarrayOp = NEWARRAY
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_SHORT)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_SHORT)
 
     override def uninitializedValue: Value[_] = const(0.toShort)
   }
@@ -171,7 +167,7 @@ package object asm4s {
     val astoreOp = IASTORE
     val returnOp = IRETURN
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_INT)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_INT)
 
     override def uninitializedValue: Value[_] = const(0)
   }
@@ -185,7 +181,7 @@ package object asm4s {
     val returnOp = LRETURN
     override val slots = 2
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_LONG)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_LONG)
 
     override def uninitializedValue: Value[_] = const(0L)
   }
@@ -198,7 +194,7 @@ package object asm4s {
     val astoreOp = FASTORE
     val returnOp = FRETURN
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_FLOAT)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_FLOAT)
 
     override def uninitializedValue: Value[_] = const(0f)
   }
@@ -212,7 +208,7 @@ package object asm4s {
     val returnOp = DRETURN
     override val slots = 2
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_DOUBLE)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_DOUBLE)
 
     override def uninitializedValue: Value[_] = const(0d)
   }
@@ -226,21 +222,21 @@ package object asm4s {
     val returnOp = IRETURN
     override val slots = 2
 
-    def newArray() = new IntInsnNode(NEWARRAY, T_CHAR)
+    override def newArray() = new IntInsnNode(NEWARRAY, T_CHAR)
 
     override def uninitializedValue: Value[_] = const(0.toChar)
   }
 
   implicit object UnitInfo extends TypeInfo[Unit] {
     val desc = "V"
-    def loadOp = ???
-    def storeOp = ???
-    def aloadOp = ???
-    def astoreOp = ???
+    override def loadOp = ???
+    override def storeOp = ???
+    override def aloadOp = ???
+    override def astoreOp = ???
     val returnOp = RETURN
     override def slots = ???
 
-    def newArray() = ???
+    override def newArray() = ???
 
     override def uninitializedValue: Value[_] = Code._empty
   }
@@ -354,7 +350,7 @@ package object asm4s {
   }
 
   implicit def const(b: Boolean): Value[Boolean] = new Value[Boolean] {
-    def get: Code[Boolean] = new ConstCodeBoolean(b)
+    override def get: Code[Boolean] = new ConstCodeBoolean(b)
   }
 
   implicit def const(i: Int): Value[Int] = _const(i, IntInfo)

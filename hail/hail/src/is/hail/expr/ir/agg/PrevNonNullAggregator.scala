@@ -3,6 +3,7 @@ package is.hail.expr.ir.agg
 import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitCode, EmitCodeBuilder, IEmitCode}
 import is.hail.types.VirtualTypeWithReq
 import is.hail.types.physical.stypes.EmitType
@@ -11,15 +12,15 @@ import is.hail.types.virtual.Type
 class PrevNonNullAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
   type State = TypedRegionBackedAggState
   val resultEmitType = EmitType(typ.canonicalEmitType.st, false)
-  val initOpTypes: Seq[Type] = Array[Type]()
-  val seqOpTypes: Seq[Type] = Array[Type](typ.t)
+  val initOpTypes: IndexedSeq[Type] = ArraySeq.empty
+  val seqOpTypes: IndexedSeq[Type] = ArraySeq(typ.t)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     assert(init.length == 0)
     state.storeMissing(cb)
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(elt: EmitCode) = seq
     elt.toI(cb)
       .consume(
@@ -29,7 +30,7 @@ class PrevNonNullAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
       )
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -43,6 +44,7 @@ class PrevNonNullAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
         sc => state.storeNonmissing(cb, sc),
       )
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     state.get(cb).map(cb)(sv => sv.copyToRegion(cb, region, sv.st))
 }

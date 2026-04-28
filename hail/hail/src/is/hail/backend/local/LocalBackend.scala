@@ -2,6 +2,7 @@ package is.hail.backend.local
 
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Validate
 import is.hail.expr.ir._
 import is.hail.expr.ir.analyses.SemanticHash
@@ -9,7 +10,6 @@ import is.hail.expr.ir.lowering._
 import is.hail.types._
 import is.hail.types.physical.PTuple
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
@@ -40,7 +40,7 @@ object LocalBackend extends Backend with Logging {
 
   is.hail.linalg.registerImplOpMulMatrix_DMD_DVD_eq_DVD
 
-  def broadcast[T: ClassTag](value: T): BroadcastValue[T] =
+  override def broadcast[T: ClassTag](value: T): BroadcastValue[T] =
     new LocalBroadcastValue[T](value)
 
   private[this] var stageIdx: Int = 0
@@ -80,16 +80,12 @@ object LocalBackend extends Backend with Logging {
         val stageId = nextStageId()
 
         try
-          for (idx <- todo) {
-            using(new LocalTaskContext(idx, stageId)) { tx =>
-              results += {
-                (
-                  f(globals, contexts(idx), tx, ctx.theHailClassLoader, ctx.fs),
-                  idx,
-                )
+          for (idx <- todo)
+            results += using(new LocalTaskContext(idx, stageId)) { htc =>
+              htc.getRegionPool().scopedRegion { r =>
+                f(ctx.theHailClassLoader, ctx.fs, htc, r)(globals, contexts(idx)) -> idx
               }
             }
-          }
         catch {
           case NonFatal(t) =>
             failure = Some(t)
@@ -100,9 +96,9 @@ object LocalBackend extends Backend with Logging {
     }
   }
 
-  def defaultParallelism: Int = 1
+  override def defaultParallelism: Int = 1
 
-  def close(): Unit =
+  override def close(): Unit =
     synchronized { stageIdx = 0 }
 
   private[this] def _jvmLowerAndExecute(
@@ -140,7 +136,7 @@ object LocalBackend extends Backend with Logging {
   ): TableReader =
     LowerDistributedSort.distributedSort(ctx, stage, sortFields, rt, nPartitions)
 
-  def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
+  override def tableToTableStage(ctx: ExecuteContext, inputIR: TableIR, analyses: LoweringAnalyses)
     : TableStage =
     LowerTableIR.applyTable(inputIR, DArrayLowering.All, ctx, analyses)
 }

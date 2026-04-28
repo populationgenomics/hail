@@ -1,5 +1,6 @@
 package is.hail.expr
 
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.utils._
 import is.hail.variant._
 
@@ -86,7 +87,7 @@ object Parser extends JavaTokenParsers {
   def oneOfLiteral(a: IndexedSeq[String]): Parser[String] = new Parser[String] {
     private[this] val root = ParseTrieNode.generate(a)
 
-    def apply(in: Input): ParseResult[String] = {
+    override def apply(in: Input): ParseResult[String] = {
 
       var _in = in
       var node = root
@@ -114,10 +115,10 @@ object Parser extends JavaTokenParsers {
 
   def call: Parser[Call] = {
     wholeNumber ~ "/" ~ rep1sep(wholeNumber, "/") ^^ { case a0 ~ _ ~ arest =>
-      CallN(coerceInt(a0) +: arest.map(coerceInt).toArray, phased = false)
+      CallN(coerceInt(a0) +: arest.view.map(coerceInt).to(ArraySeq), phased = false)
     } |
       wholeNumber ~ "|" ~ rep1sep(wholeNumber, "|") ^^ { case a0 ~ _ ~ arest =>
-        CallN(coerceInt(a0) +: arest.map(coerceInt).toArray, phased = true)
+        CallN(coerceInt(a0) +: arest.view.map(coerceInt).to(ArraySeq), phased = true)
       } |
       wholeNumber ^^ { a => Call1(coerceInt(a), phased = false) } |
       "|" ~ wholeNumber ^^ { case _ ~ a => Call1(coerceInt(a), phased = true) } |

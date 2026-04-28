@@ -1,5 +1,6 @@
 package is.hail.annotations
 
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
@@ -13,10 +14,10 @@ import org.apache.spark.sql.Row
 import sun.reflect.generics.reflectiveObjects.NotImplementedException
 
 trait UnKryoSerializable extends KryoSerializable {
-  def write(kryo: Kryo, output: Output): Unit =
+  override def write(kryo: Kryo, output: Output): Unit =
     throw new NotImplementedException()
 
-  def read(kryo: Kryo, input: Input): Unit =
+  override def read(kryo: Kryo, input: Input): Unit =
     throw new NotImplementedException()
 }
 
@@ -24,11 +25,11 @@ class UnsafeIndexedSeq(
   val t: PContainer,
   val region: Region,
   val aoff: Long,
-) extends IndexedSeq[Annotation] with UnKryoSerializable {
+) extends collection.immutable.IndexedSeq[Annotation] with UnKryoSerializable {
 
   val length: Int = t.loadLength(aoff)
 
-  def apply(i: Int): Annotation = {
+  override def apply(i: Int): Annotation = {
     if (i < 0 || i >= length)
       throw new IndexOutOfBoundsException(i.toString)
     if (t.isElementDefined(aoff, i)) {
@@ -156,19 +157,19 @@ class UnsafeRow(val t: PBaseStruct, var region: Region, var offset: Long)
 
   def set(rv: RegionValue): Unit = set(rv.region, rv.offset)
 
-  def length: Int = t.size
+  override def length: Int = t.size
 
   private def assertDefined(i: Int): Unit =
     if (isNullAt(i))
       throw new NullPointerException(s"null value at index $i")
 
-  def get(i: Int): Any =
+  override def get(i: Int): Any =
     if (isNullAt(i))
       null
     else
       UnsafeRow.read(t.types(i), region, t.loadField(offset, i))
 
-  def copy(): Row = new UnsafeRow(t, region, offset)
+  override def copy(): Row = new UnsafeRow(t, region, offset)
 
   def pretty(): String = Region.pretty(t, offset)
 
@@ -221,12 +222,12 @@ object SafeRow {
 
   def apply(t: PBaseStruct, rv: RegionValue): Row = SafeRow(t, rv.offset)
 
-  def selectFields(t: PBaseStruct, region: Region, off: Long)(selectIdx: Array[Int]): Row = {
+  def selectFields(t: PBaseStruct, region: Region, off: Long)(selectIdx: IndexedSeq[Int]): Row = {
     val fullRow = new UnsafeRow(t, region, off)
     Row.fromSeq(selectIdx.map(i => Annotation.copy(t.types(i).virtualType, fullRow.get(i))))
   }
 
-  def selectFields(t: PBaseStruct, rv: RegionValue)(selectIdx: Array[Int]): Row =
+  def selectFields(t: PBaseStruct, rv: RegionValue)(selectIdx: IndexedSeq[Int]): Row =
     SafeRow.selectFields(t, rv.region, rv.offset)(selectIdx)
 
   def read(t: PType, off: Long): Annotation =
@@ -269,7 +270,7 @@ object SafeIndexedSeq {
 
 class SelectFieldsRow(
   private[this] var old: Row,
-  private[this] val fieldMapping: Array[Int],
+  private[this] val fieldMapping: IndexedSeq[Int],
 ) extends Row {
   def this(
     old: Row,
@@ -283,17 +284,17 @@ class SelectFieldsRow(
     newPType: PStruct,
   ) =
     this(
-      old,
-      (require(
-        oldPType.fields.length <= old.length &&
-          newPType.fields.length <= old.length,
-        s"$oldPType, $newPType ${old.length} $old",
-      )
-        ->
-          newPType.fieldNames.map(name => oldPType.fieldIdx(name)))._2,
+      old, {
+        require(
+          oldPType.fields.length <= old.length &&
+            newPType.fields.length <= old.length,
+          s"$oldPType, $newPType ${old.length} $old",
+        )
+        newPType.fieldNames.map(name => oldPType.fieldIdx(name))
+      },
     )
 
-  require(fieldMapping.forall(x => x < old.length), s"${fieldMapping.toSeq}, ${old.length} $old")
+  require(fieldMapping.forall(x => x < old.length), s"$fieldMapping, ${old.length} $old")
 
   override def length = fieldMapping.length
   override def get(i: Int) = old.get(fieldMapping(i))
@@ -326,18 +327,16 @@ trait NDArray {
 class UnsafeNDArray(val pnd: PNDArray, val region: Region, val ndAddr: Long) extends NDArray {
   val shape: IndexedSeq[Long] = (0 until pnd.nDims).map(i => pnd.loadShape(ndAddr, i))
   val elementType = pnd.elementType.virtualType
-  val coordStorageArray = new Array[Long](shape.size)
 
-  def lookupElement(indices: IndexedSeq[Long]): Annotation = {
+  override def lookupElement(indices: IndexedSeq[Long]): Annotation = {
     val elementAddress = pnd.getElementAddress(indices, ndAddr)
     UnsafeRow.read(pnd.elementType, region, pnd.elementType.unstagedLoadFromNested(elementAddress))
   }
 
-  def getRowMajorElements(): IndexedSeq[Annotation] = {
-    val indices = (0 until pnd.nDims).map(_ => 0L).toArray
-    var curIdx = indices.size - 1
-    var idxIntoFlat = 0
-    val flat = new Array[Annotation](numElements.toInt)
+  override def getRowMajorElements(): IndexedSeq[Annotation] = {
+    val indices = Array.fill(pnd.nDims)(0L)
+    val flat = ArraySeq.newBuilder[Annotation]
+    flat.sizeHint(numElements.toInt)
 
     if (numElements > Int.MaxValue) {
       throw new IllegalArgumentException(
@@ -345,8 +344,10 @@ class UnsafeNDArray(val pnd: PNDArray, val region: Region, val ndAddr: Long) ext
       )
     }
 
+    var curIdx = indices.size - 1
+    var idxIntoFlat = 0
     while (idxIntoFlat < numElements) {
-      flat(idxIntoFlat) = lookupElement(indices)
+      flat += lookupElement(ArraySeq.unsafeWrapArray(indices))
       while (curIdx >= 0L && indices(curIdx) >= shape(curIdx) - 1) {
         indices(curIdx) = 0L
         curIdx -= 1
@@ -359,16 +360,17 @@ class UnsafeNDArray(val pnd: PNDArray, val region: Region, val ndAddr: Long) ext
       idxIntoFlat += 1
     }
 
-    flat
+    flat.result()
   }
 
   override def forall(pred: Annotation => Boolean): Boolean = {
     val indices = (0 until pnd.nDims).map(_ => 0L).toArray
+    val indicesImmut = ArraySeq.unsafeWrapArray(indices)
     var curIdx = indices.size - 1
     var idxIntoFlat = 0
 
     while (idxIntoFlat < numElements) {
-      if (!pred(lookupElement(indices))) {
+      if (!pred(lookupElement(indicesImmut))) {
         return false
       }
 

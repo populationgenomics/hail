@@ -3,12 +3,12 @@ package is.hail.types.physical
 import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.HailStateManager
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.physical.stypes.interfaces.SBaseStructValue
-import is.hail.utils._
 
 object PBaseStruct {
-  def alignment(types: Array[PType]): Long =
+  def alignment(types: IndexedSeq[PType]): Long =
     if (types.isEmpty)
       1
     else
@@ -16,17 +16,17 @@ object PBaseStruct {
 }
 
 abstract class PBaseStruct extends PType {
-  val types: Array[PType]
+  val types: IndexedSeq[PType]
 
   val fields: IndexedSeq[PField]
 
-  final lazy val fieldRequired: Array[Boolean] = types.map(_.required)
+  final lazy val fieldRequired: IndexedSeq[Boolean] = types.map(_.required)
   final lazy val allFieldsRequired: Boolean = fieldRequired.forall(_ == true)
 
   final lazy val fieldIdx: Map[String, Int] =
     fields.map(f => (f.name, f.index)).toMap
 
-  final lazy val fieldNames: Array[String] = fields.map(_.name).toArray
+  final lazy val fieldNames: IndexedSeq[String] = fields.map(_.name)
 
   def fieldByName(name: String): PField = fields(fieldIdx(name))
 
@@ -53,7 +53,7 @@ abstract class PBaseStruct extends PType {
 
   def identBase: String
 
-  def _asIdent: String = {
+  override def _asIdent: String = {
     val sb = new StringBuilder
     sb ++= identBase
     sb ++= "_of_"
@@ -75,11 +75,11 @@ abstract class PBaseStruct extends PType {
     require(this isOfType rightType)
 
     val right = rightType.asInstanceOf[PBaseStruct]
-    val fieldOrderings: Array[UnsafeOrdering] =
+    val fieldOrderings =
       types.zip(right.types).map { case (l, r) => l.unsafeOrdering(sm, r) }
 
     new UnsafeOrdering {
-      def compare(o1: Long, o2: Long): Int = {
+      override def compare(o1: Long, o2: Long): Int = {
         var i = 0
         while (i < types.length) {
           val leftDefined = isFieldDefined(o1, i)
@@ -102,7 +102,7 @@ abstract class PBaseStruct extends PType {
 
   def nMissing: Int
 
-  def missingIdx: Array[Int]
+  def missingIdx: IndexedSeq[Int]
 
   def allocate(region: Region): Long
 

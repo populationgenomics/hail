@@ -2,7 +2,11 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{Code, _}
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, IEmitCode}
 import is.hail.io.{BufferSpec, InputBuffer, OutputBuffer, TypedCodecSpec}
 import is.hail.types.VirtualTypeWithReq
@@ -11,7 +15,6 @@ import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.concrete.{SIndexablePointer, SIndexablePointerValue}
 import is.hail.types.physical.stypes.interfaces.SIndexableValue
 import is.hail.types.virtual.{TInt32, Type}
-import is.hail.utils._
 
 object DensifyAggregator {
   val END_SERIALIZATION: Int = 0xf81ea4
@@ -34,10 +37,10 @@ class DensifyState(val arrayVType: VirtualTypeWithReq, val kb: EmitClassBuilder[
   private val length = kb.genFieldThisRef[Int]("densify_len")
   private val arrayAddr = kb.genFieldThisRef[Long]("densify_addr")
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
     cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit =
+  override def createState(cb: EmitCodeBuilder): Unit =
     cb.if_(region.isNull, cb.assign(r, Region.stagedCreate(regionSize, kb.pool())))
 
   override def load(
@@ -60,7 +63,7 @@ class DensifyState(val arrayVType: VirtualTypeWithReq, val kb: EmitClassBuilder[
     cb += Region.storeAddress(dest, arrayAddr)
   }
 
-  def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
+  override def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
     val codecSpec = TypedCodecSpec(kb.ctx, arrayStorageType, codec)
     (cb: EmitCodeBuilder, ob: Value[OutputBuffer]) => {
 
@@ -71,7 +74,7 @@ class DensifyState(val arrayVType: VirtualTypeWithReq, val kb: EmitClassBuilder[
     }
   }
 
-  def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
+  override def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
     val codecSpec = TypedCodecSpec(kb.ctx, arrayStorageType, codec)
 
     (cb: EmitCodeBuilder, ib: Value[InputBuffer]) => {
@@ -155,7 +158,7 @@ class DensifyState(val arrayVType: VirtualTypeWithReq, val kb: EmitClassBuilder[
   def result(cb: EmitCodeBuilder, region: Value[Region]): SIndexablePointerValue =
     arrayStorageType.loadCheapSCode(cb, arrayAddr)
 
-  def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
+  override def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
     cb.assign(
       arrayAddr,
       arrayStorageType.store(
@@ -180,10 +183,10 @@ class DensifyAggregator(val arrayVType: VirtualTypeWithReq) extends StagedAggreg
   }
 
   val resultEmitType: EmitType = EmitType(SIndexablePointer(pt), true)
-  val initOpTypes: Seq[Type] = Array(TInt32)
-  val seqOpTypes: Seq[Type] = Array(resultEmitType.virtualType)
+  val initOpTypes: IndexedSeq[Type] = ArraySeq(TInt32)
+  val seqOpTypes: IndexedSeq[Type] = ArraySeq(resultEmitType.virtualType)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     assert(init.length == 1)
     val Array(sizeTriplet) = init
     sizeTriplet.toI(cb)
@@ -194,12 +197,12 @@ class DensifyAggregator(val arrayVType: VirtualTypeWithReq) extends StagedAggreg
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(elt: EmitCode) = seq
     state.seqOp(cb, elt)
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -207,7 +210,8 @@ class DensifyAggregator(val arrayVType: VirtualTypeWithReq) extends StagedAggreg
     other: DensifyState,
   ): Unit = state.combine(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode = {
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode = {
     val resultInWrongRegion = state.result(cb, region)
     // deepCopy needs to be done here
     val ptrInRightRegion = pt.store(cb, region, resultInWrongRegion, true)

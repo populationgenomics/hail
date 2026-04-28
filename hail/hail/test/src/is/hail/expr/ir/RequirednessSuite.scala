@@ -1,6 +1,8 @@
 package is.hail.expr.ir
 
 import is.hail.HailSuite
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Nat
 import is.hail.expr.ir.agg.CallStatsState
 import is.hail.expr.ir.defs._
@@ -13,7 +15,6 @@ import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.interfaces.SStream
 import is.hail.types.physical.stypes.primitives.SInt32
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -192,7 +193,7 @@ class RequirednessSuite extends HailSuite {
       nodes += Array(
         ReadPartition(
           if (path.isInstanceOf[Str])
-            MakeStruct(Array("partitionIndex" -> I64(0), "partitionPath" -> path))
+            MakeStruct(ArraySeq("partitionIndex" -> I64(0), "partitionPath" -> path))
           else
             NA(contextType),
           pt.virtualType,

@@ -129,6 +129,7 @@ def create_vm_config(
                 'network': 'global/networks/default',
                 'subnetwork': f'regions/{region}/subnetworks/default',
                 'networkTier': 'PREMIUM',
+                'stackType': 'IPV4_ONLY',
                 'accessConfigs': [{'type': 'ONE_TO_ONE_NAT', 'name': 'external-nat'}],
             }
         ],

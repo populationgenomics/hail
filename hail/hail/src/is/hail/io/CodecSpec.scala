@@ -1,14 +1,13 @@
 package is.hail.io
 
 import is.hail.annotations.{Region, RegionValue}
-import is.hail.asm4s.{theHailClassLoaderForSparkWorkers, Code, HailClassLoader}
+import is.hail.asm4s.{Code, HailClassLoader}
 import is.hail.backend.ExecuteContext
 import is.hail.sparkextras.ContextRDD
 import is.hail.types.encoded.EType
 import is.hail.types.physical.PType
 import is.hail.types.virtual.Type
-import is.hail.utils.{using, ArrayOfByteArrayOutputStream}
-import is.hail.utils.prettyPrint.ArrayOfByteArrayInputStream
+import is.hail.utils.{using, ArrayOfByteArrayInputStream, ArrayOfByteArrayOutputStream}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, OutputStream}
 
@@ -73,8 +72,8 @@ trait AbstractTypedCodecSpec extends Spec {
     val (pt, dec) = buildDecoder(ctx, requestedType)
     (
       pt,
-      ContextRDD.weaken(bytes).cmapPartitions { (ctx, it) =>
-        RegionValue.fromBytes(theHailClassLoaderForSparkWorkers, dec, ctx.region, it)
+      ContextRDD.weaken(bytes).cmapPartitions { (hcl, ctx, it) =>
+        RegionValue.fromBytes(hcl, dec, ctx.region, it)
       },
     )
   }

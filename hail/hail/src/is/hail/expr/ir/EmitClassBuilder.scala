@@ -2,9 +2,12 @@ package is.hail.expr.ir
 
 import is.hail.annotations.{Region, RegionPool, RegionValueBuilder}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.{codeToRichCodeRegion, valueToRichCodeRegion}
 import is.hail.backend.{BackendUtils, ExecuteContext, HailTaskContext}
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits._
 import is.hail.expr.ir.defs.EncodedLiteral
-import is.hail.expr.ir.functions.IRRandomness
 import is.hail.expr.ir.orderings.{CodeOrdering, StructOrdering}
 import is.hail.io.{BufferSpec, InputBuffer, TypedCodecSpec}
 import is.hail.io.fs.FS
@@ -14,15 +17,11 @@ import is.hail.types.physical.stypes._
 import is.hail.types.physical.stypes.interfaces.SBaseStruct
 import is.hail.types.virtual.Type
 import is.hail.utils._
-import is.hail.utils.compat._
-import is.hail.utils.compat.immutable.ArraySeq
-import is.hail.utils.prettyPrint.ArrayOfByteArrayInputStream
 import is.hail.variant.ReferenceGenome
 
 import scala.collection.mutable
 
 import java.io._
-import java.lang.reflect.InvocationTargetException
 
 import org.apache.spark.TaskContext
 
@@ -59,10 +58,10 @@ class EmitModuleBuilder(val ctx: ExecuteContext, val modb: ModuleBuilder) {
     rgContainers.getOrElseUpdate(rg, modb.genStaticField[ReferenceGenome](s"reference_genome_$rg"))
 
   def referenceGenomes(): IndexedSeq[ReferenceGenome] =
-    rgContainers.keys.map(ctx.references(_)).toIndexedSeq.sortBy(_.name)
+    ArraySeq.sortedBy(rgContainers.keys.map(ctx.references))(_.name)
 
   def referenceGenomeFields(): IndexedSeq[StaticFieldRef[ReferenceGenome]] =
-    rgContainers.toFastSeq.sortBy(_._1).map(_._2)
+    ArraySeq.sortedBy(rgContainers)(_._1).map(_._2)
 
   var _rgMapField: StaticFieldRef[Map[String, ReferenceGenome]] = null
 
@@ -86,10 +85,8 @@ class EmitModuleBuilder(val ctx: ExecuteContext, val modb: ModuleBuilder) {
     literalsBuilder.getOrElseUpdate(
       (t, value), {
         val curr = currLitIndex
-        val pt = t.canonicalPType
-        literalsBuilder.update((t, value), (pt, curr))
         currLitIndex += 1
-        (pt, curr)
+        (t.canonicalPType, curr)
       },
     )
   }
@@ -98,10 +95,8 @@ class EmitModuleBuilder(val ctx: ExecuteContext, val modb: ModuleBuilder) {
     encodedLiteralsBuilder.getOrElseUpdate(
       el, {
         val curr = currLitIndex
-        val pt = el.codec.decodedPType()
-        encodedLiteralsBuilder.update(el, (pt, curr))
         currLitIndex += 1
-        (pt, curr)
+        (el.codec.decodedPType(), curr)
       },
     )
   }
@@ -135,7 +130,7 @@ trait WrappedEmitModuleBuilder {
 trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
   def ecb: EmitClassBuilder[C]
 
-  def emodb: EmitModuleBuilder = ecb.emodb
+  override def emodb: EmitModuleBuilder = ecb.emodb
 
   def cb: ClassBuilder[C] = ecb.cb
 
@@ -199,15 +194,7 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
 
   def backend(): Code[BackendUtils] = ecb.backend()
 
-  def addModule(
-    name: String,
-    mod: (HailClassLoader, FS, HailTaskContext, Region) => AsmFunction3[
-      Region,
-      Array[Byte],
-      Array[Byte],
-      Array[Byte],
-    ],
-  ): Unit =
+  def addModule(name: String, mod: Compiled[BackendUtils.F]): Unit =
     ecb.addModule(name, mod)
 
   def partitionRegion: Settable[Region] = ecb.partitionRegion
@@ -248,12 +235,9 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
   def addAggStates(aggSigs: IndexedSeq[agg.AggStateSig]): agg.TupleAggregatorState =
     ecb.addAggStates(aggSigs)
 
-  def newRNG(seed: Long): Value[IRRandomness] = ecb.newRNG(seed)
+  def threefryRandomEngine: Value[ThreefryRandomEngine] = ecb.threefryRandomEngine
 
-  def getThreefryRNG(): Value[ThreefryRandomEngine] = ecb.getThreefryRNG()
-
-  def resultWithIndex(print: Option[PrintWriter] = None)
-    : (HailClassLoader, FS, HailTaskContext, Region) => C =
+  def resultWithIndex(print: Option[PrintWriter] = None): Compiled[C] =
     ecb.resultWithIndex(print)
 
   def getOrGenEmitMethod(
@@ -280,7 +264,7 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
     : EmitMethodBuilder[C] =
     ecb.genEmitMethod[A1, A2, A3, R](baseName)
 
-  def geEmitMethod[A1: TypeInfo, A2: TypeInfo, A3: TypeInfo, A4: TypeInfo, R: TypeInfo](
+  def genEmitMethod[A1: TypeInfo, A2: TypeInfo, A3: TypeInfo, A4: TypeInfo, R: TypeInfo](
     baseName: String
   ): EmitMethodBuilder[C] =
     ecb.genEmitMethod[A1, A2, A3, A4, R](baseName)
@@ -302,7 +286,7 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
 
   def open(path: Code[String], checkCodec: Code[Boolean]): Code[InputStream] =
     Code.newInstance[java.io.BufferedInputStream, InputStream](
-      getFS.invoke[String, Boolean, InputStream]("open", path, checkCodec)
+      openUnbuffered(path, checkCodec)
     )
 
   def createUnbuffered(path: Code[String]): Code[OutputStream] =
@@ -310,7 +294,7 @@ trait WrappedEmitClassBuilder[C] extends WrappedEmitModuleBuilder {
 
   def create(path: Code[String]): Code[OutputStream] =
     Code.newInstance[java.io.BufferedOutputStream, OutputStream](
-      getFS.invoke[String, OutputStream]("create", path)
+      createUnbuffered(path)
     )
 }
 
@@ -354,19 +338,13 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
   def newPField(name: String, st: SType): SSettable = newPSettable(fieldBuilder, st, name)
 
   def newEmitField(st: SType, required: Boolean): EmitSettable =
-    new EmitSettable(
-      if (required) None else Some(genFieldThisRef[Boolean]("emitfield_missing")),
-      newPField(st),
-    )
+    EmitSettable(fieldBuilder, st, required)
 
   def newEmitField(name: String, emitType: EmitType): EmitSettable =
     newEmitField(name, emitType.st, emitType.required)
 
   def newEmitField(name: String, st: SType, required: Boolean): EmitSettable =
-    new EmitSettable(
-      if (required) None else Some(genFieldThisRef[Boolean](name + "_missing")),
-      newPField(name, st),
-    )
+    EmitSettable(fieldBuilder, st, required, name)
 
   private[this] type CompareMapKey = (SType, SType)
 
@@ -401,7 +379,8 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
 
   private[this] def encodeLiterals(): Array[AnyRef] = {
     val (literals, preEncodedLiterals) = emodb.literalsResult()
-    val litType = PCanonicalTuple(true, literals.map(_._1.canonicalPType.setRequired(true)): _*)
+    val litType =
+      PCanonicalTuple(true, literals.toFastSeq.map(_._1.canonicalPType.setRequired(true)): _*)
     val spec = TypedCodecSpec(ctx, litType, BufferSpec.wireSpec)
 
     cb.addInterface(typeInfo[FunctionWithLiterals].iname)
@@ -467,16 +446,7 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     Array[AnyRef](baos.toByteArray) ++ preEncodedLiterals.map(_._1.value.ba)
   }
 
-  private[this] val _mods = Array.newBuilder[(
-    String,
-    (HailClassLoader, FS, HailTaskContext, Region) => AsmFunction3[
-      Region,
-      Array[Byte],
-      Array[Byte],
-      Array[Byte],
-    ],
-  )]
-
+  private[this] val _mods = Array.newBuilder[(String, Compiled[BackendUtils.F])]
   private[this] var _backendField: Settable[BackendUtils] = _
 
   private[this] var _aggSigs: IndexedSeq[agg.AggStateSig] = _
@@ -560,15 +530,17 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     _aggState
   }
 
-  def getSerializedAgg(i: Int): Code[Array[Byte]] = {
+  private def trackSerialized(i: Int): Unit =
     if (_nSerialized <= i)
       _nSerialized = i + 1
+
+  def getSerializedAgg(i: Int): Code[Array[Byte]] = {
+    trackSerialized(i)
     _aggSerialized.load()(i)
   }
 
   def setSerializedAgg(i: Int, b: Code[Array[Byte]]): Code[Unit] = {
-    if (_nSerialized <= i)
-      _nSerialized = i + 1
+    trackSerialized(i)
     _aggSerialized.load().update(i, b)
   }
 
@@ -576,14 +548,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     assert(i < _nSerialized)
     _aggSerialized.load().update(i, Code._null[Array[Byte]])
   }
-
-  def runMethodWithHailExceptionHandler(mname: String): Code[(String, java.lang.Integer)] =
-    Code.invokeScalaObject2[AnyRef, String, (String, java.lang.Integer)](
-      CodeExceptionHandler.getClass,
-      "handleUserException",
-      cb.this_.get.asInstanceOf[Code[AnyRef]],
-      mname,
-    )
 
   def backend(): Code[BackendUtils] = {
     if (_backendField == null) {
@@ -600,15 +564,7 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
   def pool(): Value[RegionPool] =
     poolField
 
-  def addModule(
-    name: String,
-    mod: (HailClassLoader, FS, HailTaskContext, Region) => AsmFunction3[
-      Region,
-      Array[Byte],
-      Array[Byte],
-      Array[Byte],
-    ],
-  ): Unit =
+  def addModule(name: String, mod: Compiled[BackendUtils.F]): Unit =
     _mods += name -> mod
 
   def getHailClassLoader: Code[HailClassLoader] = emodb.getHailClassLoader
@@ -711,11 +667,7 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
 
   private def getCodeArgsInfo(argsInfo: IndexedSeq[ParamType], returnInfo: ParamType)
     : (IndexedSeq[TypeInfo[_]], TypeInfo[_], AsmTuple[_]) = {
-    val codeArgsInfo = argsInfo.flatMap {
-      case CodeParamType(ti) => FastSeq(ti)
-      case t: EmitParamType => t.valueTupleTypes
-      case SCodeParamType(pt) => pt.settableTupleTypes()
-    }
+    val codeArgsInfo = argsInfo.flatMap(_.codeTypes)
     val (codeReturnInfo, asmTuple) = returnInfo match {
       case CodeParamType(ti) => ti -> null
       case SCodeParamType(pt) if pt.nSettables == 1 => pt.settableTupleTypes().head -> null
@@ -723,7 +675,7 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
         val asmTuple = modb.tupleClass(pt.settableTupleTypes())
         asmTuple.ti -> asmTuple
       case t: EmitParamType =>
-        val ts = t.valueTupleTypes
+        val ts = t.codeTypes
         if (ts.length == 1)
           ts.head -> null
         else {
@@ -779,10 +731,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
       asmTuple,
     )
   }
-
-  private val rngs = ArraySeq.newBuilder[(Settable[IRRandomness], Code[IRRandomness])]
-
-  var threefryRNG: Option[(Settable[ThreefryRandomEngine], Code[ThreefryRandomEngine])] = None
 
   def makeAddPartitionRegion(): Unit = {
     cb.addInterface(typeInfo[FunctionWithPartitionRegion].iname)
@@ -852,59 +800,19 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     }
   }
 
-  def makeRNGs(): Unit = {
-    cb.addInterface(typeInfo[FunctionWithSeededRandomness].iname)
-
-    val initialized = genFieldThisRef[Boolean]("initialized")
-    val mb =
-      newEmitMethod("setPartitionIndex", IndexedSeq[ParamType](typeInfo[Int]), typeInfo[Unit])
-    val rngFields = rngs.result()
-
-    mb.voidWithBuilder { cb =>
-      cb.if_(
-        !initialized, {
-          rngFields.foreach { case (field, init) =>
-            cb.assign(field, init)
-          }
-
-          threefryRNG.foreach { case (field, init) =>
-            cb.assign(field, init)
-          }
-
-          cb.assign(initialized, true)
-        },
+  lazy val threefryRandomEngine: Value[ThreefryRandomEngine] = {
+    val rngField = genFieldThisRef[ThreefryRandomEngine]("threefry")
+    cb.ctor.emitInit {
+      rngField := Code.invokeScalaObject0[ThreefryRandomEngine](
+        ThreefryRandomEngine.getClass,
+        "apply",
       )
-
-      rngFields.foreach { case (field, _) =>
-        cb += field.invoke[Int, Unit]("reset", mb.getCodeParam[Int](1))
-      }
     }
+    rngField
   }
 
-  def newRNG(seed: Long): Value[IRRandomness] = {
-    val rng = genFieldThisRef[IRRandomness]()
-    rngs += rng -> Code.newInstance[IRRandomness, Long](seed)
-    rng
-  }
-
-  def getThreefryRNG(): Value[ThreefryRandomEngine] = {
-    threefryRNG match {
-      case Some((rngField, _)) => rngField
-      case None =>
-        val rngField = genFieldThisRef[ThreefryRandomEngine]()
-        val rngInit = Code.invokeScalaObject0[ThreefryRandomEngine](
-          ThreefryRandomEngine.getClass,
-          "apply",
-        )
-        threefryRNG = Some(rngField -> rngInit)
-        rngField
-    }
-  }
-
-  def resultWithIndex(print: Option[PrintWriter] = None)
-    : (HailClassLoader, FS, HailTaskContext, Region) => C =
+  def resultWithIndex(print: Option[PrintWriter] = None): Compiled[C] =
     ctx.time {
-      makeRNGs()
       makeAddPartitionRegion()
       makeAddHailClassLoader()
       makeAddFS()
@@ -938,24 +846,15 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
         "FunctionBuilder emission should happen on master, but happened on worker",
       )
 
-      val n = cb.className.replace("/", ".")
-      val classesBytes = modb.classesBytes(ctx.shouldWriteIRFiles(), print)
+      val factory = new LazyClassFactory[C](
+        modb.classesBytes(ctx.shouldWriteIRFiles(), print),
+        cb.className.replace("/", "."),
+      )
 
-      new ((HailClassLoader, FS, HailTaskContext, Region) => C) with java.io.Serializable {
-        @transient @volatile private var theClass: Class[_] = null
-
-        def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region): C = {
-          if (theClass == null) {
-            this.synchronized {
-              if (theClass == null) {
-                classesBytes.load(hcl)
-                theClass = loadClass(hcl, n)
-              }
-            }
-          }
-          val idx = htc.partitionId()
-
-          val f = theClass.getDeclaredConstructor().newInstance().asInstanceOf[C]
+      new Compiled[C] with java.io.Serializable {
+        override def apply(hcl: HailClassLoader, fs: FS, htc: HailTaskContext, region: Region)
+          : C = {
+          val f = factory.newInstance(hcl)
           f.asInstanceOf[FunctionWithHailClassLoader].addHailClassLoader(hcl)
           f.asInstanceOf[FunctionWithFS].addFS(fs)
           f.asInstanceOf[FunctionWithTaskContext].addTaskContext(htc)
@@ -971,7 +870,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
             f.asInstanceOf[FunctionWithReferences].addReferenceGenomes(references)
           if (nSerializedAggs != 0)
             f.asInstanceOf[FunctionWithAggRegion].setNumSerialized(nSerializedAggs)
-          f.asInstanceOf[FunctionWithSeededRandomness].setPartitionIndex(idx)
           f
         }
       }
@@ -1058,11 +956,6 @@ final class EmitClassBuilder[C](val emodb: EmitModuleBuilder, val cb: ClassBuild
     : EmitMethodBuilder[C] =
     newStaticEmitMethod(genName("sm", baseName), argsInfo, returnInfo)
 
-  def getUnsafeReader(path: Code[String], checkCodec: Code[Boolean]): Code[InputStream] =
-    getFS.invoke[String, Boolean, InputStream]("unsafeReader", path, checkCodec)
-
-  def getUnsafeWriter(path: Code[String]): Code[OutputStream] =
-    getFS.invoke[String, OutputStream]("unsafeWriter", path)
 }
 
 object EmitFunctionBuilder {
@@ -1105,7 +998,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction1[A, R]](
       ctx,
       baseName,
-      Array(GenericTypeInfo[A]),
+      ArraySeq(GenericTypeInfo[A]),
       GenericTypeInfo[R],
     )
 
@@ -1114,7 +1007,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction2[A, B, R]](
       ctx,
       baseName,
-      Array(GenericTypeInfo[A], GenericTypeInfo[B]),
+      ArraySeq(GenericTypeInfo[A], GenericTypeInfo[B]),
       GenericTypeInfo[R],
     )
 
@@ -1125,7 +1018,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction3[A, B, C, R]](
       ctx,
       baseName,
-      Array(GenericTypeInfo[A], GenericTypeInfo[B], GenericTypeInfo[C]),
+      ArraySeq(GenericTypeInfo[A], GenericTypeInfo[B], GenericTypeInfo[C]),
       GenericTypeInfo[R],
     )
 
@@ -1136,7 +1029,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction4[A, B, C, D, R]](
       ctx,
       baseName,
-      Array(GenericTypeInfo[A], GenericTypeInfo[B], GenericTypeInfo[C], GenericTypeInfo[D]),
+      ArraySeq(GenericTypeInfo[A], GenericTypeInfo[B], GenericTypeInfo[C], GenericTypeInfo[D]),
       GenericTypeInfo[R],
     )
 
@@ -1147,7 +1040,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction5[A, B, C, D, E, R]](
       ctx,
       baseName,
-      Array(
+      ArraySeq(
         GenericTypeInfo[A],
         GenericTypeInfo[B],
         GenericTypeInfo[C],
@@ -1172,7 +1065,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction6[A, B, C, D, E, F, R]](
       ctx,
       baseName,
-      Array(
+      ArraySeq(
         GenericTypeInfo[A],
         GenericTypeInfo[B],
         GenericTypeInfo[C],
@@ -1199,7 +1092,7 @@ object EmitFunctionBuilder {
     EmitFunctionBuilder[AsmFunction7[A, B, C, D, E, F, G, R]](
       ctx,
       baseName,
-      Array(
+      ArraySeq(
         GenericTypeInfo[A],
         GenericTypeInfo[B],
         GenericTypeInfo[C],
@@ -1237,7 +1130,7 @@ trait FunctionWithAggRegion {
 }
 
 trait FunctionWithHailClassLoader {
-  def addHailClassLoader(fs: HailClassLoader): Unit
+  def addHailClassLoader(hcl: HailClassLoader): Unit
 }
 
 trait FunctionWithFS {
@@ -1261,31 +1154,8 @@ trait FunctionWithLiterals {
   def addAndDecodeLiterals(lit: Array[AnyRef]): Unit
 }
 
-trait FunctionWithSeededRandomness {
-  def setPartitionIndex(idx: Int): Unit
-}
-
 trait FunctionWithBackend {
-  def setBackend(spark: BackendUtils): Unit
-}
-
-object CodeExceptionHandler {
-
-  /** This method assumes that the method referred to by `methodName` is a -argument class method
-    * (only takes the class itself as an arg) which returns void.
-    */
-  def handleUserException(obj: AnyRef, methodName: String): (String, java.lang.Integer) = {
-    try {
-      obj.getClass.getMethod(methodName).invoke(obj)
-      null
-    } catch {
-      case e: InvocationTargetException =>
-        e.getTargetException match {
-          case ue: HailException => (ue.msg, ue.errorId)
-          case e => throw e
-        }
-    }
-  }
+  def setBackend(backend: BackendUtils): Unit
 }
 
 class EmitMethodBuilder[C](
@@ -1312,7 +1182,9 @@ class EmitMethodBuilder[C](
   // EmitMethodBuilder methods
 
   // this, ...
-  private val emitParamCodeIndex = emitParamTypes.scanLeft((!mb.isStatic).toInt) {
+  private val thisOffset: Int = if (mb.isStatic) 0 else 1
+
+  private val emitParamCodeIndex = emitParamTypes.scanLeft(thisOffset) {
     case (i, paramType) =>
       i + paramType.nCodes
   }
@@ -1321,20 +1193,18 @@ class EmitMethodBuilder[C](
     if (emitIndex == 0 && !mb.isStatic)
       mb.getArg[T](0)
     else {
-      val static = (!mb.isStatic).toInt
-      assert(emitParamTypes(emitIndex - static).isInstanceOf[CodeParamType])
-      mb.getArg[T](emitParamCodeIndex(emitIndex - static))
+      assert(emitParamTypes(emitIndex - thisOffset).isInstanceOf[CodeParamType])
+      mb.getArg[T](emitParamCodeIndex(emitIndex - thisOffset))
     }
   }
 
   def getSCodeParam(emitIndex: Int): SValue = {
     assert(mb.isStatic || emitIndex != 0)
-    val static = (!mb.isStatic).toInt
-    val _st = emitParamTypes(emitIndex - static).asInstanceOf[SCodeParamType].st
+    val _st = emitParamTypes(emitIndex - thisOffset).asInstanceOf[SCodeParamType].st
     assert(_st.isRealizable)
 
     val ts = _st.settableTupleTypes()
-    val codeIndex = emitParamCodeIndex(emitIndex - static)
+    val codeIndex = emitParamCodeIndex(emitIndex - thisOffset)
 
     _st.fromValues(ts.zipWithIndex.map { case (t, i) =>
       mb.getArg(codeIndex + i)(t)
@@ -1350,14 +1220,13 @@ class EmitMethodBuilder[C](
 
   def getEmitParam(cb: EmitCodeBuilder, emitIndex: Int): EmitValue = {
     assert(mb.isStatic || emitIndex != 0)
-    val static = (!mb.isStatic).toInt
-    val et = emitParamTypes(emitIndex - static) match {
+    val et = emitParamTypes(emitIndex - thisOffset) match {
       case t: EmitParamType => t
       case _ => throw new RuntimeException(
           s"isStatic=${mb.isStatic}, emitIndex=$emitIndex, params=$emitParamTypes"
         )
     }
-    val codeIndex = emitParamCodeIndex(emitIndex - static)
+    val codeIndex = emitParamCodeIndex(emitIndex - thisOffset)
 
     et match {
       case SingleCodeEmitParamType(required, sct) =>
@@ -1367,13 +1236,8 @@ class EmitMethodBuilder[C](
         EmitValue(m, v)
 
       case SCodeEmitParamType(et) =>
-        val ts = et.st.settableTupleTypes()
-
-        val m = if (et.required) None else Some(mb.getArg[Boolean](codeIndex + ts.length))
-        val v = et.st.fromValues(ts.zipWithIndex.map { case (t, i) =>
-          mb.getArg(codeIndex + i)(t)
-        })
-        EmitValue(m, v)
+        val ts = et.settableTupleTypes
+        et.fromValues(ts.zipWithIndex.map { case (t, i) => mb.getArg(codeIndex + i)(t) })
     }
   }
 
@@ -1384,19 +1248,13 @@ class EmitMethodBuilder[C](
   def newEmitLocal(emitType: EmitType): EmitSettable = newEmitLocal(emitType.st, emitType.required)
 
   def newEmitLocal(st: SType, required: Boolean): EmitSettable =
-    new EmitSettable(
-      if (required) None else Some(newLocal[Boolean]("anon_emitlocal_m")),
-      newPLocal("anon_emitlocal_v", st),
-    )
+    EmitSettable(localBuilder, st, required)
 
   def newEmitLocal(name: String, emitType: EmitType): EmitSettable =
     newEmitLocal(name, emitType.st, emitType.required)
 
   def newEmitLocal(name: String, st: SType, required: Boolean): EmitSettable =
-    new EmitSettable(
-      if (required) None else Some(newLocal[Boolean](name + "_missing")),
-      newPLocal(name, st),
-    )
+    EmitSettable(localBuilder, st, required, name)
 
   def emitWithBuilder[T](f: (EmitCodeBuilder) => Code[T]): Unit =
     emit(EmitCodeBuilder.scopedCode[T](this)(f))
@@ -1438,7 +1296,7 @@ class EmitMethodBuilder[C](
 trait WrappedEmitMethodBuilder[C] extends WrappedEmitClassBuilder[C] {
   def emb: EmitMethodBuilder[C]
 
-  def ecb: EmitClassBuilder[C] = emb.ecb
+  override def ecb: EmitClassBuilder[C] = emb.ecb
 
   // wrapped MethodBuilder methods
   def mb: MethodBuilder[C] = emb.mb

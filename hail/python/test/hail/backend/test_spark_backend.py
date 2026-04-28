@@ -1,10 +1,11 @@
 import os
+from typing import Any
 
-import pyspark
 import pytest
+from pyspark import SparkConf, SparkContext
 
 import hail as hl
-from hail.backend.spark_backend import _get_or_create_pyspark_gateway
+from hail.backend.spark_backend import _configure_spark_classpath, _get_or_create_pyspark_session
 from hail.utils.java import Env
 from test.hail.helpers import hl_init_for_test
 
@@ -15,9 +16,13 @@ def fatal(typ: hl.HailType, msg: str = "") -> hl.Expression:
     return hl.construct_expr(hl.ir.Die(hl.to_expr(msg, hl.tstr)._ir, typ), typ)
 
 
+def prune(kvs: dict[str, Any | None]) -> dict[str, Any]:
+    return {k: v for k, v in kvs.items() if v is not None}
+
+
 @pytest.mark.parametrize('copy', [True, False])
 def test_copy_spark_log(tmpdir, copy):
-    hl.init(copy_spark_log_on_error=copy, tmp_dir=str(tmpdir))
+    hl.init(copy_log_on_error=copy, tmp_dir=str(tmpdir))
 
     expr = fatal(hl.tint32)
     with pytest.raises(Exception):
@@ -45,41 +50,72 @@ def test_init_with_existing_spark_context(request):
     The second re-uses the same context.
     """
 
-    gateway = _get_or_create_pyspark_gateway(None, None, quiet=True)
-    JCons = getattr(gateway.jvm, 'is').hail.backend.spark.SparkBackend
-    jspark = JCons.pySparkSession(request.node.name, 'local[1]', None, 0)
-    sc = pyspark.SparkContext(gateway=gateway, jsc=gateway.jvm.JavaSparkContext(jspark.sparkContext()))
-
+    session = _get_or_create_pyspark_session(None, app_name=request.node.name, master='local[1]', show_progress=False)
     try:
+        sc = session.sparkContext
         hl_init_for_test(sc=sc, quiet=True)
         assert sc == Env.spark_session().sparkContext
-
+        hl.utils.range_table(10)._force_count()
         hl.stop()
 
         assert (jsc := getattr(sc, '_jsc', None)) is not None
         assert not jsc.sc().isStopped(), 'SparkBackend.close() should not stop a SparkContext it does not own.'
     finally:
-        sc.stop()
-        gateway.close()
+        session.stop()
+        with SparkContext._lock:
+            SparkContext._gateway.shutdown()
+            SparkContext._gateway = None
+            SparkContext._jvm = None
 
 
-@pytest.mark.parametrize('quiet', [True, False])
-def test_console_progress_bar_quiet(quiet):
-    hl.init(quiet=quiet)
-    conf = hl.spark_context().getConf()
-    assert conf.get('spark.ui.showConsoleProgress') == str(not quiet).lower()
+@pytest.fixture(scope='class')
+def jvm_gateway():
+    conf = SparkConf(loadDefaults=False)
+    _configure_spark_classpath(conf)
+    SparkContext._ensure_initialized(conf=conf)
+    try:
+        yield
+    finally:
+        with SparkContext._lock:
+            SparkContext._gateway.shutdown()
+            SparkContext._gateway = None
+            SparkContext._jvm = None
 
 
-def test_set_local_dir(tmp_path):
-    hl.init(local_tmpdir=str(tmp_path))
-    conf = hl.spark_context().getConf()
-    assert conf.get('spark.local.dir') == str(tmp_path)
-    assert hl.current_backend().local_tmpdir == f'file://{tmp_path}'
+class TestSparkConf:
+    cases = (
+        ['spark.app.name', 'app_name', None, None, 'Hail'],  # default
+        ['spark.app.name', 'app_name', 'Any', None, 'Hail'],
+        ['spark.app.name', 'app_name', 'Any', 'Foo', 'Foo'],
+        ['spark.master', 'master', None, None, 'local[*]'],  # default
+        ['spark.master', 'master', None, 'local', 'local'],
+        ['spark.master', 'master', 'local', None, 'local'],
+        ['spark.master', 'master', 'local[*]', 'local', 'local'],
+        ['spark.local.dir', 'local_tmpdir', None, None, None],  # default
+        ['spark.local.dir', 'local_tmpdir', '/tmp', None, '/tmp'],
+        ['spark.local.dir', 'local_tmpdir', None, '/tmp', '/tmp'],
+        ['spark.local.dir', 'local_tmpdir', '/dev/null', '/tmp', '/tmp'],
+        ['spark.hadoop.mapreduce.input.fileinputformat.split.minsize', 'min_block_size', None, None, None],  # default
+        ['spark.hadoop.mapreduce.input.fileinputformat.split.minsize', 'min_block_size', 1, None, '1'],
+        ['spark.hadoop.mapreduce.input.fileinputformat.split.minsize', 'min_block_size', None, 1, str(1 * 1024 * 1024)],
+        ['spark.hadoop.mapreduce.input.fileinputformat.split.minsize', 'min_block_size', 1, 2, str(2 * 1024 * 1024)],
+        ['spark.ui.showConsoleProgress', 'show_progress', None, None, 'true'],  # pyspark default
+        ['spark.ui.showConsoleProgress', 'show_progress', 'false', None, 'false'],
+        ['spark.ui.showConsoleProgress', 'show_progress', None, 'false', 'false'],
+        ['spark.ui.showConsoleProgress', 'show_progress', 'true', 'false', 'false'],
+    )
+
+    @pytest.mark.usefixtures('jvm_gateway')
+    @pytest.mark.parametrize('key,param,cvalue,arg,expected', cases)
+    def test_(self, key: str, param: str, cvalue: str | None, arg: Any | None, expected: str):
+        session = _get_or_create_pyspark_session(sc=None, spark_conf=prune({key: cvalue}), **prune({param: arg}))
+        try:
+            conf = session.sparkContext.getConf()
+            assert conf.get(key) == expected
+        finally:
+            session.stop()
 
 
-def test_set_local_dir_if_missing(tmp_path):
-    hl.init(spark_conf={'spark.local.dir': str(tmp_path)}, local_tmpdir='/does/not/exist')
-    conf = hl.spark_context().getConf()
-    assert conf.get('spark.local.dir') == str(tmp_path)
-
-    assert hl.current_backend().local_tmpdir == 'file:///does/not/exist'
+def test_min_block_size_pos_int():
+    with pytest.raises(ValueError):
+        hl.init(min_block_size=-1)

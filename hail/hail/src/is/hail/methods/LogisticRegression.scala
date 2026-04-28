@@ -2,7 +2,8 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
-import is.hail.expr.ir.{IntArrayBuilder, MatrixValue, TableValue}
+import is.hail.collection.IntArrayBuilder
+import is.hail.expr.ir.{MatrixValue, TableValue}
 import is.hail.expr.ir.functions.MatrixToTableFunction
 import is.hail.stats._
 import is.hail.types.virtual.{MatrixType, TArray, TFloat64, TStruct, TableType}
@@ -31,9 +32,9 @@ case class LogisticRegression(
     )
   }
 
-  def preservesPartitionCounts: Boolean = true
+  override def preservesPartitionCounts: Boolean = true
 
-  def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, mv: MatrixValue): TableValue = {
     val logRegTest = LogisticRegressionTest.tests(test)
     val tableType = typ(mv.typ)
     val newRVDType = tableType.canonicalRVDType
@@ -109,9 +110,9 @@ case class LogisticRegression(
     val entryArrayIdx = mv.entriesIdx
     val fieldIdx = entryType.fieldIdx(xField)
 
-    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(mv.rvRowType.fieldIdx(_)).toArray
+    val copiedFieldIndices = (mv.typ.rowKey ++ passThrough).map(mv.rvRowType.fieldIdx(_))
 
-    val newRVD = mv.rvd.mapPartitions(newRVDType) { (ctx, it) =>
+    val newRVD = mv.rvd.mapPartitions(newRVDType) { (_, ctx, it) =>
       val rvb = ctx.rvb
 
       val missingCompleteCols = new IntArrayBuilder()

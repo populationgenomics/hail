@@ -4,6 +4,9 @@ import is.hail.{linalg, HailFeatureFlags}
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend._
 import is.hail.backend.spark.SparkBackend
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.{JSONAnnotationImpex, SparkAnnotationImpex}
 import is.hail.expr.ir._
 import is.hail.expr.ir.IRParser.parseType
@@ -13,14 +16,17 @@ import is.hail.expr.ir.functions.IRFunctionRegistry
 import is.hail.expr.ir.lowering.IrMetadata
 import is.hail.io.fs._
 import is.hail.io.reference.{IndexedFastaSequenceFile, LiftOver}
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.PStruct
 import is.hail.types.virtual.{TArray, TInterval}
 import is.hail.types.virtual.Kinds.{BlockMatrix, Matrix, Table, Value}
 import is.hail.utils._
 import is.hail.utils.ExecutionTimer.Timings
+import is.hail.utils.implicits.toRichString
 import is.hail.variant.ReferenceGenome
 
 import scala.annotation.nowarn
+import scala.collection.compat._
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
@@ -41,7 +47,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
   private[this] val hcl = new HailClassLoader(getClass.getClassLoader)
   private[this] val references = mutable.Map(ReferenceGenome.builtinReferences().toSeq: _*)
   private[this] val blockMatrixCache = mutable.Map[String, linalg.BlockMatrix]()
-  private[this] val compiledCodeCache = new Cache[CodeCacheKey, CompiledFunction[_]](50)
+  private[this] val compiledCodeCache = new Cache[CompileCacheKey, CompiledFunction[_]](50)
   private[this] val irCache = mutable.Map[Int, BaseIR]()
   private[this] val coercerCache = new Cache[Any, LoweredTableReaderCoercer](32)
   private[this] var irID: Int = 0
@@ -50,7 +56,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
   private[this] var localTmpdir: String = _
 
   private[this] var tmpFileManager = new OwningTempFileManager(
-    newFs(CloudStorageFSConfig.fromFlagsAndEnv(None, flags))
+    newFs(CloudStorageConfig.readEnv(None))
   )
 
   def pyFs: FS =
@@ -92,7 +98,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
     synchronized {
       tmpFileManager.close()
 
-      val cloudfsConf = CloudStorageFSConfig.fromFlagsAndEnv(None, flags)
+      val cloudfsConf = CloudStorageConfig.readEnv(None)
 
       val rpConfig: Option[RequesterPaysConfig] =
         (
@@ -110,7 +116,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
         cloudfsConf.copy(
           google = (cloudfsConf.google, rpConfig) match {
             case (Some(gconf), _) => Some(gconf.copy(requester_pays_config = rpConfig))
-            case (None, Some(_)) => Some(GoogleStorageFSConfig(None, rpConfig))
+            case (None, Some(_)) => Some(GoogleStorageConfig(None, rpConfig))
             case _ => None
           }
         )
@@ -184,9 +190,9 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
       IRFunctionRegistry.registerIR(
         ctx,
         name,
-        typeParamStrs.asScala.toArray,
-        argNameStrs.asScala.toArray,
-        argTypeStrs.asScala.toArray,
+        typeParamStrs.asScala.to(ArraySeq),
+        argNameStrs.asScala.to(ArraySeq),
+        argTypeStrs.asScala.to(ArraySeq),
         returnType,
         bodyStr,
       ): Unit
@@ -206,7 +212,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
 
   def pyFromDF(df: DataFrame, jKey: java.util.List[String]): (Int, String) =
     withExecuteContext(selfContainedExecution = false) { ctx =>
-      val key = jKey.asScala.toArray.toFastSeq
+      val key = jKey.asScala.toFastSeq
       val signature =
         SparkAnnotationImpex.importType(df.schema).setRequired(true).asInstanceOf[PStruct]
       val tir = TableLiteral(
@@ -302,7 +308,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
 
   def pyGrepReturn(regex: String, files: Seq[String], maxLines: Int)
     : Array[(String, Array[String])] =
-    fileAndLineCounts(regex, files, maxLines).mapValues(_.map(_.value)).toArray
+    fileAndLineCounts(regex, files, maxLines).view.mapValues(_.map(_.value)).toArray
 
   private[this] def addReference(rg: ReferenceGenome): Unit =
     ReferenceGenome.addFatalOnCollision(references, FastSeq(rg))
@@ -342,14 +348,14 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
           flags = flags,
           irMetadata = new IrMetadata(),
           blockMatrixCache = blockMatrixCache,
-          codeCache = compiledCodeCache,
+          compileCache = compiledCodeCache,
           irCache = irCache,
           coercerCache = coercerCache,
         )(f)
       }
     }
 
-  private[this] def newFs(cloudfsConfig: CloudStorageFSConfig): FS =
+  private[this] def newFs(cloudfsConfig: CloudStorageConfig): FS =
     backend match {
       case s: SparkBackend =>
         val conf = new Configuration(s.sc.hadoopConfiguration)
@@ -473,7 +479,7 @@ final class Py4JQueryDriver(backend: Backend) extends Closeable with Logging {
       // Note that simply calling httpServer.start() from a non-daemon thread will spawn a
       // non-daemon thread itself.
       private[this] val thread = new Thread(new Runnable() {
-        def run(): Unit = httpServer.start()
+        override def run(): Unit = httpServer.start()
       })
 
       thread.setDaemon(true)

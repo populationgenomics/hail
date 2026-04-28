@@ -1,9 +1,9 @@
 package is.hail.annotations
 
 import is.hail.backend.HailStateManager
+import is.hail.collection.compat.mutable.GrowableCompat
 import is.hail.rvd.RVDContext
 import is.hail.types.physical.{PStruct, PType}
-import is.hail.utils.compat.mutable.GrowableCompat
 
 import scala.collection.mutable.{ArrayBuffer, PriorityQueue}
 
@@ -49,14 +49,14 @@ class WritableRegionValue private (
 
   def offset: Long = value.offset
 
-  def setSelect(fromT: PStruct, fromFieldIdx: Array[Int], fromRV: RegionValue): Unit =
+  def setSelect(fromT: PStruct, fromFieldIdx: IndexedSeq[Int], fromRV: RegionValue): Unit =
     setSelect(fromT, fromFieldIdx, fromRV.region, fromRV.offset)
 
-  def setSelect(fromT: PStruct, fromFieldIdx: Array[Int], fromRegion: Region, fromOffset: Long)
+  def setSelect(fromT: PStruct, fromFieldIdx: IndexedSeq[Int], fromRegion: Region, fromOffset: Long)
     : Unit =
     setSelect(fromT, fromFieldIdx, fromOffset, region.ne(fromRegion))
 
-  def setSelect(fromT: PStruct, fromFieldIdx: Array[Int], fromOffset: Long, deepCopy: Boolean)
+  def setSelect(fromT: PStruct, fromFieldIdx: IndexedSeq[Int], fromOffset: Long, deepCopy: Boolean)
     : Unit = {
     (t: @unchecked) match {
       case t: PStruct =>
@@ -125,7 +125,7 @@ class RegionValuePriorityQueue(
     popped.region.close()
   }
 
-  def iterator: Iterator[RegionValue] = queue.iterator
+  override def iterator: Iterator[RegionValue] = queue.iterator
 }
 
 class RegionValueArrayBuffer(val t: PType, region: Region, sm: HailStateManager)
@@ -140,7 +140,7 @@ class RegionValueArrayBuffer(val t: PType, region: Region, sm: HailStateManager)
 
   override def knownSize: Int = idx.length
 
-  def addOne(rv: RegionValue): this.type =
+  override def addOne(rv: RegionValue): this.type =
     this.append(rv.region, rv.offset)
 
   def append(fromRegion: Region, fromOffset: Long): this.type = {
@@ -152,7 +152,7 @@ class RegionValueArrayBuffer(val t: PType, region: Region, sm: HailStateManager)
 
   def appendSelect(
     fromT: PStruct,
-    fromFieldIdx: Array[Int],
+    fromFieldIdx: IndexedSeq[Int],
     fromRV: RegionValue,
   ): this.type = {
 
@@ -165,7 +165,7 @@ class RegionValueArrayBuffer(val t: PType, region: Region, sm: HailStateManager)
     this
   }
 
-  def clear(): Unit = {
+  override def clear(): Unit = {
     region.clear()
     idx.clear()
     rvb.clear() // remove
@@ -174,16 +174,16 @@ class RegionValueArrayBuffer(val t: PType, region: Region, sm: HailStateManager)
   private var itIdx = 0
 
   private val it = new Iterator[RegionValue] {
-    def next(): RegionValue = {
+    override def next(): RegionValue = {
       value.setOffset(idx(itIdx))
       itIdx += 1
       value
     }
 
-    def hasNext: Boolean = itIdx < idx.size
+    override def hasNext: Boolean = itIdx < idx.size
   }
 
-  def iterator: Iterator[RegionValue] = {
+  override def iterator: Iterator[RegionValue] = {
     itIdx = 0
     it
   }

@@ -2,6 +2,8 @@ package is.hail.variant
 
 import is.hail.annotations.ExtendedOrdering
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits._
 import is.hail.expr.{
   JSONExtractContig, JSONExtractIntervalLocus, JSONExtractReferenceGenome, Parser,
 }
@@ -13,7 +15,6 @@ import is.hail.io.reference.{
 import is.hail.types._
 import is.hail.types.virtual.{TLocus, Type}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -108,7 +109,8 @@ case class ReferenceGenome(
   val locusOrdering = {
     val localContigsIndex = contigsIndex
     new Ordering[Locus] {
-      def compare(x: Locus, y: Locus): Int = ReferenceGenome.compare(localContigsIndex, x, y)
+      override def compare(x: Locus, y: Locus): Int =
+        ReferenceGenome.compare(localContigsIndex, x, y)
     }
   }
 
@@ -496,12 +498,12 @@ object ReferenceGenome {
   }
 
   def read(is: InputStream): ReferenceGenome = {
-    implicit val formats = defaultJSONFormats
+    implicit val formats = DefaultFormats
     JsonMethods.parse(is).extract[JSONExtractReferenceGenome].toReferenceGenome
   }
 
   def parse(str: String): ReferenceGenome = {
-    implicit val formats = defaultJSONFormats
+    implicit val formats = DefaultFormats
     JsonMethods.parse(str).extract[JSONExtractReferenceGenome].toReferenceGenome
   }
 
@@ -522,10 +524,10 @@ object ReferenceGenome {
     name: String,
     fastaFile: String,
     indexFile: String,
-    xContigs: Array[String] = Array.empty[String],
-    yContigs: Array[String] = Array.empty[String],
-    mtContigs: Array[String] = Array.empty[String],
-    parInput: Array[String] = Array.empty[String],
+    xContigs: IndexedSeq[String] = ArraySeq.empty[String],
+    yContigs: IndexedSeq[String] = ArraySeq.empty[String],
+    mtContigs: IndexedSeq[String] = ArraySeq.empty[String],
+    parInput: IndexedSeq[String] = ArraySeq.empty[String],
   ): ReferenceGenome = {
     val fs = ctx.fs
 
@@ -639,12 +641,12 @@ object ReferenceGenome {
   ): ReferenceGenome =
     ReferenceGenome(
       name,
-      contigs.asScala.toArray,
+      contigs.asScala.to(ArraySeq),
       lengths.asScala.toMap,
-      xContigs.asScala.toArray,
-      yContigs.asScala.toArray,
-      mtContigs.asScala.toArray,
-      parInput.asScala.toArray,
+      xContigs.asScala.to(ArraySeq),
+      yContigs.asScala.to(ArraySeq),
+      mtContigs.asScala.to(ArraySeq),
+      parInput.asScala.to(ArraySeq),
     )
 
   def getMapFromArray(arr: Array[ReferenceGenome]): Map[String, ReferenceGenome] =
@@ -659,7 +661,7 @@ object ReferenceGenome {
         fatal(
           s"Cannot add reference genome '${rg.name}', a different reference with that name already exists. " ++
             "Choose a reference name NOT in the following list:" ++
-            existing.keys.toFastSeq.sorted.mkString(start = "\n  ", sep = "\n  ", end = "")
+            ArraySeq.sorted(existing.keys).mkString(start = "\n  ", sep = "\n  ", end = "")
         )
 
       existing += (rg.name -> rg)

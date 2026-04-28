@@ -2,6 +2,7 @@ package is.hail.types.physical
 
 import is.hail.annotations.{Annotation, Region, UnsafeOrdering}
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.valueToRichCodeRegion
 import is.hail.backend.HailStateManager
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.physical.stypes.{SType, SValue}
@@ -27,12 +28,12 @@ object StoredCodeTuple {
   }
 }
 
-class StoredCodeTuple(tis: Array[TypeInfo[_]]) {
+class StoredCodeTuple(tis: IndexedSeq[TypeInfo[_]]) {
   tis.foreach(ti => require(StoredCodeTuple.canStore(ti)))
 
   private[this] val tiByteSize = tis.map(StoredCodeTuple.byteSize)
-  private[this] val fieldOffsets = new Array[Long](tis.length)
-  val byteSize: Long = getByteSizeAndOffsets(tiByteSize, tiByteSize, 0, fieldOffsets)
+  private[this] val (fieldOffsets, _byteSize) = getByteSizeAndOffsets(tiByteSize, tiByteSize, 0)
+  def byteSize: Long = _byteSize
   val alignment: Long = tiByteSize.max
 
   def store(cb: EmitCodeBuilder, addr: Value[Long], codes: IndexedSeq[Code[_]]): Unit = {
@@ -86,7 +87,7 @@ class StoredCodeTuple(tis: Array[TypeInfo[_]]) {
 
 case class StoredSTypePType(sType: SType, required: Boolean) extends PType {
 
-  private[this] lazy val ct = new StoredCodeTuple(sType.settableTupleTypes().toArray)
+  private[this] lazy val ct = new StoredCodeTuple(sType.settableTupleTypes())
 
   override def virtualType: Type = sType.virtualType
 
@@ -117,7 +118,7 @@ case class StoredSTypePType(sType: SType, required: Boolean) extends PType {
 
   override def deepRename(t: Type): PType = StoredSTypePType(sType.castRename(t), required)
 
-  def byteSize: Long = ct.byteSize
+  override def byteSize: Long = ct.byteSize
 
   override def alignment: Long = ct.alignment
 
@@ -137,12 +138,13 @@ case class StoredSTypePType(sType: SType, required: Boolean) extends PType {
 
   override def unsafeOrdering(sm: HailStateManager): UnsafeOrdering = unsupportedCanonicalMethod
 
-  def unstagedLoadFromNested(addr: Long): Long = unsupportedCanonicalMethod
+  override def unstagedLoadFromNested(addr: Long): Long = unsupportedCanonicalMethod
 
-  def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region): Long =
+  override def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region)
+    : Long =
     unsupportedCanonicalMethod
 
-  def unstagedStoreJavaObjectAtAddress(
+  override def unstagedStoreJavaObjectAtAddress(
     sm: HailStateManager,
     addr: Long,
     annotation: Annotation,

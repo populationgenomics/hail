@@ -1,10 +1,10 @@
 package is.hail.expr.ir.functions
 
+import is.hail.collection.FastSeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs._
 import is.hail.types
 import is.hail.types.virtual._
-import is.hail.utils.FastSeq
 
 object DictFunctions extends RegistryFunctions {
   def contains(dict: IR, key: IR) = {
@@ -49,7 +49,7 @@ object DictFunctions extends RegistryFunctions {
 
   val tdict = TDict(tv("key"), tv("value"))
 
-  def registerAll(): Unit = {
+  override def registerAll(): Unit = {
     registerIR1("isEmpty", tdict, TBoolean)((_, d, _) => ArrayFunctions.isEmpty(CastToArray(d)))
 
     registerIR2("contains", tdict, tv("key"), TBoolean)((_, a, b, _) => contains(a, b))

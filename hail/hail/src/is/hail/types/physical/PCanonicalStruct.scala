@@ -1,18 +1,20 @@
 package is.hail.types.physical
 
 import is.hail.asm4s.{Code, Value}
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.{toRichIterable, toRichIterator}
 import is.hail.expr.ir.EmitCodeBuilder
 import is.hail.types.virtual.{TStruct, Type}
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
+import is.hail.utils.implicits.toTruncatable
 
 import scala.collection.compat._
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
 object PCanonicalStruct {
-  private val requiredEmpty = PCanonicalStruct(Array.empty[PField], true)
-  private val optionalEmpty = PCanonicalStruct(Array.empty[PField], false)
+  private val requiredEmpty = PCanonicalStruct(ArraySeq.empty, true)
+  private val optionalEmpty = PCanonicalStruct(ArraySeq.empty, false)
 
   def empty(required: Boolean = false): PStruct = if (required) requiredEmpty else optionalEmpty
 
@@ -28,8 +30,8 @@ object PCanonicalStruct {
 
   def apply(names: java.util.List[String], types: java.util.List[PType], required: Boolean)
     : PCanonicalStruct = {
-    val sNames = names.asScala.toArray
-    val sTypes = types.asScala.toArray
+    val sNames = names.asScala.to(ArraySeq)
+    val sTypes = types.asScala.to(ArraySeq)
     if (sNames.length != sTypes.length)
       fatal(
         s"number of names does not match number of types: found ${sNames.length} names and ${sTypes.length} types"
@@ -46,7 +48,7 @@ object PCanonicalStruct {
 }
 
 final case class PCanonicalStruct(fields: IndexedSeq[PField], required: Boolean = false)
-    extends PCanonicalBaseStruct(fields.map(_.typ).toArray) with PStruct {
+    extends PCanonicalBaseStruct(fields.map(_.typ)) with PStruct {
   assert(fields.zipWithIndex.forall { case (f, i) => f.index == i })
 
   if (!fieldNames.areDistinct()) {
@@ -112,7 +114,7 @@ final case class PCanonicalStruct(fields: IndexedSeq[PField], required: Boolean 
       ab += fields(i)
       i += 1
     }
-    val it = fieldsToInsert.toIterator
+    val it = fieldsToInsert.iterator
     while (it.hasNext) {
       val (name, typ) = it.next()
       if (fieldIdx.contains(name)) {

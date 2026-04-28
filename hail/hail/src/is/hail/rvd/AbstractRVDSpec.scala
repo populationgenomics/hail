@@ -2,10 +2,11 @@ package is.hail.rvd
 
 import is.hail.annotations._
 import is.hail.backend.{ExecuteContext, HailStateManager}
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.compatibility
 import is.hail.expr.{ir, JSONAnnotationImpex}
 import is.hail.expr.ir.{
-  flatMapIR, IR, PartitionNativeReader, PartitionZippedIndexedNativeReader,
+  flatMapIR, partFile, IR, PartitionNativeReader, PartitionZippedIndexedNativeReader,
   PartitionZippedNativeReader,
 }
 import is.hail.expr.ir.defs.{Literal, ReadPartition, Ref, ToStream}
@@ -13,11 +14,11 @@ import is.hail.expr.ir.lowering.{TableStage, TableStageDependency}
 import is.hail.io._
 import is.hail.io.fs.FS
 import is.hail.io.index.{InternalNodeBuilder, LeafNodeBuilder}
+import is.hail.sparkextras.implicits.RichContextRDDRegionValue
 import is.hail.types.encoded.ETypeSerializer
 import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 
 import scala.collection.compat._
 
@@ -70,7 +71,7 @@ object AbstractRVDSpec {
     rowType: PStruct,
     bufferSpec: BufferSpec,
     rows: IndexedSeq[Annotation],
-  ): Array[FileWriteMetadata] = {
+  ): IndexedSeq[FileWriteMetadata] = {
     val fs = execCtx.fs
     val partsPath = path + "/parts"
     fs.mkDir(partsPath)
@@ -85,6 +86,7 @@ object AbstractRVDSpec {
       using(fs.create(partsPath + "/" + filePath)) { os =>
         using(RVDContext.default(execCtx.r.pool)) { ctx =>
           RichContextRDDRegionValue.writeRowsPartition(codecSpec.buildEncoder(execCtx, rowType))(
+            execCtx.theHailClassLoader,
             ctx,
             rows.iterator.map { a =>
               rowType.unstagedStoreJavaObject(execCtx.stateManager, a, ctx.r)
@@ -96,10 +98,10 @@ object AbstractRVDSpec {
       }
 
     val spec =
-      MakeRVDSpec(codecSpec, Array(filePath), RVDPartitioner.unkeyed(execCtx.stateManager, 1))
+      MakeRVDSpec(codecSpec, ArraySeq(filePath), RVDPartitioner.unkeyed(execCtx.stateManager, 1))
     spec.write(fs, path)
 
-    Array(FileWriteMetadata(path, part0Count, bytesWritten))
+    ArraySeq(FileWriteMetadata(path, part0Count, bytesWritten))
   }
 
   def readZippedLowered(
@@ -258,7 +260,7 @@ abstract class AbstractRVDSpec {
         TArray(ctxType),
         absolutePartPaths(path).zipWithIndex.map {
           case (x, i) => Row(i.toLong, x)
-        }.toFastSeq,
+        },
       ))
 
       val body = (ctx: IR) =>
@@ -308,15 +310,15 @@ case class IndexSpec2(
   _annotationType: Type,
   _offsetField: Option[String] = None,
 ) extends AbstractIndexSpec {
-  def relPath: String = _relPath
+  override def relPath: String = _relPath
 
-  def leafCodec: AbstractTypedCodecSpec = _leafCodec
+  override def leafCodec: AbstractTypedCodecSpec = _leafCodec
 
-  def internalNodeCodec: AbstractTypedCodecSpec = _internalNodeCodec
+  override def internalNodeCodec: AbstractTypedCodecSpec = _internalNodeCodec
 
-  def keyType: Type = _keyType
+  override def keyType: Type = _keyType
 
-  def annotationType: Type = _annotationType
+  override def annotationType: Type = _annotationType
 
   override def offsetField: Option[String] = _offsetField
 }
@@ -385,7 +387,7 @@ object RVDSpecMaker {
     codecSpec,
     partitioner.kType.fieldNames,
     JSONAnnotationImpex.exportAnnotation(
-      partitioner.rangeBounds.toFastSeq,
+      partitioner.rangeBounds,
       partitioner.rangeBoundsType,
     ),
     indexSpec,
@@ -437,7 +439,7 @@ object IndexedRVDSpec2 {
       indexSpec,
       partFiles,
       JSONAnnotationImpex.exportAnnotation(
-        partitioner.rangeBounds.toFastSeq,
+        partitioner.rangeBounds,
         partitioner.rangeBoundsType,
       ),
       attrs,
@@ -462,11 +464,11 @@ case class IndexedRVDSpec2(
 
   require(codecSpec2.encodedType.required)
 
-  def typedCodecSpec: AbstractTypedCodecSpec = codecSpec2
+  override def typedCodecSpec: AbstractTypedCodecSpec = codecSpec2
 
-  def indexSpec: AbstractIndexSpec = _indexSpec
+  override def indexSpec: AbstractIndexSpec = _indexSpec
 
-  def partitioner(sm: HailStateManager): RVDPartitioner = {
+  override def partitioner(sm: HailStateManager): RVDPartitioner = {
     val keyType = codecSpec2.encodedVirtualType.asInstanceOf[TStruct].select(key)._1
     val rangeBoundsType = TArray(TInterval(keyType))
     new RVDPartitioner(
@@ -480,9 +482,9 @@ case class IndexedRVDSpec2(
     )
   }
 
-  def partFiles: IndexedSeq[String] = _partFiles
+  override def partFiles: IndexedSeq[String] = _partFiles
 
-  def key: IndexedSeq[String] = _key
+  override def key: IndexedSeq[String] = _key
 
   val attrs: Map[String, String] = _attrs
 
@@ -528,7 +530,7 @@ case class IndexedRVDSpec2(
          * but dropping any partitions we know would be empty. So we construct a map from old
          * partitions to the range of overlapping new partitions, dropping any with an empty range. */
         val contextsAndBounds = for {
-          (oldInterval, oldPartIdx) <- part.rangeBounds.toFastSeq.zipWithIndex
+          (oldInterval, oldPartIdx) <- part.rangeBounds.zipWithIndex
           overlapRange = extendedNP.queryInterval(oldInterval)
           if overlapRange.nonEmpty
         } yield {
@@ -553,7 +555,7 @@ case class IndexedRVDSpec2(
          * new partition. So we construct a map from new partitioner to the range of overlapping old
          * partitions. */
         val nestedContexts =
-          extendedNP.rangeBounds.toFastSeq.zipWithIndex.map { case (newInterval, newPartIdx) =>
+          extendedNP.rangeBounds.zipWithIndex.map { case (newInterval, newPartIdx) =>
             val overlapRange = part.queryInterval(newInterval)
             overlapRange.map(oldPartIdx => makeCtx(oldPartIdx, newPartIdx))
           }
@@ -597,7 +599,7 @@ case class OrderedRVDSpec2(
 
   require(codecSpec2.encodedType.required)
 
-  def partitioner(sm: HailStateManager): RVDPartitioner = {
+  override def partitioner(sm: HailStateManager): RVDPartitioner = {
     val keyType = codecSpec2.encodedVirtualType.asInstanceOf[TStruct].select(key)._1
     val rangeBoundsType = TArray(TInterval(keyType))
     new RVDPartitioner(
@@ -611,11 +613,11 @@ case class OrderedRVDSpec2(
     )
   }
 
-  def partFiles: IndexedSeq[String] = _partFiles
+  override def partFiles: IndexedSeq[String] = _partFiles
 
-  def key: IndexedSeq[String] = _key
+  override def key: IndexedSeq[String] = _key
 
-  def attrs: Map[String, String] = _attrs
+  override def attrs: Map[String, String] = _attrs
 
-  def typedCodecSpec: AbstractTypedCodecSpec = codecSpec2
+  override def typedCodecSpec: AbstractTypedCodecSpec = codecSpec2
 }

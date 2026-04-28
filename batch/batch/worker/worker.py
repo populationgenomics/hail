@@ -325,7 +325,9 @@ class NetworkAllocator:
         for subnet_index in range(N_PUBLIC_INTERFACES):
             public = NetworkNamespace(subnet_index, private=False, internet_interface=self.internet_interface)
             await public.init()
-            log.info(f'ipallocdebug: Adding public network: {public.network_ns_name} (subnet index: {subnet_index} job ip: {public.job_ip}, host ip {public.host_ip}) to list')
+            log.info(
+                f'ipallocdebug: Adding public network: {public.network_ns_name} (subnet index: {subnet_index} job ip: {public.job_ip}, host ip {public.host_ip}) to list'
+            )
             self.public_networks.put_nowait(public)
 
         N_PRIVATE_INTERFACES = min(255, N_SLOTS)
@@ -334,17 +336,23 @@ class NetworkAllocator:
             private = NetworkNamespace(subnet_index, private=True, internet_interface=self.internet_interface)
 
             await private.init()
-            log.info(f'ipallocdebug: Adding private network: {private.network_ns_name} (subnet index: {subnet_index} job ip: {private.job_ip}, host ip {private.host_ip}) to list')
+            log.info(
+                f'ipallocdebug: Adding private network: {private.network_ns_name} (subnet index: {subnet_index} job ip: {private.job_ip}, host ip {private.host_ip}) to list'
+            )
             self.private_networks.put_nowait(private)
 
     async def allocate_private(self) -> NetworkNamespace:
         network = await self.private_networks.get()
-        log.info(f'ipallocdebug: Allocating private network {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})')
+        log.info(
+            f'ipallocdebug: Allocating private network {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})'
+        )
         return network
 
     async def allocate_public(self) -> NetworkNamespace:
         network = await self.public_networks.get()
-        log.info(f'ipallocdebug: Allocating public network: {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})')
+        log.info(
+            f'ipallocdebug: Allocating public network: {network.network_ns_name} (subnet index: {network.subnet_index} job ip: {network.job_ip}, host ip {network.host_ip})'
+        )
         return network
 
     def free(self, netns: NetworkNamespace):
@@ -352,7 +360,9 @@ class NetworkAllocator:
 
     async def _free(self, netns: NetworkNamespace):
         network_type = 'private' if netns.private else 'public'
-        log.info(f'ipallocdebug: Freeing {network_type} network namespace: {netns.network_ns_name} (subnet index: {netns.subnet_index} job ip: {netns.job_ip}, host ip {netns.host_ip}')
+        log.info(
+            f'ipallocdebug: Freeing {network_type} network namespace: {netns.network_ns_name} (subnet index: {netns.subnet_index} job ip: {netns.job_ip}, host ip {netns.host_ip}'
+        )
         await netns.cleanup()
         if netns.private:
             self.private_networks.put_nowait(netns)
@@ -543,7 +553,10 @@ class Image:
                 if e.status == 404 and 'pull access denied' in e.message:
                     raise ImageCannotBePulled from e
                 if e.status == 500 and (
-                    ('artifactregistry.repositories.downloadArtifacts' in e.message and 'denied on resource' in e.message)
+                    (
+                        'artifactregistry.repositories.downloadArtifacts' in e.message
+                        and 'denied on resource' in e.message
+                    )
                     or 'Caller does not have permission' in e.message
                     or 'unauthorized' in e.message
                 ):
@@ -1036,7 +1049,9 @@ class Container:
                 )
                 await self.metadata_app_runner.setup()
                 network_type = 'private' if self.netns.private else 'public'
-                log.info(f'ipallocdebug: Starting metadata server on {network_type} {self.netns.network_ns_name} {self.netns.host_ip}')
+                log.info(
+                    f'ipallocdebug: Starting metadata server on {network_type} {self.netns.network_ns_name} {self.netns.host_ip}'
+                )
                 site = web.TCPSite(self.metadata_app_runner, self.netns.host_ip, 5555)
                 await site.start()
         except asyncio.TimeoutError:
@@ -2639,14 +2654,12 @@ class JVMContainer:
 
     async def start_profiler(self, output_file: str):
         await self.container.exec(
-            ['./profiler.sh', 'start', '-o', 'flamegraph', '-e', 'itimer', '-f', output_file, 'jps'],
-            options=['--cwd=/async-profiler-2.9-linux-x64/'],
+            ['asprof', 'start', '-o', 'flamegraph', '-e', 'itimer', '-f', output_file, 'jps'],
         )
 
     async def stop_profiler(self, output_file: str):
         await self.container.exec(
-            ['./profiler.sh', 'stop', '-o', 'flamegraph', '-f', output_file, 'jps'],
-            options=['--cwd=/async-profiler-2.9-linux-x64/'],
+            ['asprof', 'stop', '-o', 'flamegraph', '-f', output_file, 'jps'],
         )
 
     async def get_resource_usage(self) -> bytes:
@@ -2684,7 +2697,7 @@ class JVMProfiler:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.warning(f'could not start JVM profiling for {self.container.container.name}')
+            log.warning(f'could not start JVM profiling for {self.container.container.name}', exc_info=True)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -2696,7 +2709,7 @@ class JVMProfiler:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.warning(f'could not stop JVM profiling for {self.container.container.name}')
+            log.warning(f'could not stop JVM profiling for {self.container.container.name}', exc_info=True)
 
 
 class JVM:

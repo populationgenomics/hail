@@ -2,7 +2,9 @@ package is.hail.expr.ir
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.asm4s.implicits.toRichCodeIterator
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.LoweredTableReader.LoweredTableReaderCoercer
 import is.hail.expr.ir.defs.{Literal, PartitionReader, ReadPartition, ToStream}
 import is.hail.expr.ir.functions.UtilFunctions
@@ -17,7 +19,6 @@ import is.hail.types.physical.stypes.concrete.{SStackStruct, SStackStructValue}
 import is.hail.types.physical.stypes.interfaces.{primitive, SBaseStructValue, SStreamValue}
 import is.hail.types.physical.stypes.primitives.SInt64
 import is.hail.types.virtual.{TArray, TInt32, TInt64, TStruct, TTuple, TableType, Type}
-import is.hail.utils._
 
 import org.apache.spark.sql.Row
 import org.json4s.{Extraction, JValue}
@@ -63,7 +64,7 @@ class PartitionIteratorLongReader(
     val eltPType = bodyPType(concreteType)
     val uidSType: SStackStruct = SStackStruct(
       TTuple(TInt64, TInt64),
-      Array(EmitType(SInt64, true), EmitType(SInt64, true)),
+      ArraySeq(EmitType(SInt64, true), EmitType(SInt64, true)),
     )
 
     context.toI(cb).map(cb) { case _ctxStruct: SBaseStructValue =>
@@ -116,7 +117,7 @@ class PartitionIteratorLongReader(
               val uid = EmitValue.present(
                 new SStackStructValue(
                   uidSType,
-                  Array(
+                  ArraySeq(
                     EmitValue.present(primitive(partIdx)),
                     EmitValue.present(primitive(rowIdx)),
                   ),
@@ -136,7 +137,7 @@ class PartitionIteratorLongReader(
     }
   }
 
-  def toJValue: JValue =
+  override def toJValue: JValue =
     JObject(
       "category" -> JString("PartitionIteratorLongReader"),
       "fullRowType" -> Extraction.decompose(fullRowType)(PartitionReader.formats),

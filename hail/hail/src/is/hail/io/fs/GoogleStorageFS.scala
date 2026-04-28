@@ -1,11 +1,11 @@
 package is.hail.io.fs
 
-import is.hail.HailFeatureFlags
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.io.fs.FSUtil.dropTrailingSlash
 import is.hail.io.fs.GoogleStorageFS.RequesterPaysFailure
 import is.hail.services.{isTransientError, retryTransientErrors}
 import is.hail.services.oauth2.GoogleCloudCredentials
-import is.hail.utils._
 
 import scala.jdk.CollectionConverters._
 
@@ -107,28 +107,7 @@ object GoogleStorageFileListEntry {
 
 case class RequesterPaysConfig(project: String, buckets: Option[Set[String]])
 
-object RequesterPaysConfig {
-  object Flags {
-    val RequesterPaysProject = "gcs_requester_pays_project"
-    val RequesterPaysBuckets = "gcs_requester_pays_buckets"
-  }
-
-  def fromFlags(flags: HailFeatureFlags): Option[RequesterPaysConfig] =
-    FastSeq(Flags.RequesterPaysProject, Flags.RequesterPaysBuckets).map(flags.lookup) match {
-      case Seq(Some(project), buckets) =>
-        Some(RequesterPaysConfig(project, buckets.map(_.split(",").toSet)))
-      case Seq(None, Some(buckets)) =>
-        fatal(
-          s"'${Flags.RequesterPaysBuckets}' requires '${Flags.RequesterPaysProject}'." +
-            s"Expected: <undefined>" +
-            s"  Actual: '$buckets'"
-        )
-      case _ =>
-        None
-    }
-}
-
-case class GoogleStorageFSConfig(
+case class GoogleStorageConfig(
   credentials_file: Option[Path],
   requester_pays_config: Option[RequesterPaysConfig],
 )
@@ -144,10 +123,10 @@ class GoogleStorageFS(
   override def validUrl(filename: String): Boolean =
     filename.startsWith("gs://")
 
-  def getConfiguration(): Option[RequesterPaysConfig] =
+  override def getConfiguration(): Option[RequesterPaysConfig] =
     requesterPaysConfig
 
-  def setConfiguration(config: Any): Unit =
+  override def setConfiguration(config: Any): Unit =
     requesterPaysConfig = config.asInstanceOf[Option[RequesterPaysConfig]]
 
   private[this] def requesterPaysOptions[T](bucket: String, makeUserProjectOption: String => T)
@@ -186,7 +165,7 @@ class GoogleStorageFS(
       .getService
   }
 
-  def openNoCompression(url: URL): SeekableDataInputStream = retryTransientErrors {
+  override def openNoCompression(url: URL): SeekableDataInputStream = retryTransientErrors {
     val is: SeekableInputStream = new FSSeekableInputStream {
       private[this] var reader: ReadChannel = null
       private[this] var options: Option[Seq[BlobSourceOption]] = None
@@ -248,7 +227,7 @@ class GoogleStorageFS(
     new WrappedSeekableDataInputStream(is)
   }
 
-  def createNoCompression(url: URL): PositionedDataOutputStream = retryTransientErrors {
+  override def createNoCompression(url: URL): PositionedDataOutputStream = retryTransientErrors {
     logger.info(f"createNoCompression: $url")
 
     val blobId = BlobId.of(url.bucket, url.path)
@@ -376,7 +355,7 @@ class GoogleStorageFS(
     if (deleteSource) storage.delete(srcId): Unit
   }
 
-  def delete(url: URL, recursive: Boolean): Unit =
+  override def delete(url: URL, recursive: Boolean): Unit =
     retryTransientErrors[Unit] {
       if (recursive) {
         var page = retryTransientErrors {
@@ -418,11 +397,11 @@ class GoogleStorageFS(
       }
     }
 
-  def glob(url: URL): Array[FileListEntry] = retryTransientErrors {
+  override def glob(url: URL): IndexedSeq[FileListEntry] = retryTransientErrors {
     globWithPrefix(url.withPath(""), path = dropTrailingSlash(url.path))
   }
 
-  override def listDirectory(url: URL): Array[FileListEntry] = retryTransientErrors {
+  override def listDirectory(url: URL): IndexedSeq[FileListEntry] = retryTransientErrors {
     val path = if (url.path.endsWith("/")) url.path else url.path + "/"
 
     val blobs = retryTransientErrors {
@@ -440,7 +419,7 @@ class GoogleStorageFS(
     blobs.iterateAll().iterator.asScala
       .filter(b => b.getName != path) // elide directory markers created by Hadoop
       .map(b => GoogleStorageFileListEntry(b))
-      .toArray
+      .to(ArraySeq)
   }
 
   private[this] def getBlob(url: URL) = retryTransientErrors {
@@ -500,7 +479,7 @@ class GoogleStorageFS(
       url.bucket,
     )
 
-  def makeQualified(filename: String): String = {
+  override def makeQualified(filename: String): String = {
     if (!filename.startsWith("gs://"))
       throw new IllegalArgumentException(s"Invalid path, expected gs://bucket/path $filename")
     filename

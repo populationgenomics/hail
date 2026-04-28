@@ -1,6 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.backend.ExecuteContext
+import is.hail.collection.implicits.{toRichIterable, toRichOrderedSeq}
 import is.hail.expr.Nat
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.streams.StreamUtils
@@ -181,7 +182,7 @@ object TypeCheck {
         assert(edges.typ.isInstanceOf[TArray])
         val edgeType = tcoerce[TArray](edges.typ).elementType
         assert(edgeType.isInstanceOf[TBaseStruct])
-        val Array(leftType, rightType) = edgeType.asInstanceOf[TBaseStruct].types
+        val Seq(leftType, rightType) = edgeType.asInstanceOf[TBaseStruct].types
         assert(leftType == rightType)
         tieBreaker.foreach { case (_, _, tb) => assert(tb.typ == TFloat64) }
       case StreamIota(start, step, _) =>
@@ -323,6 +324,8 @@ object TypeCheck {
           case t => t == TInt64
         }
         assert(isValid(dynBitstring.typ))
+      case RNGSplitStatic(state, _) =>
+        assert(state.typ == TRNGState)
       case StreamLen(a) =>
         assert(a.typ.isInstanceOf[TStream])
       case x @ StreamTake(a, num) =>
@@ -527,7 +530,7 @@ object TypeCheck {
         val indices = fields.map(_._1)
         assert(indices.areDistinct())
         assert(indices.isSorted)
-        assert(x.typ == TTuple(fields.map { case (idx, f) => TupleField(idx, f.typ) }.toFastSeq))
+        assert(x.typ == TTuple(fields.map { case (idx, f) => TupleField(idx, f.typ) }))
       case x @ GetTupleElement(o, idx) =>
         val t = tcoerce[TTuple](o.typ)
         val fd = t.fields(t.fieldIndex(idx))
@@ -540,7 +543,6 @@ object TypeCheck {
         }
       case Die(msg, _, _) =>
         assert(msg.typ == TString)
-      case Trap(_) =>
       case ConsoleLog(msg, _) => assert(msg.typ == TString)
       case ApplyIR(_, _, _, _, _) =>
       case x: AbstractApplyNode[_] =>
@@ -598,7 +600,6 @@ object TypeCheck {
       case WriteValue(_, path, _, stagingFile) =>
         assert(path.typ == TString)
         assert(stagingFile.forall(_.typ == TString))
-      case LiftMeOut(_) =>
       case Consume(_) =>
 
       case TableAggregateByKey(child, _) =>
@@ -628,7 +629,7 @@ object TypeCheck {
             .intersect(right.typ.globalType.fieldNames.toSet)
             .isEmpty
         )
-      case TableKeyBy(child, keys, _) =>
+      case TableKeyBy(child, keys, _, _) =>
         val fields = child.typ.rowType.fieldNames.toSet
         assert(
           keys.forall(fields.contains),

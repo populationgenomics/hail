@@ -113,6 +113,7 @@ def value_irs():
         ir.NDArrayMatMul(nd, nd),
         ir.LowerBoundOnOrderedCollection(a, i, False),
         ir.GroupByKey(da),
+        ir.RNGSplitStatic(rngState, -1),
         ir.RNGSplit(rngState, ir.MakeTuple([ir.I64(1), ir.I64(2), ir.I64(3)])),
         ir.StreamMap(st, 'unused', v),
         ir.StreamZip([st, st], ['a', 'b'], ir.TrueIR(), 'ExtendNA'),
@@ -175,7 +176,6 @@ def value_irs():
             ir.MatrixNativeMultiWriter([new_temp_file(), new_temp_file()], False, False, None),
         ),
         ir.BlockMatrixWrite(block_matrix_read, ir.BlockMatrixNativeWriter('fake.bm', False, False, False)),
-        ir.LiftMeOut(ir.I32(1)),
         ir.BlockMatrixWrite(block_matrix_read, ir.BlockMatrixPersistWriter('x', 'MEMORY_ONLY')),
     ]
 

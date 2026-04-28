@@ -1,6 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.{JSONAnnotationImpex, Nat, ParserUtils}
 import is.hail.expr.ir.agg._
 import is.hail.expr.ir.defs._
@@ -17,7 +18,6 @@ import is.hail.utils.StackSafe._
 import is.hail.utils.StringEscapeUtils._
 
 import scala.collection.compat._
-import scala.collection.mutable
 import scala.reflect.ClassTag
 import scala.util.parsing.combinator.JavaTokenParsers
 import scala.util.parsing.input.Positional
@@ -35,23 +35,23 @@ abstract class Token extends Positional {
 }
 
 final case class IdentifierToken(value: String) extends Token {
-  def getName: String = "identifier"
+  override def getName: String = "identifier"
 }
 
 final case class StringToken(value: String) extends Token {
-  def getName: String = "string"
+  override def getName: String = "string"
 }
 
 final case class IntegerToken(value: Long) extends Token {
-  def getName: String = "integer"
+  override def getName: String = "integer"
 }
 
 final case class FloatToken(value: Double) extends Token {
-  def getName: String = "float"
+  override def getName: String = "float"
 }
 
 final case class PunctuationToken(value: String) extends Token {
-  def getName: String = "punctuation"
+  override def getName: String = "punctuation"
 }
 
 object IRLexer extends JavaTokenParsers {
@@ -66,7 +66,7 @@ object IRLexer extends JavaTokenParsers {
 
   def quotedLiteral(delim: Char, what: String): Parser[String] =
     new Parser[String] {
-      def apply(in: Input): ParseResult[String] = {
+      override def apply(in: Input): ParseResult[String] = {
         var r = in
 
         val source = in.source
@@ -169,12 +169,12 @@ object IRParser {
         error(x, s"Expected identifier '$expectedId' but found ${x.getName} '${x.value}'.")
     }
 
-  def identifiers(it: TokenIterator): Array[String] =
+  def identifiers(it: TokenIterator): IndexedSeq[String] =
     base_seq_parser(identifier)(it)
 
   def name(it: TokenIterator): Name = Name(identifier(it))
 
-  def names(it: TokenIterator): Array[Name] =
+  def names(it: TokenIterator): IndexedSeq[Name] =
     base_seq_parser(name)(it)
 
   def boolean_literal(it: TokenIterator): Boolean =
@@ -256,7 +256,7 @@ object IRParser {
   )(
     it: TokenIterator
   )(implicit tct: ClassTag[T]
-  ): Array[T] =
+  ): IndexedSeq[T] =
     base_seq_parser(literalIdentifier)(it)
 
   def between[A](
@@ -272,9 +272,9 @@ object IRParser {
     a
   }
 
-  def string_literals: TokenIterator => Array[String] = literals(string_literal)
-  def int32_literals: TokenIterator => Array[Int] = literals(int32_literal)
-  def int64_literals: TokenIterator => Array[Long] = literals(int64_literal)
+  def string_literals: TokenIterator => IndexedSeq[String] = literals(string_literal)
+  def int32_literals: TokenIterator => IndexedSeq[Int] = literals(int32_literal)
+  def int64_literals: TokenIterator => IndexedSeq[Long] = literals(int64_literal)
 
   def opt[T](it: TokenIterator, f: (TokenIterator) => T)(implicit tct: ClassTag[T]): Option[T] = {
     it.head match {
@@ -292,14 +292,14 @@ object IRParser {
     sep: Token,
     end: Token,
   )(implicit tct: ClassTag[T]
-  ): Array[T] = {
-    val xs = new mutable.ArrayBuffer[T]()
+  ): IndexedSeq[T] = {
+    val xs = ArraySeq.newBuilder[T]
     while (it.hasNext && it.head != end) {
       xs += f(it)
       if (it.head == sep)
         consumeToken(it): Unit
     }
-    xs.toArray
+    xs.result()
   }
 
   def repUntil[T](
@@ -307,14 +307,14 @@ object IRParser {
     f: (TokenIterator) => StackFrame[T],
     end: Token,
   )(implicit tct: ClassTag[T]
-  ): StackFrame[Array[T]] = {
-    val xs = new mutable.ArrayBuffer[T]()
-    var cont: T => StackFrame[Array[T]] = null
-    def loop(): StackFrame[Array[T]] =
+  ): StackFrame[IndexedSeq[T]] = {
+    val xs = ArraySeq.newBuilder[T]
+    var cont: T => StackFrame[IndexedSeq[T]] = null
+    def loop(): StackFrame[IndexedSeq[T]] =
       if (it.hasNext && it.head != end) {
         f(it).flatMap(cont)
       } else {
-        done(xs.toArray)
+        done(xs.result())
       }
     cont = { t =>
       xs += t
@@ -328,14 +328,14 @@ object IRParser {
     f: (TokenIterator) => T,
     end: Token,
   )(implicit tct: ClassTag[T]
-  ): Array[T] = {
-    val xs = new mutable.ArrayBuffer[T]()
+  ): IndexedSeq[T] = {
+    val xs = ArraySeq.newBuilder[T]
     while (it.hasNext && it.head != end)
       xs += f(it)
-    xs.toArray
+    xs.result()
   }
 
-  def base_seq_parser[T: ClassTag](f: TokenIterator => T)(it: TokenIterator): Array[T] = {
+  def base_seq_parser[T: ClassTag](f: TokenIterator => T)(it: TokenIterator): IndexedSeq[T] = {
     punctuation(it, "(")
     val r = repUntilNonStackSafe(it, f, PunctuationToken(")"))
     punctuation(it, ")")
@@ -459,10 +459,10 @@ object IRParser {
     typ
   }
 
-  def ptype_exprs(it: TokenIterator): Array[PType] =
+  def ptype_exprs(it: TokenIterator): IndexedSeq[PType] =
     base_seq_parser(ptype_expr)(it)
 
-  def type_exprs(it: TokenIterator): Array[Type] =
+  def type_exprs(it: TokenIterator): IndexedSeq[Type] =
     base_seq_parser(type_expr)(it)
 
   def type_expr(it: TokenIterator): Type = {
@@ -538,18 +538,12 @@ object IRParser {
         punctuation(it, "}")
         val fields = args.zipWithIndex.map { case ((id, t), i) => Field(id, t, i) }
         TStruct(fields)
-      case "Union" =>
-        punctuation(it, "{")
-        val args = repsepUntil(it, type_field, PunctuationToken(","), PunctuationToken("}"))
-        punctuation(it, "}")
-        val cases = args.zipWithIndex.map { case ((id, t), i) => Case(id, t, i) }
-        TUnion(cases)
       case "Void" => TVoid
     }
     typ
   }
 
-  def sort_fields(it: TokenIterator): Array[SortField] =
+  def sort_fields(it: TokenIterator): IndexedSeq[SortField] =
     base_seq_parser(sort_field)(it)
 
   def sort_field(it: TokenIterator): SortField = {
@@ -559,17 +553,17 @@ object IRParser {
     SortField(field, sortOrder)
   }
 
-  def keys(it: TokenIterator): Array[String] = {
+  def keys(it: TokenIterator): IndexedSeq[String] = {
     punctuation(it, "[")
     val keys = repsepUntil(it, identifier, PunctuationToken(","), PunctuationToken("]"))
     punctuation(it, "]")
     keys
   }
 
-  def trailing_keys(it: TokenIterator): Array[String] = {
+  def trailing_keys(it: TokenIterator): IndexedSeq[String] = {
     it.head match {
       case x: PunctuationToken if x.value == "]" =>
-        Array.empty[String]
+        ArraySeq.empty
       case x: PunctuationToken if x.value == "," =>
         punctuation(it, ",")
         repsepUntil(it, identifier, PunctuationToken(","), PunctuationToken("]"))
@@ -605,14 +599,14 @@ object IRParser {
 
     identifier(it, "key")
     punctuation(it, ":")
-    val key = opt(it, keys).getOrElse(Array.empty[String])
+    val key = opt(it, keys).getOrElse(ArraySeq.empty[String])
     punctuation(it, ",")
 
     identifier(it, "row")
     punctuation(it, ":")
     val rowType = tcoerce[TStruct](type_expr(it))
     punctuation(it, "}")
-    TableType(rowType, key.toFastSeq, tcoerce[TStruct](globalType))
+    TableType(rowType, key, tcoerce[TStruct](globalType))
   }
 
   def matrix_type_expr(it: TokenIterator): MatrixType = {
@@ -713,10 +707,10 @@ object IRParser {
     sig
   }
 
-  def agg_state_signatures(ctx: ExecuteContext)(it: TokenIterator): Array[AggStateSig] =
+  def agg_state_signatures(ctx: ExecuteContext)(it: TokenIterator): IndexedSeq[AggStateSig] =
     base_seq_parser(agg_state_signature(ctx))(it)
 
-  def p_agg_sigs(ctx: ExecuteContext)(it: TokenIterator): Array[PhysicalAggSig] =
+  def p_agg_sigs(ctx: ExecuteContext)(it: TokenIterator): IndexedSeq[PhysicalAggSig] =
     base_seq_parser(p_agg_sig(ctx))(it)
 
   def p_agg_sig(ctx: ExecuteContext)(it: TokenIterator): PhysicalAggSig = {
@@ -749,7 +743,8 @@ object IRParser {
     (typ, v)
   }
 
-  def named_value_irs(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[(String, IR)]] =
+  def named_value_irs(ctx: ExecuteContext)(it: TokenIterator)
+    : StackFrame[IndexedSeq[(String, IR)]] =
     repUntil(it, named_value_ir(ctx), PunctuationToken(")"))
 
   def named_value_ir(ctx: ExecuteContext)(it: TokenIterator): StackFrame[(String, IR)] = {
@@ -761,7 +756,7 @@ object IRParser {
     }
   }
 
-  def ir_value_exprs(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[IR]] = {
+  def ir_value_exprs(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IndexedSeq[IR]] = {
     punctuation(it, "(")
     for {
       irs <- ir_value_children(ctx)(it)
@@ -769,7 +764,7 @@ object IRParser {
     } yield irs
   }
 
-  def ir_value_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[IR]] =
+  def ir_value_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IndexedSeq[IR]] =
     repUntil(it, ir_value_expr(ctx), PunctuationToken(")"))
 
   def ir_value_expr(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IR] = {
@@ -876,7 +871,7 @@ object IRParser {
         val paramNames = names(it)
         val resultType = type_expr(it)
         for {
-          paramIRs <- fillArray(paramNames.length)(ir_value_expr(ctx)(it))
+          paramIRs <- fillArray(paramNames.length)(ir_value_expr(ctx)(it))(ArraySeq)
           params = paramNames.zip(paramIRs)
           body <- ir_value_expr(ctx)(it)
         } yield TailLoop(n, params, resultType, body)
@@ -929,8 +924,8 @@ object IRParser {
       case "ArraySlice" =>
         val errorID = int32_literal(it)
         ir_value_children(ctx)(it).map {
-          case Array(a, start, step) => ArraySlice(a, start, None, step, errorID)
-          case Array(a, start, stop, step) => ArraySlice(a, start, Some(stop), step, errorID)
+          case Seq(a, start, step) => ArraySlice(a, start, None, step, errorID)
+          case Seq(a, start, stop, step) => ArraySlice(a, start, Some(stop), step, errorID)
         }
       case "RNGStateLiteral" =>
         done(RNGStateLiteral())
@@ -939,6 +934,9 @@ object IRParser {
           state <- ir_value_expr(ctx)(it)
           dynBitstring <- ir_value_expr(ctx)(it)
         } yield RNGSplit(state, dynBitstring)
+      case "RNGSplitStatic" =>
+        val staticUid = int64_literal(it)
+        ir_value_expr(ctx)(it) map { RNGSplitStatic(_, staticUid) }
       case "ArrayLen" => ir_value_expr(ctx)(it).map(ArrayLen)
       case "StreamLen" => ir_value_expr(ctx)(it).map(StreamLen)
       case "StreamIota" =>
@@ -1033,7 +1031,7 @@ object IRParser {
         for {
           nd <- ir_value_expr(ctx)(it)
           filters <- repUntil(it, ir_value_expr(ctx), PunctuationToken(")"))
-        } yield NDArrayFilter(nd, filters.toFastSeq)
+        } yield NDArrayFilter(nd, filters)
       case "NDArrayMatMul" =>
         val errorID = int32_literal(it)
         for {
@@ -1075,6 +1073,16 @@ object IRParser {
           elem <- ir_value_expr(ctx)(it)
         } yield LowerBoundOnOrderedCollection(col, elem, onKey)
       case "GroupByKey" => ir_value_expr(ctx)(it).map(GroupByKey)
+      case "StreamBufferedAggregate" =>
+        val n = name(it)
+        val aggSigs = p_agg_sigs(ctx)(it)
+        val size = int32_literal(it)
+        for {
+          stream <- ir_value_expr(ctx)(it)
+          init <- ir_value_expr(ctx)(it)
+          key <- ir_value_expr(ctx)(it)
+          seq <- ir_value_expr(ctx)(it)
+        } yield StreamBufferedAggregate(stream, init, key, seq, n, aggSigs, size)
       case "StreamMap" =>
         val n = name(it)
         for {
@@ -1167,9 +1175,9 @@ object IRParser {
         val valueName = name(it)
         for {
           a <- ir_value_expr(ctx)(it)
-          accIRs <- fillArray(accumNames.length)(ir_value_expr(ctx)(it))
+          accIRs <- fillArray(accumNames.length)(ir_value_expr(ctx)(it))(ArraySeq)
           accs = accumNames.zip(accIRs)
-          seqs <- fillArray(accs.length)(ir_value_expr(ctx)(it))
+          seqs <- fillArray[IR, ArraySeq[IR]](accs.length)(ir_value_expr(ctx)(it))(ArraySeq)
           res <- ir_value_expr(ctx)(it)
         } yield StreamFold2(a, accs, valueName, seqs, res)
       case "StreamScan" =>
@@ -1349,7 +1357,7 @@ object IRParser {
           old <- ir_value_expr(ctx)(it)
           fieldOrder = opt(it, string_literals)
           fields <- named_value_irs(ctx)(it)
-        } yield InsertFields(old, fields, fieldOrder.map(_.toFastSeq))
+        } yield InsertFields(old, fields, fieldOrder)
       case "GetField" =>
         val name = identifier(it)
         ir_value_expr(ctx)(it).map(s => GetField(s, name))
@@ -1363,21 +1371,11 @@ object IRParser {
         val typ = type_expr(it)
         val errorID = int32_literal(it)
         ir_value_expr(ctx)(it).map(msg => Die(msg, typ, errorID))
-      case "Trap" =>
-        ir_value_expr(ctx)(it).map(child => Trap(child))
       case "ConsoleLog" =>
         for {
           msg <- ir_value_expr(ctx)(it)
           result <- ir_value_expr(ctx)(it)
         } yield ConsoleLog(msg, result)
-      case "ApplySeeded" =>
-        val function = identifier(it)
-        val staticUID = int64_literal(it)
-        val rt = type_expr(it)
-        for {
-          rngState <- ir_value_expr(ctx)(it)
-          args <- ir_value_children(ctx)(it)
-        } yield ApplySeeded(function, args, rngState, staticUID, rt)
       case "ApplyIR" =>
         apply_like(ctx, ApplyIR.apply)(it)
       case "ApplySpecial" =>
@@ -1452,7 +1450,7 @@ object IRParser {
         implicit val formats: Formats = BlockMatrixWriter.formats
         val writer = deserialize[BlockMatrixMultiWriter](writerStr)
         repUntil(it, blockmatrix_ir(ctx), PunctuationToken(")")).map { blockMatrices =>
-          BlockMatrixMultiWrite(blockMatrices.toFastSeq, writer)
+          BlockMatrixMultiWrite(blockMatrices, writer)
         }
       case "CollectDistributedArray" =>
         val staticID = identifier(it)
@@ -1507,14 +1505,13 @@ object IRParser {
         import ValueWriter.formats
         val writer = JsonMethods.parse(string_literal(it)).extract[ValueWriter]
         ir_value_children(ctx)(it).map {
-          case Array(value, path) => WriteValue(value, path, writer)
-          case Array(value, path, stagingFile) => WriteValue(value, path, writer, Some(stagingFile))
+          case Seq(value, path) => WriteValue(value, path, writer)
+          case Seq(value, path, stagingFile) => WriteValue(value, path, writer, Some(stagingFile))
         }
-      case "LiftMeOut" => ir_value_expr(ctx)(it).map(LiftMeOut)
     }
   }
 
-  def table_irs(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[TableIR]] = {
+  def table_irs(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IndexedSeq[TableIR]] = {
     punctuation(it, "(")
     for {
       tirs <- table_ir_children(ctx)(it)
@@ -1522,7 +1519,7 @@ object IRParser {
     } yield tirs
   }
 
-  def table_ir_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[TableIR]] =
+  def table_ir_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IndexedSeq[TableIR]] =
     repUntil(it, table_ir(ctx), PunctuationToken(")"))
 
   def table_ir(ctx: ExecuteContext)(it: TokenIterator): StackFrame[TableIR] = {
@@ -1538,7 +1535,8 @@ object IRParser {
       case "TableKeyBy" =>
         val keys = identifiers(it)
         val isSorted = boolean_literal(it)
-        table_ir(ctx)(it).map(child => TableKeyBy(child, keys, isSorted))
+        val nPartitions = opt(it, int32_literal)
+        table_ir(ctx)(it).map(child => TableKeyBy(child, keys, isSorted, nPartitions))
       case "TableDistinct" => table_ir(ctx)(it).map(TableDistinct)
       case "TableFilter" =>
         for {
@@ -1723,7 +1721,7 @@ object IRParser {
     }
   }
 
-  def matrix_ir_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[Array[MatrixIR]] =
+  def matrix_ir_children(ctx: ExecuteContext)(it: TokenIterator): StackFrame[IndexedSeq[MatrixIR]] =
     repUntil(it, matrix_ir(ctx), PunctuationToken(")"))
 
   def matrix_ir(ctx: ExecuteContext)(it: TokenIterator): StackFrame[MatrixIR] = {
@@ -1756,7 +1754,7 @@ object IRParser {
         for {
           child <- matrix_ir(ctx)(it)
           newCol <- ir_value_expr(ctx)(it)
-        } yield MatrixMapCols(child, newCol, newKey.map(_.toFastSeq))
+        } yield MatrixMapCols(child, newCol, newKey)
       case "MatrixKeyRowsBy" =>
         val key = identifiers(it)
         val isSorted = boolean_literal(it)
@@ -1966,7 +1964,7 @@ object IRParser {
         punctuation(it, ")")
         done(BandSparsifier(blocksOnly, l, u))
       case "RectangleSparsifier" =>
-        val rectangles = int64_literals(it).toFastSeq
+        val rectangles = int64_literals(it)
         punctuation(it, ")")
         done(RectangleSparsifier(rectangles.grouped(4).toIndexedSeq))
     }
@@ -2029,9 +2027,7 @@ object IRParser {
         } yield BlockMatrixSparsify(child, sparsifier)
       case "BlockMatrixSlice" =>
         val slices = literals(literals(int64_literal))(it)
-        blockmatrix_ir(ctx)(it).map { child =>
-          BlockMatrixSlice(child, slices.map(_.toFastSeq).toFastSeq)
-        }
+        blockmatrix_ir(ctx)(it).map(child => BlockMatrixSlice(child, slices))
       case "ValueToBlockMatrix" =>
         val shape = int64_literals(it)
         val blockSize = int32_literal(it)
@@ -2108,7 +2104,7 @@ object IRParser {
   }
 
   def parse[T](s: String, f: (TokenIterator) => T): T = {
-    val it = IRLexer.parse(s).toIterator.buffered
+    val it = IRLexer.parse(s).iterator.buffered
     f(it)
   }
 
@@ -2150,8 +2146,6 @@ object IRParser {
   def parsePType(code: String): PType = parse(code, ptype_expr)
 
   def parseStructType(code: String): TStruct = tcoerce[TStruct](parse(code, type_expr))
-
-  def parseUnionType(code: String): TUnion = tcoerce[TUnion](parse(code, type_expr))
 
   def parseRVDType(code: String): RVDType = parse(code, rvd_type_expr)
 

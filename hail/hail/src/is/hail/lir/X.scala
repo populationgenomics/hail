@@ -3,7 +3,10 @@ package is.hail.lir
 import is.hail.asm4s.{
   arrayInfo, ByteInfo, ClassInfo, DoubleInfo, FloatInfo, IntInfo, LongInfo, TypeInfo,
 }
+import is.hail.collection.ObjectArrayStack
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.utils._
+import is.hail.utils.implicits.toRichBoolean
 
 import scala.collection.mutable
 
@@ -137,12 +140,12 @@ abstract class FieldRef {
 
 class Field private[lir] (classx: Classx[_], val name: String, val ti: TypeInfo[_])
     extends FieldRef {
-  def owner: String = classx.name
+  override def owner: String = classx.name
 }
 
 class StaticField private[lir] (classx: Classx[_], val name: String, val ti: TypeInfo[_])
     extends FieldRef {
-  def owner: String = classx.name
+  override def owner: String = classx.name
 }
 
 class FieldLit(
@@ -176,11 +179,11 @@ class Method private[lir] (
 
   def nParameters: Int = parameterTypeInfo.length + (!isStatic).toInt
 
-  def owner: String = classx.name
+  override def owner: String = classx.name
 
-  def desc = s"(${parameterTypeInfo.map(_.desc).mkString})${returnTypeInfo.desc}"
+  override def desc = s"(${parameterTypeInfo.map(_.desc).mkString})${returnTypeInfo.desc}"
 
-  def isInterface: Boolean = false
+  override def isInterface: Boolean = false
 
   private var _entry: Block = _
 
@@ -227,15 +230,13 @@ class Method private[lir] (
 
         blocksb += L
 
-        assert(L.first != null)
         val x = L.last.asInstanceOf[ControlX]
-        var i = x.targetArity() - 1
-        while (i >= 0) {
-          val target = x.target(i)
-          assert(target != null)
-          s.push(target)
-          i -= 1
+        var t = x.targetArity() - 1
+        while (t >= 0) {
+          s.push(x.target(t))
+          t -= 1
         }
+
         visited += L
       }
     }
@@ -349,16 +350,13 @@ class Block {
 
   val uses: mutable.Set[(ControlX, Int)] = mutable.Set[(ControlX, Int)]()
 
-  def wellFormed: Boolean = {
-    if (first == null)
-      return false
-
-    last match {
+  def wellFormed: Boolean =
+    first != null && (last match {
       case ctrl: ControlX =>
-        (0 until ctrl.targetArity()).forall(ctrl.target(_) != null)
+        val T = ctrl.targetArity()
+        (T == 0) || (0 until T).forall(ctrl.target(_) != null)
       case _ => false
-    }
-  }
+    })
 
   def addUse(x: ControlX, i: Int): Unit = {
     val added = uses.add(x -> i)
@@ -520,7 +518,7 @@ abstract class StmtX extends X {
   var prev: StmtX = _
   var next: StmtX = _
 
-  def remove(): Unit = {
+  override def remove(): Unit = {
     assert(parent != null)
     if (parent.first == this)
       parent.first = next
@@ -595,6 +593,12 @@ abstract class ControlX extends StmtX {
   def target(i: Int): Block
 
   def setTarget(i: Int, b: Block): Unit
+
+  final protected def setTargetHelper(i: Int, Lold: Block, Lnew: Block): Block = {
+    if (Lold != null) Lold.removeUse(this, i)
+    if (Lnew != null) Lnew.addUse(this, i)
+    Lnew
+  }
 }
 
 abstract class ValueX extends X {
@@ -602,7 +606,7 @@ abstract class ValueX extends X {
 
   def ti: TypeInfo[_]
 
-  def remove(): Unit = {
+  override def remove(): Unit = {
     var i = 0
     while (parent.children(i) ne this)
       i += 1
@@ -626,21 +630,18 @@ class GotoX(var lineNumber: Int = 0) extends ControlX {
 
   def setL(newL: Block): Unit = setTarget(0, newL)
 
-  def targetArity(): Int = 1
+  override def targetArity(): Int = 1
 
-  def target(i: Int): Block = {
+  override def target(i: Int): Block = {
     assert(i == 0)
     _L
   }
 
-  def setTarget(i: Int, b: Block): Unit = {
+  override def setTarget(i: Int, b: Block): Unit = {
     assert(i == 0)
-    if (_L != null)
-      _L.removeUse(this, 0)
-    _L = b
-    if (b != null)
-      b.addUse(this, 0)
+    _L = setTargetHelper(i, _L, b)
   }
+
 }
 
 class IfX(val op: Int, var lineNumber: Int = 0) extends ControlX {
@@ -655,33 +656,21 @@ class IfX(val op: Int, var lineNumber: Int = 0) extends ControlX {
 
   def setLfalse(newLfalse: Block): Unit = setTarget(1, newLfalse)
 
-  def targetArity(): Int = 2
+  override def targetArity(): Int = 2
 
-  def target(i: Int): Block = {
-    if (i == 0)
-      _Ltrue
+  override def target(i: Int): Block =
+    if (i == 0) _Ltrue
     else {
       assert(i == 1)
       _Lfalse
     }
-  }
 
-  def setTarget(i: Int, b: Block): Unit = {
-    if (i == 0) {
-      if (_Ltrue != null)
-        _Ltrue.removeUse(this, 0)
-      _Ltrue = b
-      if (b != null)
-        b.addUse(this, 0)
-    } else {
+  override def setTarget(i: Int, b: Block): Unit =
+    if (i == 0) { _Ltrue = setTargetHelper(i, _Ltrue, b) }
+    else {
       assert(i == 1)
-      if (_Lfalse != null)
-        _Lfalse.removeUse(this, 1)
-      _Lfalse = b
-      if (b != null)
-        b.addUse(this, 1)
+      _Lfalse = setTargetHelper(i, _Lfalse, b)
     }
-  }
 }
 
 class SwitchX(var lineNumber: Int = 0) extends ControlX {
@@ -693,43 +682,33 @@ class SwitchX(var lineNumber: Int = 0) extends ControlX {
 
   def setLdefault(newLdefault: Block): Unit = setTarget(0, newLdefault)
 
-  def Lcases: IndexedSeq[Block] = _Lcases
+  def Lcases: IndexedSeq[Block] = ArraySeq.unsafeWrapArray(_Lcases)
 
   def setLcases(newLcases: IndexedSeq[Block]): Unit = {
-    for ((block, i) <- _Lcases.zipWithIndex)
-      if (block != null) block.removeUse(this, i + 1)
+    var i = 0
+    while (i < _Lcases.length) {
+      val block = _Lcases(i)
+      i += 1
+      if (block != null) block.removeUse(this, i)
+    }
 
     // don't allow sharing
     _Lcases = Array(newLcases: _*)
 
-    for ((block, i) <- _Lcases.zipWithIndex)
-      if (block != null) block.addUse(this, i + 1)
-  }
-
-  def targetArity(): Int = 1 + _Lcases.length
-
-  def target(i: Int): Block =
-    if (i == 0)
-      _Ldefault
-    else
-      _Lcases(i - 1)
-
-  def setTarget(i: Int, b: Block): Unit = {
-    if (i == 0) {
-      if (_Ldefault != null)
-        _Ldefault.removeUse(this, 0)
-      _Ldefault = b
-      if (b != null)
-        b.addUse(this, 0)
-    } else {
-      val L = _Lcases(i - 1)
-      if (L != null)
-        L.removeUse(this, i)
-      _Lcases(i - 1) = b
-      if (b != null)
-        b.addUse(this, i)
+    i = 0
+    while (i < _Lcases.length) {
+      val block = _Lcases(i)
+      i += 1
+      if (block != null) block.addUse(this, i)
     }
   }
+
+  override def targetArity(): Int = 1 + _Lcases.length
+  override def target(i: Int): Block = if (i == 0) _Ldefault else _Lcases(i - 1)
+
+  override def setTarget(i: Int, b: Block): Unit =
+    if (i == 0) { _Ldefault = setTargetHelper(i, _Ldefault, b) }
+    else { _Lcases(i - 1) = setTargetHelper(i, _Lcases(i - 1), b) }
 }
 
 class StoreX(var l: Local, var lineNumber: Int = 0) extends StmtX
@@ -739,29 +718,29 @@ class PutFieldX(val op: Int, val f: FieldRef, var lineNumber: Int = 0) extends S
 class IincX(var l: Local, val i: Int, var lineNumber: Int = 0) extends StmtX
 
 class ReturnX(var lineNumber: Int = 0) extends ControlX {
-  def targetArity(): Int = 0
+  override def targetArity(): Int = 0
 
-  def target(i: Int): Block = throw new IndexOutOfBoundsException()
+  override def target(i: Int): Block = throw new IndexOutOfBoundsException()
 
-  def setTarget(i: Int, b: Block): Unit = throw new IndexOutOfBoundsException()
+  override def setTarget(i: Int, b: Block): Unit = throw new IndexOutOfBoundsException()
 }
 
 class ThrowX(var lineNumber: Int = 0) extends ControlX {
-  def targetArity(): Int = 0
+  override def targetArity(): Int = 0
 
-  def target(i: Int): Block = throw new IndexOutOfBoundsException()
+  override def target(i: Int): Block = throw new IndexOutOfBoundsException()
 
-  def setTarget(i: Int, b: Block): Unit = throw new IndexOutOfBoundsException()
+  override def setTarget(i: Int, b: Block): Unit = throw new IndexOutOfBoundsException()
 }
 
 class StmtOpX(val op: Int, var lineNumber: Int = 0) extends StmtX
 
 class MethodStmtX(val op: Int, val method: MethodRef, var lineNumber: Int = 0) extends StmtX
 
-class TypeInsnX(val op: Int, val ti: TypeInfo[_], var lineNumber: Int = 0) extends ValueX {}
+class TypeInsnX(val op: Int, val ti: TypeInfo[_], var lineNumber: Int = 0) extends ValueX
 
 class InsnX(val op: Int, _ti: TypeInfo[_], var lineNumber: Int = 0) extends ValueX {
-  def ti: TypeInfo[_] = {
+  override def ti: TypeInfo[_] = {
     if (_ti != null)
       return _ti
 
@@ -838,15 +817,15 @@ class InsnX(val op: Int, _ti: TypeInfo[_], var lineNumber: Int = 0) extends Valu
 }
 
 class LoadX(var l: Local, var lineNumber: Int = 0) extends ValueX {
-  def ti: TypeInfo[_] = l.ti
+  override def ti: TypeInfo[_] = l.ti
 }
 
 class GetFieldX(val op: Int, val f: FieldRef, var lineNumber: Int = 0) extends ValueX {
-  def ti: TypeInfo[_] = f.ti
+  override def ti: TypeInfo[_] = f.ti
 }
 
 class NewArrayX(val eti: TypeInfo[_], var lineNumber: Int = 0) extends ValueX {
-  def ti: TypeInfo[_] = arrayInfo(eti)
+  override def ti: TypeInfo[_] = arrayInfo(eti)
 }
 
 class NewInstanceX(val ti: TypeInfo[_], val ctor: MethodRef, var lineNumber: Int = 0) extends ValueX
@@ -861,5 +840,5 @@ class LdcX(val a: Any, val ti: TypeInfo[_], var lineNumber: Int = 0) extends Val
 }
 
 class MethodX(val op: Int, val method: MethodRef, var lineNumber: Int = 0) extends ValueX {
-  def ti: TypeInfo[_] = method.returnTypeInfo
+  override def ti: TypeInfo[_] = method.returnTypeInfo
 }

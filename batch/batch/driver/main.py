@@ -58,7 +58,6 @@ from web_common import (
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
-    web_security_headers_unsafe_eval,
 )
 
 from ..batch import cancel_job_group_in_db
@@ -92,6 +91,8 @@ uvloopx.install()
 log = logging.getLogger('batch')
 
 log.info(f'REFRESH_INTERVAL_IN_SECONDS {REFRESH_INTERVAL_IN_SECONDS}')
+
+DRIVER_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 routes = web.RouteTableDef()
 
@@ -482,7 +483,7 @@ FROM user_inst_coll_resources;
 
 
 @routes.get('/quotas')
-@web_security_headers_unsafe_eval
+@web_security_headers
 @auth.authenticated_developers_only()
 async def get_quotas(request, userdata):
     if CLOUD != 'gcp':
@@ -580,12 +581,13 @@ async def configure_feature_flags(request: web.Request, _) -> NoReturn:
 
     compact_billing_tables = 'compact_billing_tables' in post
     oms_agent = 'oms_agent' in post
+    dockerhub_proxy = 'dockerhub_proxy' in post
 
     await db.execute_update(
         """
-UPDATE feature_flags SET compact_billing_tables = %s, oms_agent = %s;
+UPDATE feature_flags SET compact_billing_tables = %s, oms_agent = %s, dockerhub_proxy = %s;
 """,
-        (compact_billing_tables, oms_agent),
+        (compact_billing_tables, oms_agent, dockerhub_proxy),
     )
 
     row = await db.select_and_fetchone('SELECT * FROM feature_flags')
@@ -672,7 +674,7 @@ async def pool_config_update(request: web.Request, _) -> NoReturn:
             f'a non-negative integer less than or equal to max_live_instances {max_live_instances}',
         )
 
-        label = post['label']
+        label = str(post['label'])
 
         possible_worker_cores = []
         for cores in possible_cores_from_worker_type(pool.cloud, worker_type):
@@ -1792,6 +1794,7 @@ def run():
 
     setup_aiohttp_jinja2(app, 'batch.driver')
     setup_common_static_routes(routes)
+    routes.static('/batch_driver/static/js', f'{DRIVER_ROOT}/static/js')
     app.add_routes(routes)
     app.router.add_get("/metrics", server_stats)
 

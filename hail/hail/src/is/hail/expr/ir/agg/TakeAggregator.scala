@@ -2,7 +2,11 @@ package is.hail.expr.ir.agg
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{Code, _}
+import is.hail.asm4s.implicits.{
+  valueToRichCodeInputBuffer, valueToRichCodeOutputBuffer, valueToRichCodeRegion,
+}
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, IEmitCode}
 import is.hail.io.{BufferSpec, InputBuffer, OutputBuffer}
 import is.hail.types.VirtualTypeWithReq
@@ -10,7 +14,6 @@ import is.hail.types.physical._
 import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.concrete.{SIndexablePointer, SIndexablePointerValue}
 import is.hail.types.virtual.{TInt32, Type}
-import is.hail.utils._
 
 class TakeRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuilder[_])
     extends AggregatorState {
@@ -25,9 +28,10 @@ class TakeRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuilder[_])
   private val maxSizeOffset: Code[Long] => Code[Long] = storageType.loadField(_, 0)
   private val builderStateOffset: Code[Long] => Code[Long] = storageType.loadField(_, 1)
 
-  def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit = cb += region.getNewRegion(regionSize)
+  override def newState(cb: EmitCodeBuilder, off: Value[Long]): Unit =
+    cb += region.getNewRegion(regionSize)
 
-  def createState(cb: EmitCodeBuilder): Unit =
+  override def createState(cb: EmitCodeBuilder): Unit =
     cb.if_(region.isNull, cb.assign(r, Region.stagedCreate(regionSize, kb.pool())))
 
   override def load(
@@ -55,13 +59,13 @@ class TakeRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuilder[_])
     )
   }
 
-  def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
+  override def serialize(codec: BufferSpec): (EmitCodeBuilder, Value[OutputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ob: Value[OutputBuffer]) =>
       cb += ob.writeInt(maxSize)
       builder.serialize(codec)(cb, ob)
   }
 
-  def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
+  override def deserialize(codec: BufferSpec): (EmitCodeBuilder, Value[InputBuffer]) => Unit = {
     (cb: EmitCodeBuilder, ib: Value[InputBuffer]) =>
       cb.assign(maxSize, ib.readInt())
       builder.deserialize(codec)(cb, ib)
@@ -97,7 +101,7 @@ class TakeRVAS(val eltType: VirtualTypeWithReq, val kb: EmitClassBuilder[_])
       builder.loadElement(cb, idx).toI(cb)
     }
 
-  def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
+  override def copyFrom(cb: EmitCodeBuilder, src: Value[Long]): Unit = {
     cb.assign(maxSize, Region.loadInt(maxSizeOffset(src)))
     builder.copyFrom(cb, builderStateOffset(src))
   }
@@ -109,10 +113,10 @@ class TakeAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
   private val pt = typ.canonicalPType
   val resultPType: PCanonicalArray = PCanonicalArray(pt)
   val resultEmitType: EmitType = EmitType(SIndexablePointer(resultPType), true)
-  val initOpTypes: Seq[Type] = Array(TInt32)
-  val seqOpTypes: Seq[Type] = Array(typ.t)
+  val initOpTypes: IndexedSeq[Type] = ArraySeq(TInt32)
+  val seqOpTypes: IndexedSeq[Type] = ArraySeq(typ.t)
 
-  protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
+  override protected def _initOp(cb: EmitCodeBuilder, state: State, init: Array[EmitCode]): Unit = {
     assert(init.length == 1)
     val Array(sizeTriplet) = init
     sizeTriplet.toI(cb)
@@ -123,12 +127,12 @@ class TakeAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
       )
   }
 
-  protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
+  override protected def _seqOp(cb: EmitCodeBuilder, state: State, seq: Array[EmitCode]): Unit = {
     val Array(elt: EmitCode) = seq
     state.seqOp(cb, elt)
   }
 
-  protected def _combOp(
+  override protected def _combOp(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     region: Value[Region],
@@ -136,7 +140,8 @@ class TakeAggregator(typ: VirtualTypeWithReq) extends StagedAggregator {
     other: TakeRVAS,
   ): Unit = state.combine(cb, other)
 
-  protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region]): IEmitCode =
+  override protected def _result(cb: EmitCodeBuilder, state: State, region: Value[Region])
+    : IEmitCode =
     // deepCopy is handled by state.resultArray
     IEmitCode.present(cb, state.resultArray(cb, region, resultPType))
 }

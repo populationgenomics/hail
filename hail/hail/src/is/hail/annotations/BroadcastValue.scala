@@ -6,8 +6,9 @@ import is.hail.expr.ir.defs.EncodedLiteral
 import is.hail.io.{BufferSpec, Decoder, TypedCodecSpec}
 import is.hail.types.physical.{PArray, PStruct, PType}
 import is.hail.types.virtual.{TBaseStruct, TStruct}
-import is.hail.utils.{formatSpace, ArrayOfByteArrayOutputStream, Logging}
-import is.hail.utils.prettyPrint.ArrayOfByteArrayInputStream
+import is.hail.utils.{
+  formatSpace, ArrayOfByteArrayInputStream, ArrayOfByteArrayOutputStream, Logging,
+}
 
 import java.io.InputStream
 
@@ -99,9 +100,9 @@ trait BroadcastRegionValue extends Logging {
 case class BroadcastRow(ctx: ExecuteContext, value: RegionValue, t: PStruct)
     extends BroadcastRegionValue {
 
-  def javaValue: UnsafeRow = UnsafeRow.readBaseStruct(t, value.region, value.offset)
+  override def javaValue: UnsafeRow = UnsafeRow.readBaseStruct(t, value.region, value.offset)
 
-  def safeJavaValue: Row = SafeRow.read(t, value).asInstanceOf[Row]
+  override def safeJavaValue: Row = SafeRow.read(t, value).asInstanceOf[Row]
 
   def cast(newT: PStruct): BroadcastRow = {
     assert(t.virtualType == newT.virtualType)
@@ -128,9 +129,9 @@ case class BroadcastIndexedSeq(
   t: PArray,
 ) extends BroadcastRegionValue {
 
-  def safeJavaValue: IndexedSeq[Row] = SafeRow.read(t, value).asInstanceOf[IndexedSeq[Row]]
+  override def safeJavaValue: IndexedSeq[Row] = SafeRow.read(t, value).asInstanceOf[IndexedSeq[Row]]
 
-  def javaValue: UnsafeIndexedSeq = new UnsafeIndexedSeq(t, value.region, value.offset)
+  override def javaValue: UnsafeIndexedSeq = new UnsafeIndexedSeq(t, value.region, value.offset)
 
   def cast(newT: PArray): BroadcastIndexedSeq = {
     assert(t.virtualType == newT.virtualType)

@@ -1,21 +1,22 @@
 import os
 import sys
+import warnings
 from collections.abc import Callable
-from typing import Any, Dict, Optional
 
 import orjson
 import pyspark
 import pyspark.sql
-from py4j.java_gateway import JavaGateway
+from pyspark import SparkConf, SparkContext
+from pyspark.sql import SparkSession
 
 from hail.expr.table_type import ttable
-from hail.ir import BaseIR
 from hail.table import Table
-from hail.utils import copy_log
-from hail.utils.java import scala_package_object
+from hail.utils import maybe
+from hail.utils.java import scala_object
 from hail.version import __version__
 from hailtop.aiocloud.aiogoogle import GCSRequesterPaysConfiguration
 from hailtop.aiotools.validators import validate_file
+from hailtop.config import ConfigVariable, configuration_of
 from hailtop.fs.fs import FS
 from hailtop.fs.router_fs import RouterFS
 from hailtop.utils import async_to_blocking
@@ -30,124 +31,177 @@ def _modify_spark_conf(conf: pyspark.SparkConf, key: str, update: Callable[[str 
     conf.set(key, update(old))
 
 
-def _append_csv(*xs: str) -> Callable[[str | None], str]:
-    return lambda csv: ','.join(xs if csv is None else (csv, *xs))
+def _append_delimited(*xs: str, sep: str) -> Callable[[str | None], str]:
+    return lambda csv: sep.join(xs if csv is None else (csv, *xs))
 
 
-def _get_or_create_pyspark_gateway(
-    sc: pyspark.SparkContext | None,
-    spark_conf: Dict[str, Any] | None = None,
-    local_tmpdir: str | None = None,
-    quiet: bool = False,
-) -> JavaGateway:
-    if sc is not None and not quiet:
-        sys.stderr.write(
-            'pip-installed Hail requires additional configuration options in Spark referring\n'
-            '  to the path to the Hail Python module directory HAIL_DIR,\n'
-            '  e.g. /path/to/python/site-packages/hail:\n'
-            '    spark.jars=HAIL_DIR/backend/hail-all-spark.jar\n'
-            '    spark.driver.extraClassPath=HAIL_DIR/backend/hail-all-spark.jar\n'
-            '    spark.executor.extraClassPath=./hail-all-spark.jar'
-        )
-
-    conf = pyspark.SparkConf()
-    for k, v in (spark_conf or {}).items():
-        conf.set(k, v)
-
-    _, hail_jar, extra_classpath = local_jar_information()
-    jars = [hail_jar]
+def _configure_spark_classpath(conf: SparkConf):
+    info = local_jar_information()
+    classpath = [info.hail_jar, *info.extra_classpath]
 
     if os.environ.get('HAIL_SPARK_MONITOR') or os.environ.get('AZURE_SPARK') == '1':
         import sparkmonitor
 
-        jars = [*jars, os.path.join(os.path.dirname(sparkmonitor.__file__), 'listener.jar')]
+        classpath.append(os.path.join(os.path.dirname(sparkmonitor.__file__), 'listener.jar'))
         _modify_spark_conf(
-            conf, 'spark.extraListeners', _append_csv('sparkmonitor.listener.JupyterSparkMonitorListener')
+            conf,
+            'spark.extraListeners',
+            _append_delimited('sparkmonitor.listener.JupyterSparkMonitorListener', sep=','),
         )
 
-    _modify_spark_conf(conf, 'spark.jars', _append_csv(*jars))
+    spark_jars = [path for path in classpath if os.path.splitext(path)[1] == '.jar']
+    _modify_spark_conf(conf, 'spark.jars', _append_delimited(*spark_jars, sep=','))
     if os.environ.get('AZURE_SPARK') == '1':
         print('AZURE_SPARK environment variable is set to "1", assuming you are in HDInsight.')
         # Setting extraClassPath in HDInsight overrides the classpath entirely so you can't
         # load the Scala standard library. Interestingly, setting extraClassPath is not
         # necessary in HDInsight.
     else:
-        _modify_spark_conf(conf, 'spark.driver.extraClassPath', _append_csv(*jars, *extra_classpath))
-        _modify_spark_conf(conf, 'spark.executor.extraClassPath', _append_csv(hail_jar, *extra_classpath))
+        _modify_spark_conf(conf, 'spark.driver.extraClassPath', _append_delimited(*classpath, sep=':'))
+        _modify_spark_conf(conf, 'spark.executor.extraClassPath', _append_delimited(*classpath, sep=':'))
+
+
+def _get_or_create_pyspark_session(
+    sc: SparkContext | None,
+    *,
+    spark_conf: dict[str, str] | None = None,
+    app_name: str | None = None,
+    master: str | None = None,
+    local_tmpdir: str | None = None,
+    min_block_size: int | None = None,
+    show_progress: bool | None = None,
+) -> SparkSession:
+    if sc is not None:
+        # We can't modify many conf parameters in an existing SparkContext
+        warnings.warn(
+            'Hail requires additional configuration options in Spark referring\n'
+            '  to the path to the Hail Python module directory HAIL_DIR,\n'
+            '  e.g. /path/to/python/site-packages/hail:\n'
+            '    spark.jars=HAIL_DIR/backend/hail-all-spark.jar\n'
+            '    spark.driver.extraClassPath=HAIL_DIR/backend/hail-all-spark.jar\n'
+            '    spark.executor.extraClassPath=./hail-all-spark.jar'
+        )
+        return SparkSession(sc)
+
+    # How we source and apply sparkconf depends on the execution environment.
+    #
+    # If hail is running in a python shell then we need to configure the driver
+    # and worker classpath before starting the jvm. Note that defaults are read
+    # after jvm initialisation and so specifying `loadDefaults=True` here has
+    # no effect.
+    #
+    # If hail is running as a spark-submit job within a managed spark service
+    # like dataproc, then the jvm has already been started and conf passed to
+    # `_ensure_initialized` is ignored.
+    #
+    # Once the jvm has been initialised, we can load default values and apply
+    # configuration defined in python and scala. While we don't ship a
+    # spark-defaults.conf file with hail, users are free to supply and edit
+    # one. This is the mechanism used by the install_gcs_connector script to
+    # configure hadoop fs auth.
+    conf = SparkConf(loadDefaults=False).setAll(list((spark_conf or dict()).items()))
+    _configure_spark_classpath(conf)
+    SparkContext._ensure_initialized(conf=conf)
+
+    jvm = SparkContext._jvm
+    raise_when_mismatched_hail_versions(jvm)
+    JBackend = scala_object(getattr(jvm, 'is').hail.backend.spark, 'SparkBackend')
+
+    conf = (
+        SparkConf(loadDefaults=True)
+        .setAll(SparkConf(_jconf=JBackend.pySparkConf()).getAll())
+        .setAll(conf.getAll())
+        .setAppName(app_name if app_name is not None else 'Hail')
+    )
+
+    # It's important that we allow users to overwrite master, but we should use
+    # the default when it exists. For example, pyspark has no default so we
+    # should use 'local[*]'. Dataproc defines 'yarn' as the default master; we
+    # should use this.
+    conf.setMaster(master if master is not None else conf.get('spark.master', 'local[*]'))
 
     if local_tmpdir is not None:
-        conf.setIfMissing('spark.local.dir', local_tmpdir.removeprefix('file://'))
+        conf.set('spark.local.dir', local_tmpdir.removeprefix('file://'))
 
-    conf.set('spark.ui.showConsoleProgress', str(not quiet).lower())
+    if show_progress is not None:
+        conf.set('spark.ui.showConsoleProgress', str(show_progress).lower())
 
-    pyspark.SparkContext._ensure_initialized(instance=sc, conf=conf)
+    if min_block_size is not None:
+        if min_block_size < 0:
+            raise ValueError('`min_block_size` cannot be negative')
 
-    return pyspark.SparkContext._gateway
+        conf.set(
+            'spark.hadoop.mapreduce.input.fileinputformat.split.minsize',
+            str(min_block_size * 1024 * 1024),
+        )
+
+    return SparkSession.Builder().config(conf=conf).getOrCreate()
 
 
 class SparkBackend(Py4JBackend):
     def __init__(
         self: 'SparkBackend',
         sc: pyspark.SparkContext | None,
-        spark_conf: Dict[str, Any] | None,
+        spark_conf: dict[str, str] | None,
         app_name: str | None,
         master: str | None,
         local: str | None,
         log: str,
         quiet: bool,
         append: bool,
-        min_block_size: int,
+        show_progress: bool | None,
+        min_block_size: int | None,
         branching_factor: int,
         tmpdir: str,
         local_tmpdir: str,
         skip_logging_configuration: bool,
         *,
-        gcs_requester_pays_config: Optional[GCSRequesterPaysConfiguration] = None,
+        requester_pays_config: GCSRequesterPaysConfiguration | None = None,
         copy_log_on_error: bool = False,
     ):
         sc = sc or pyspark.SparkContext._active_spark_context
         self._hail_managed_spark = sc is None
 
-        self._gateway = _get_or_create_pyspark_gateway(sc, spark_conf, local_tmpdir, quiet)
-        jvm = self._gateway.jvm
+        if show_progress is None:
+            str_value = configuration_of(ConfigVariable.QUERY_DISABLE_PROGRESS_BAR, None, None)
+            show_progress = maybe(lambda v: v == '0', str_value)
 
-        raise_when_mismatched_hail_versions(jvm)
+        self._spark = _get_or_create_pyspark_session(
+            sc,
+            spark_conf=spark_conf,
+            app_name=app_name,
+            master=master if master is not None else local,
+            local_tmpdir=local_tmpdir,
+            show_progress=show_progress,
+            min_block_size=min_block_size,
+        )
 
+        jvm = self._spark._jvm
         _is = getattr(jvm, 'is')
 
-        py4jutils = scala_package_object(_is.hail.utils)
         if not skip_logging_configuration:
-            py4jutils.configureLogging(log, quiet, append)
-
-        JSparkBackend = _is.hail.backend.spark.SparkBackend
-        if sc is not None:
-            self._spark = pyspark.sql.SparkSession(sc)
-        else:
-            jspark_session = JSparkBackend.pySparkSession(app_name, master, local, min_block_size)
-            jsc = jvm.JavaSparkContext(jspark_session.sparkContext())
-            sc = pyspark.SparkContext(gateway=self._gateway, jsc=jsc)
-            self._spark = pyspark.sql.SparkSession(sc, jspark_session)
+            py4jutils = scala_object(_is.hail.utils, 'py4jutils')
+            py4jutils.pyConfigureLogging(log, quiet, append)
 
         if not quiet:
             sys.stderr.write(f'Running on Apache Spark version {self._spark.version}\n')
             if (uiUrl := self._spark.sparkContext.uiWebUrl) is not None:
                 sys.stderr.write(f'SparkUI available at {uiUrl}\n')
 
-        flags: Dict[str, str] = {}
+        flags: dict[str, str] = {}
         if branching_factor is not None:
             flags['branching_factor'] = str(branching_factor)
 
+        JSparkBackend = _is.hail.backend.spark.SparkBackend
         jbackend = JSparkBackend.getOrCreate(self._spark._jsparkSession)
-        super().__init__(jvm, jbackend, flags)
+        super().__init__(jvm, jbackend, flags, copy_log_on_error)
 
         self._fs = None
         self._router_fs = None
 
         self.remote_tmpdir = tmpdir
         self.local_tmpdir = local_tmpdir
-        self.gcs_requester_pays_configuration = gcs_requester_pays_config
-        self._copy_log_on_error = copy_log_on_error
-
+        self.requester_pays_config = requester_pays_config
         self.logger.info(f'Hail {__version__}')
 
     def validate_file(self, uri: str) -> None:
@@ -156,7 +210,7 @@ class SparkBackend(Py4JBackend):
     @property
     def fs(self) -> FS:
         if self._fs is None:
-            self._fs = HadoopFS(self._utils_package_object, self._jbackend.pyFs())
+            self._fs = HadoopFS(self._py4jutils, self._jbackend.pyFs())
         return self._fs
 
     @fs.setter
@@ -168,7 +222,7 @@ class SparkBackend(Py4JBackend):
     def router_fs(self) -> RouterFS:
         if self._router_fs is None:
             self._router_fs = RouterFS(
-                gcs_kwargs={"gcs_requester_pays_configuration": self.gcs_requester_pays_configuration},
+                gcs_kwargs={"gcs_requester_pays_configuration": self.requester_pays_config},
             )
         return self._router_fs
 
@@ -179,16 +233,16 @@ class SparkBackend(Py4JBackend):
 
         self._router_fs = router_fs
 
-    @Py4JBackend.gcs_requester_pays_configuration.setter
-    def gcs_requester_pays_configuration(self, config: GCSRequesterPaysConfiguration | None):
-        Py4JBackend.gcs_requester_pays_configuration.__set__(self, config)
+    @Py4JBackend.requester_pays_config.setter
+    def requester_pays_config(self, config: GCSRequesterPaysConfiguration | None):
+        Py4JBackend.requester_pays_config.__set__(self, config)
         self.router_fs = None
 
     def stop(self):
         if self._hail_managed_spark:
             self._spark.stop()
             super().stop()
-            self._gateway.shutdown()
+            SparkContext._gateway.shutdown()
 
             # clean up pyspark's global state to support
             # re-init with different spark conf
@@ -211,18 +265,6 @@ class SparkBackend(Py4JBackend):
             t = t.flatten()
         return pyspark.sql.DataFrame(self._jbackend.pyToDF(self._render_ir(t._tir)), self._spark)
 
-    def execute(self, ir: BaseIR, timed: bool = False) -> Any:
-        try:
-            return super().execute(ir, timed)
-        except Exception as err:
-            if self._copy_log_on_error:
-                try:
-                    copy_log(self.remote_tmpdir)
-                except Exception as fatal:
-                    raise err from fatal
-
-            raise err
-
     @property
     def requires_lowering(self):
-        return False
+        return any(self.get_flags('lower', 'lower_bm').values())

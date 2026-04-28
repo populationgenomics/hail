@@ -1,6 +1,7 @@
 package is.hail.expr.ir
 
 import is.hail.HailSuite
+import is.hail.collection.FastSeq
 import is.hail.expr.ir
 import is.hail.expr.ir.defs.{Literal, ToArray, ToStream}
 import is.hail.types.virtual.{TArray, TBoolean, TSet, TString}
@@ -15,7 +16,7 @@ class MemoryLeakSuite extends HailSuite {
 
     def run(size: Int): Long = {
       val lit = Literal(TSet(TString), (0 until litSize).map(_.toString).toSet)
-      val queries = Literal(TArray(TString), (0 until size).map(_.toString).toFastSeq)
+      val queries = Literal(TArray(TString), (0 until size).map(_.toString))
 
       val (_, memUsed) =
         measuringHighestTotalMemoryUsage { ctx =>

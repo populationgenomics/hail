@@ -2,9 +2,13 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichOption
 import is.hail.expr.ir._
 import is.hail.expr.ir.functions.MatrixToTableFunction
 import is.hail.sparkextras.ContextRDD
+import is.hail.sparkextras.implicits._
 import is.hail.types.physical.{PCanonicalString, PCanonicalStruct, PFloat64, PInt64}
 import is.hail.types.virtual.{MatrixType, TFloat64, TStruct, TableType}
 import is.hail.utils._
@@ -245,7 +249,7 @@ object IBD {
     val sm = ctx.stateManager
 
     val rowPType = input.rvRowPType
-    val unnormalizedIbse = input.rvd.mapPartitions { (ctx, it) =>
+    val unnormalizedIbse = input.rvd.mapPartitions { (_, ctx, it) =>
       val rv = RegionValue(ctx.r)
       val view = HardCallView(rowPType)
       it.map { ptr =>
@@ -257,7 +261,7 @@ object IBD {
 
     val ibse = unnormalizedIbse.normalized
 
-    val chunkedGenotypeMatrix = input.rvd.mapPartitions { (_, it) =>
+    val chunkedGenotypeMatrix = input.rvd.mapPartitions { (_, _, it) =>
       val view = HardCallView(rowPType)
       it.map { ptr =>
         view.set(ptr)
@@ -307,7 +311,7 @@ object IBD {
       })
 
     joined
-      .cmapPartitions { (ctx, it) =>
+      .cmapPartitions { (_, ctx, it) =>
         val rvb = new RegionValueBuilder(sm, ctx.region)
         for {
           ((iChunk, jChunk), ibses) <- it
@@ -335,7 +339,7 @@ object IBD {
   private val ibdPType =
     PCanonicalStruct(
       required = true,
-      Array(
+      ArraySeq(
         ("i", PCanonicalString()),
         ("j", PCanonicalString()),
       ) ++ ExtendedIBDInfo.pType.fields.map(f => (f.name, f.typ)): _*
@@ -388,12 +392,12 @@ case class IBD(
     }
   }
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
-  def typ(childType: MatrixType): TableType =
+  override def typ(childType: MatrixType): TableType =
     TableType(IBD.ibdPType.virtualType, IBD.ibdKey, TStruct.empty)
 
-  def execute(ctx: ExecuteContext, input: MatrixValue): TableValue = {
+  override def execute(ctx: ExecuteContext, input: MatrixValue): TableValue = {
     input.requireUniqueSamples("ibd")
     val computeMaf = mafFieldName.map(IBD.generateComputeMaf(input, _))
     val crdd =

@@ -1,5 +1,7 @@
 package is.hail.types.virtual
 
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir._
 import is.hail.rvd.RVDType
 import is.hail.types.physical.{PStruct, PType}
@@ -51,11 +53,11 @@ case class TableType(rowType: TStruct, key: IndexedSeq[String], globalType: TStr
   def isCanonical: Boolean = rowType.isCanonical && globalType.isCanonical
 
   lazy val keyType: TStruct = TableType.keyType(rowType, key)
-  def keyFieldIdx: Array[Int] = canonicalRVDType.kFieldIdx
+  def keyFieldIdx: IndexedSeq[Int] = canonicalRVDType.kFieldIdx
   lazy val valueType: TStruct = TableType.valueType(rowType, key)
-  def valueFieldIdx: Array[Int] = canonicalRVDType.valueFieldIdx
+  def valueFieldIdx: IndexedSeq[Int] = canonicalRVDType.valueFieldIdx
 
-  def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
+  override def pretty(sb: StringBuilder, indent0: Int = 0, compact: Boolean = false): Unit = {
 
     val space: String = if (compact) "" else " "
     val padding: String = if (compact) "" else " " * indent0

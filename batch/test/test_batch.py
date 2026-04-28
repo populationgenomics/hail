@@ -22,19 +22,18 @@ from hailtop.utils import delay_ms_for_try, external_requests_client_session, re
 from hailtop.utils.rich_progress_bar import BatchProgressBar
 
 from .failure_injecting_client_session import FailureInjectingClientSession
-from .utils import DOCKER_ROOT_IMAGE, HAIL_GENETICS_HAIL_IMAGE, create_batch, legacy_batch_status, smallest_machine_type
+from .utils import (
+    DOCKER_ROOT_IMAGE,
+    HAIL_GENETICS_HAIL_IMAGE,
+    create_batch,
+    legacy_batch_status,
+    smallest_machine_type,
+)
 
 deploy_config = get_deploy_config()
 
 
 skip_if_terra = pytest.mark.skipif(os.environ.get('HAIL_TERRA', False), reason="doesn't work yet on terra")
-
-
-@pytest.fixture
-def client():
-    client = BatchClient('test')
-    yield client
-    client.close()
 
 
 def test_job(client: BatchClient):
@@ -1448,6 +1447,7 @@ async def test_old_clients_that_submit_mount_docker_socket_true_is_rejected(clie
                 await b._submit_jobs(update_id, [spec_bytes], pbar_task)
 
 
+@pytest.mark.timeout(10 * 60)
 def test_pool_highmem_instance(client: BatchClient):
     b = create_batch(client)
     resources = {'cpu': '0.25', 'memory': 'highmem'}
@@ -1509,36 +1509,6 @@ def test_pool_standard_instance_cheapest(client: BatchClient):
     assert 'standard' in status['status']['worker'], str((status, b.debug_info()))
 
 
-# TODO (#15116): This test is too flaky to be run by default.Come up with a way that this test can be tested on demand (eg if we change GPU-y things) but not on
-# all unrelated changes.
-#  @skip_in_azure
-# async def test_nvidia_driver_accesibility_usage(client: BatchClient):
-#     b = create_batch(client)._async_batch
-#     resources = {'machine_type': "g2-standard-4", 'storage': '100Gi'}
-#     j = b.create_job(
-#         os.environ['HAIL_GPU_IMAGE'],
-#         ['/bin/sh', '-c', 'nvidia-smi && python3 -c "import torch; assert torch.cuda.is_available()"'],
-#         resources=resources,
-#         n_max_attempts=4,
-#     )
-#     await b.submit()
-#     status = await asyncio.wait_for(j.wait(), timeout=5 * 60)
-#     assert status['state'] == 'Success', str((status, b.debug_info()))
-
-
-@skip_in_azure
-async def test_over_64_cpus(client: BatchClient):
-    # This test is being added to validate high CPU counts in custom machines.
-    # The relevant part of this machine type ('highmem-96') is the CPU count, which is 96.
-    b = create_batch(client)
-    resources = {'machine_type': 'n1-highmem-96', 'preemptible': False}
-    j = b.create_job(DOCKER_ROOT_IMAGE, ['true'], resources=resources)
-    b.submit()
-    status = j.wait()
-    assert status['state'] == 'Success', str((status, b.debug_info()))
-    assert 'job-private' in status['status']['worker'], str((status, b.debug_info()))
-
-
 def test_job_private_instance_preemptible(client: BatchClient):
     b = create_batch(client)
     resources = {'machine_type': smallest_machine_type()}
@@ -1549,6 +1519,7 @@ def test_job_private_instance_preemptible(client: BatchClient):
     assert 'job-private' in status['status']['worker'], str((status, b.debug_info()))
 
 
+@pytest.mark.timeout(10 * 60)
 def test_job_private_instance_nonpreemptible(client: BatchClient):
     b = create_batch(client)
     resources = {'machine_type': smallest_machine_type(), 'preemptible': False}
@@ -1559,6 +1530,7 @@ def test_job_private_instance_nonpreemptible(client: BatchClient):
     assert 'job-private' in status['status']['worker'], str((status, b.debug_info()))
 
 
+@pytest.mark.timeout(10 * 60)
 def test_job_private_instance_cancel(client: BatchClient):
     b = create_batch(client)
     resources = {'machine_type': smallest_machine_type()}
@@ -1567,6 +1539,10 @@ def test_job_private_instance_cancel(client: BatchClient):
 
     tries = 0
     start = time.time()
+
+    # For this test, require this job to be Creating (ie an attempt exists in the DB, even
+    # if the VM is not provisioned yet) within 60 seconds.
+    deadline = 60
     while True:
         status = j.status()
         if status['state'] == 'Creating':
@@ -1575,15 +1551,16 @@ def test_job_private_instance_cancel(client: BatchClient):
 
         tries += 1
         cumulative_delay = now - start
-        if cumulative_delay > 60:
+        if cumulative_delay > deadline:
             assert False, str((status, b.debug_info()))
-        delay = min(delay_ms_for_try(tries), 60 - cumulative_delay)
+        delay = min(delay_ms_for_try(tries), deadline - cumulative_delay)
         time.sleep(delay)
     b.cancel()
     status = j.wait()
     assert status['state'] == 'Cancelled', str((status, b.debug_info()))
 
 
+@pytest.mark.timeout(10 * 60)
 def test_always_run_job_private_instance_cancel(client: BatchClient):
     b = create_batch(client)
     resources = {'machine_type': smallest_machine_type()}

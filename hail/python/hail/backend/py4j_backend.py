@@ -4,7 +4,7 @@ import http.client
 import logging
 import sys
 import warnings
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import orjson
 import py4j
@@ -18,18 +18,18 @@ from py4j.java_gateway import (
     launch_gateway,
 )
 
+from hail.backend.backend import ActionTag, Backend, fatal_error_from_java_error_triplet, local_jar_information
 from hail.expr import construct_expr
-from hail.ir import CSERenderer, JavaIR
-from hail.utils.java import Env, FatalError, scala_package_object
+from hail.hail_logging import Logger
+from hail.ir import BaseIR, CSERenderer, JavaIR
+from hail.utils import copy_log
+from hail.utils.java import Env, FatalError, scala_object, scala_package_object
 from hail.version import __version__
 from hailtop.aiocloud.aiogoogle import GCSRequesterPaysConfiguration
 from hailtop.aiotools.validators import validate_file
 from hailtop.fs.fs import FS
 from hailtop.fs.router_fs import RouterFS
 from hailtop.utils import async_to_blocking, find_spark_home, sync_retry_transient_errors
-
-from ..hail_logging import Logger
-from .backend import ActionTag, Backend, fatal_error_from_java_error_triplet, local_jar_information
 
 # This defaults to 65536 and fails if a header is longer than _MAXLINE
 # The timing json that we output can exceed 65536 bytes so we raise the limit
@@ -42,8 +42,8 @@ _original = None
 
 def start_py4j_gateway(*, max_heap_size: str | None = None) -> JavaGateway:
     spark_home = find_spark_home()
-    _, hail_jar_path, extra_classpath = local_jar_information()
-    extra_classpath = ':'.join([f'{spark_home}/jars/*', hail_jar_path, *extra_classpath])
+    info = local_jar_information()
+    classpath = ':'.join([f'{spark_home}/jars/*', info.hail_jar, *info.extra_classpath])
 
     jvm_opts = []
     if max_heap_size is not None:
@@ -62,7 +62,7 @@ def start_py4j_gateway(*, max_heap_size: str | None = None) -> JavaGateway:
         java_path=None,
         javaopts=jvm_opts,
         jarpath=py4j_jars[0],
-        classpath=extra_classpath,
+        classpath=classpath,
         die_on_exit=True,
     )
 
@@ -82,7 +82,7 @@ def raise_when_mismatched_hail_versions(jvm: JVMView) -> None:
         )
 
     _is = getattr(jvm, 'is')
-    jar_version = scala_package_object(_is.hail).HAIL_PRETTY_VERSION()
+    jar_version = scala_package_object(_is.hail).PrettyVersion()
     if jar_version != __version__:
         raise RuntimeError(
             f"Hail version mismatch between JAR and Python library\n  JAR:    {jar_version}\n  Python: {__version__}"
@@ -124,7 +124,7 @@ def handle_java_exception(f):
             if not Env.is_fully_initialized():
                 raise ValueError('Error occurred during Hail initialization.') from e
 
-            tpl = Env.jutils().handleForPython(e.java_exception)
+            tpl = Env.jutils().pyHandleException(e.java_exception)
             deepest, full, error_id = tpl._1(), tpl._2(), tpl._3()
             raise fatal_error_from_java_error_triplet(deepest, full, error_id) from None
         except pyspark.sql.utils.CapturedException as e:
@@ -183,6 +183,7 @@ class Py4JBackend(Backend):
         jvm: JVMView,
         jbackend: JavaObject,
         flags: Dict[str, str],
+        copy_log_on_error: bool,
     ):
         super().__init__()
         import base64
@@ -193,12 +194,13 @@ class Py4JBackend(Backend):
 
         self._jvm = jvm
         self._is = getattr(jvm, 'is')
-        self._utils_package_object = scala_package_object(self._is.hail.utils)
-        self._logger = Log4jLogger(self._utils_package_object)
+        self._py4jutils = scala_object(self._is.hail.utils, 'py4jutils')
+        self._logger = Log4jLogger(self._py4jutils)
+        self._copy_log_on_error = copy_log_on_error
 
         self._jbackend = self._is.hail.backend.driver.Py4JQueryDriver(jbackend)
         self._fs = None
-        self._gcs_requester_pays_config = None
+        self._requester_pays_config = None
 
         # This has to go after creating the SparkSession. Unclear why.
         # Maybe it does its own patch?
@@ -213,8 +215,8 @@ class Py4JBackend(Backend):
     def hail_package(self) -> JavaPackage:
         return self._is.hail
 
-    def utils_package_object(self) -> JavaObject:
-        return self._utils_package_object
+    def py4jutils(self) -> JavaObject:
+        return self._py4jutils
 
     def validate_file(self, uri: str) -> None:
         fs = self.fs
@@ -225,7 +227,7 @@ class Py4JBackend(Backend):
     def fs(self) -> FS:
         if self._fs is None:
             self._fs = RouterFS(
-                gcs_kwargs={"gcs_requester_pays_configuration": self.gcs_requester_pays_configuration},
+                gcs_kwargs={"gcs_requester_pays_configuration": self.requester_pays_config},
             )
         return self._fs
 
@@ -256,12 +258,12 @@ class Py4JBackend(Backend):
         self._jbackend.pySetRemoteTmp(tmpdir)
 
     @property
-    def gcs_requester_pays_configuration(self) -> GCSRequesterPaysConfiguration | None:
-        return self._gcs_requester_pays_config
+    def requester_pays_config(self) -> GCSRequesterPaysConfiguration | None:
+        return self._requester_pays_config
 
-    @gcs_requester_pays_configuration.setter
-    def gcs_requester_pays_configuration(self, config: GCSRequesterPaysConfiguration | None):
-        self._gcs_requester_pays_config = config
+    @requester_pays_config.setter
+    def requester_pays_config(self, config: GCSRequesterPaysConfiguration | None):
+        self._requester_pays_config = config
         project, buckets = (None, None) if config is None else (config, None) if isinstance(config, str) else config
         self._jbackend.pySetGcsRequesterPaysConfig(project, buckets)
         # invalidate fs to propagate requester-pays
@@ -270,6 +272,18 @@ class Py4JBackend(Backend):
     @property
     def requires_lowering(self):
         return True
+
+    def execute(self, ir: BaseIR, timed: bool = False) -> Any:
+        try:
+            return super().execute(ir, timed)
+        except Exception as err:
+            if self._copy_log_on_error:
+                try:
+                    copy_log(self.remote_tmpdir)
+                except Exception as fatal:
+                    raise err from fatal
+
+            raise err
 
     def _rpc(self, action, payload) -> Tuple[bytes, Optional[dict]]:
         data = orjson.dumps(payload)

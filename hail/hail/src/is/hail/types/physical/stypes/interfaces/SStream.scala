@@ -2,13 +2,13 @@ package is.hail.types.physical.stypes.interfaces
 
 import is.hail.annotations.Region
 import is.hail.asm4s._
+import is.hail.collection.FastSeq
 import is.hail.expr.ir.{EmitCode, EmitCodeBuilder, EmitMethodBuilder, IEmitCode}
 import is.hail.expr.ir.streams.StreamProducer
 import is.hail.types.{RIterable, TypeWithRequiredness}
 import is.hail.types.physical.PType
 import is.hail.types.physical.stypes._
 import is.hail.types.virtual.{TStream, Type}
-import is.hail.utils.FastSeq
 
 trait MissingnessAsMethod {
   def isMissing: Boolean
@@ -95,7 +95,7 @@ object SStreamValue {
 }
 
 trait SStreamValue extends SUnrealizableValue {
-  def st: SStream
+  override def st: SStream
 
   def getProducer(mb: EmitMethodBuilder[_]): StreamProducer
 
@@ -160,7 +160,7 @@ case class SStreamControlFlow(st: SimpleSStream, producer: StreamProducer) exten
     producer
   }
 
-  def valueTuple: IndexedSeq[Value[_]] = throw new NotImplementedError()
+  override def valueTuple: IndexedSeq[Value[_]] = throw new NotImplementedError()
 
   override def defineUnusedLabels(mb: EmitMethodBuilder[_]): Unit = {
     (producer.LendOfStream.isImplemented, producer.LproduceElementDone.isImplemented) match {

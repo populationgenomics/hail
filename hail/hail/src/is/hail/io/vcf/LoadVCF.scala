@@ -4,6 +4,9 @@ import is.hail.annotations._
 import is.hail.asm4s._
 import is.hail.backend.{BroadcastValue, ExecuteContext, HailStateManager}
 import is.hail.backend.spark.SparkBackend
+import is.hail.collection.{FastSeq, MissingArrayBuilder}
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir.{
   CloseableIterator, EmitCode, EmitCodeBuilder, EmitMethodBuilder, GenericLine, GenericLines,
@@ -12,7 +15,7 @@ import is.hail.expr.ir.{
 import is.hail.expr.ir.defs.{Literal, PartitionReader}
 import is.hail.expr.ir.lowering.TableStage
 import is.hail.expr.ir.streams.StreamProducer
-import is.hail.io.{VCFAttributes, VCFMetadata}
+import is.hail.io.{checkGzipOfGlobbedFiles, VCFAttributes, VCFMetadata}
 import is.hail.io.fs.{FS, FileListEntry}
 import is.hail.io.tabix._
 import is.hail.io.vcf.LoadVCF.{getHeaderLines, parseHeader}
@@ -23,6 +26,7 @@ import is.hail.types.physical._
 import is.hail.types.physical.stypes.interfaces.{SBaseStructValue, SStreamValue}
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.utils.implicits.toTruncatable
 import is.hail.variant._
 
 import scala.annotation.meta.param
@@ -66,14 +70,14 @@ object VCFHeaderInfo {
 
   def fromJSON(jv: JValue): VCFHeaderInfo = {
     val sampleIDs =
-      (jv \ "sampleIDs").asInstanceOf[JArray].arr.map(_.asInstanceOf[JString].s).toArray
+      (jv \ "sampleIDs").asInstanceOf[JArray].arr.map(_.asInstanceOf[JString].s).to(ArraySeq)
     val infoFlagFields =
       (jv \ "infoFlagFields").asInstanceOf[JArray].arr.map(_.asInstanceOf[JString].s).toSet
 
     def lookupFields(name: String) = (jv \ name).asInstanceOf[JArray].arr.map { case elt: JArray =>
       val List(name: JString, typeStr: JString) = elt.arr
       name.s -> IRParser.parseType(typeStr.s)
-    }.toArray
+    }.to(ArraySeq)
 
     val infoFields = lookupFields("infoFields")
     val formatFields = lookupFields("formatFields")
@@ -92,9 +96,9 @@ object VCFHeaderInfo {
 }
 
 case class VCFHeaderInfo(
-  sampleIds: Array[String],
-  infoFields: Array[(String, Type)],
-  formatFields: Array[(String, Type)],
+  sampleIds: IndexedSeq[String],
+  infoFields: IndexedSeq[(String, Type)],
+  formatFields: IndexedSeq[(String, Type)],
   filtersAttrs: VCFAttributes,
   infoAttrs: VCFAttributes,
   formatAttrs: VCFAttributes,
@@ -161,7 +165,7 @@ case class VCFHeaderInfo(
     )
 
     val vaSignature = PCanonicalStruct(
-      Array(
+      ArraySeq(
         PField("rsid", PCanonicalString(), 0),
         PField("qual", PFloat64(), 1),
         PField("filters", PCanonicalSet(PCanonicalString(true)), 2),
@@ -193,8 +197,9 @@ case class VCFHeaderInfo(
   }
 
   def toJSON: JValue = {
-    def fieldsJson(fields: Array[(String, Type)]): JValue = JArray(fields.map { case (name, t) =>
-      JArray(List(JString(name), JString(t.parsableString())))
+    def fieldsJson(fields: IndexedSeq[(String, Type)]): JValue = JArray(fields.map {
+      case (name, t) =>
+        JArray(List(JString(name), JString(t.parsableString())))
     }.toList)
 
     def attrsJson(attrs: Map[String, Map[String, String]]): JValue = JObject(attrs.map {
@@ -1280,7 +1285,7 @@ class ParseLineContext(
   val infoFields: java.util.HashMap[String, Int] =
     if (infoSignature != null) makeJavaMap(infoSignature.fieldIdx) else null
 
-  val infoFieldTypes: Array[Type] = if (infoSignature != null) infoSignature.types else null
+  val infoFieldTypes: IndexedSeq[Type] = if (infoSignature != null) infoSignature.types else null
 
   val infoFieldFlagIndices: Array[Int] = if (infoSignature != null) {
     infoSignature.fields
@@ -1383,7 +1388,7 @@ object LoadVCF extends Logging {
 
   def headerSignature[T <: VCFCompoundHeaderLine](
     lines: java.util.Collection[T]
-  ): (Array[(String, Type)], VCFAttributes, Set[String]) = {
+  ): (IndexedSeq[(String, Type)], VCFAttributes, Set[String]) = {
     val (fields, attrs, flags) = lines.asScala
       .map(line => headerField(line))
       .unzip3
@@ -1392,7 +1397,7 @@ object LoadVCF extends Logging {
       .flatMap { case ((f, _), isFlag) => if (isFlag) Some(f) else None }
       .toSet
 
-    (fields.toArray, attrs.toMap, flagFieldNames)
+    (fields.to(ArraySeq), attrs.toMap, flagFieldNames)
   }
 
   def parseHeader(
@@ -1427,7 +1432,7 @@ object LoadVCF extends Logging {
         headerLine,
       )
 
-    val sampleIds: Array[String] = headerLine.split("\t").drop(9)
+    val sampleIds = ArraySeq.unsafeWrapArray(headerLine.split("\t").drop(9))
 
     VCFHeaderInfo(
       sampleIds,
@@ -1508,7 +1513,7 @@ object LoadVCF extends Logging {
     skipInvalidLoci: Boolean,
   ): ContextRDD[Long] = {
     val hasRSID = rowPType.hasField("rsid")
-    lines.cmapPartitions { (ctx, it) =>
+    lines.cmapPartitions { (_, ctx, it) =>
       new Iterator[Long] {
         val rvb = ctx.rvb
         var ptr: Long = 0
@@ -1522,7 +1527,7 @@ object LoadVCF extends Logging {
         val abf = new MissingArrayBuilder[Float]
         val abd = new MissingArrayBuilder[Double]
 
-        def hasNext: Boolean = {
+        override def hasNext: Boolean = {
           while (!present && it.hasNext) {
             val lwc = it.next()
             val line = lwc.value
@@ -1583,7 +1588,7 @@ object LoadVCF extends Logging {
           present
         }
 
-        def next(): Long = {
+        override def next(): Long = {
           // call hasNext to advance if necessary
           if (!hasNext)
             throw new java.util.NoSuchElementException()
@@ -1688,9 +1693,9 @@ class PartitionedVCFRDD(
   val contigRemappingBc =
     if (reverseContigMapping.size != 0) sparkContext.broadcast(reverseContigMapping) else null
 
-  protected def getPartitions: Array[Partition] = _partitions
+  override protected def getPartitions: Array[Partition] = _partitions
 
-  def compute(split: Partition, context: TaskContext): Iterator[WithContext[String]] = {
+  override def compute(split: Partition, context: TaskContext): Iterator[WithContext[String]] = {
     val p = split.asInstanceOf[PartitionedVCFPartition]
 
     val chromToQuery = if (contigRemappingBc != null)
@@ -1715,9 +1720,9 @@ class PartitionedVCFRDD(
       private var l = lines.next()
       private var curIdx: Long = lines.getCurIdx()
 
-      def hasNext: Boolean = l != null
+      override def hasNext: Boolean = l != null
 
-      def next(): WithContext[String] = {
+      override def next(): WithContext[String] = {
         assert(l != null)
         val n = l
         l = lines.next()
@@ -1750,7 +1755,7 @@ object MatrixVCFReader extends Logging {
     callFields: Set[String],
     entryFloatTypeName: String,
     headerFile: Option[String],
-    sampleIDs: Option[Seq[String]],
+    sampleIDs: Option[IndexedSeq[String]],
     nPartitions: Option[Int],
     blockSizeInMB: Option[Int],
     minPartitions: Option[Int],
@@ -1808,7 +1813,7 @@ object MatrixVCFReader extends Logging {
             Array.emptyByteArray,
             files.tail.map(_.getBytes),
             "load_vcf_parse_header",
-          ) { (_, bytes, htc, _, fs) =>
+          ) { (_, fs, _, _) => (_, bytes) =>
             val file = new String(bytes)
 
             val hd = parseHeader(getHeaderLines(fs, file, localFilterAndReplace))
@@ -1857,7 +1862,7 @@ object MatrixVCFReader extends Logging {
       }
     }
 
-    val sampleIDs = params.sampleIDs.map(_.toArray).getOrElse(header1.sampleIds)
+    val sampleIDs = params.sampleIDs.getOrElse(header1.sampleIds)
 
     LoadVCF.warnDuplicates(sampleIDs)
 
@@ -1882,7 +1887,7 @@ case class MatrixVCFReaderParameters(
   callFields: Set[String],
   entryFloatTypeName: String,
   headerFile: Option[String],
-  sampleIDs: Option[Seq[String]],
+  sampleIDs: Option[IndexedSeq[String]],
   nPartitions: Option[Int],
   blockSizeInMB: Option[Int],
   minPartitions: Option[Int],
@@ -1913,12 +1918,12 @@ class MatrixVCFReader(
     "reading with partitions can currently only read a single path",
   )
 
-  val sampleIDs = params.sampleIDs.map(_.toArray).getOrElse(header.sampleIds)
+  val sampleIDs = params.sampleIDs.getOrElse(header.sampleIds)
 
   LoadVCF.warnDuplicates(sampleIDs)
 
-  def rowUIDType = TTuple(TInt64, TInt64)
-  def colUIDType = TInt64
+  override def rowUIDType = TTuple(TInt64, TInt64)
+  override def colUIDType = TInt64
 
   val (infoPType, rowValuePType, formatPType) = header.getPTypes(
     params.arrayElementsRequired,
@@ -1926,18 +1931,18 @@ class MatrixVCFReader(
     params.callFields,
   )
 
-  def fullMatrixTypeWithoutUIDs: MatrixType = MatrixType(
+  override def fullMatrixTypeWithoutUIDs: MatrixType = MatrixType(
     globalType = TStruct.empty,
     colType = TStruct("s" -> TString),
-    colKey = Array("s"),
+    colKey = ArraySeq("s"),
     rowType = TStruct(
-      Array(
+      ArraySeq(
         "locus" -> TLocus.schemaFromRG(referenceGenome.map(_.name)),
         "alleles" -> TArray(TString),
       )
         ++ rowValuePType.fields.map(f => f.name -> f.typ.virtualType): _*
     ),
-    rowKey = Array("locus", "alleles"),
+    rowKey = ArraySeq("locus", "alleles"),
     // rowKey = Array.empty[String],
     entryType = formatPType.virtualType,
   )
@@ -1958,13 +1963,13 @@ class MatrixVCFReader(
     fullType.key,
   )
 
-  def pathsUsed: Seq[String] = params.files
+  override def pathsUsed: Seq[String] = params.files
 
   def nCols: Int = sampleIDs.length
 
   val columnCount: Option[Int] = Some(nCols)
 
-  def partitionCounts: Option[IndexedSeq[Long]] = None
+  override def partitionCounts: Option[IndexedSeq[Long]] = None
 
   def partitioner(sm: HailStateManager): Option[RVDPartitioner] =
     params.partitionsJSON.map { partitionsJSON =>
@@ -2140,7 +2145,7 @@ class MatrixVCFReader(
     decomposeWithName(params, "MatrixVCFReader")
   }
 
-  def renderShort(): String = defaultRender()
+  override def renderShort(): String = defaultRender()
 
   override def hashCode(): Int = params.hashCode()
 
@@ -2189,7 +2194,7 @@ case class GVCFPartitionReader(
 
   lazy val fullRowType: TStruct = fullRowPType.virtualType
 
-  def rowRequiredness(requestedType: TStruct): RStruct =
+  override def rowRequiredness(requestedType: TStruct): RStruct =
     VirtualTypeWithReq(tcoerce[PStruct](fullRowPType.subsetTo(requestedType))).r.asInstanceOf[
       RStruct
     ]
@@ -2199,7 +2204,7 @@ case class GVCFPartitionReader(
     decomposeWithName(this, "MatrixVCFReader")
   }
 
-  def emitStream(
+  override def emitStream(
     ctx: ExecuteContext,
     cb: EmitCodeBuilder,
     mb: EmitMethodBuilder[_],
@@ -2240,7 +2245,7 @@ case class GVCFPartitionReader(
           cb.assign(
             iter,
             Code.newInstance[TabixReadVCFIterator](
-              Array[Class[_]](
+              ArraySeq[Class[_]](
                 classOf[FS],
                 classOf[String],
                 classOf[Map[String, String]],
@@ -2261,7 +2266,7 @@ case class GVCFPartitionReader(
                 classOf[String],
                 classOf[String],
               ),
-              Array[Code[_]](
+              ArraySeq[Code[_]](
                 mb.getFS,
                 filePath,
                 mb.getObject(contigRecoding),

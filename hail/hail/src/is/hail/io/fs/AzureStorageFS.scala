@@ -1,5 +1,6 @@
 package is.hail.io.fs
 
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.io.fs.FSUtil.dropTrailingSlash
 import is.hail.services.oauth2.AzureCloudCredentials
 import is.hail.services.retryTransientErrors
@@ -14,7 +15,6 @@ import is.hail.shadedazure.com.azure.storage.blob.models.{
 import is.hail.shadedazure.com.azure.storage.blob.specialized.BlockBlobClient
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
 
 import java.io.{FileNotFoundException, OutputStream}
@@ -107,7 +107,7 @@ object AzureStorageFileListEntry {
     new BlobStorageFileListEntry(url.toString, null, 0, true)
 }
 
-case class AzureStorageFSConfig(credentials_file: Option[Path])
+case class AzureStorageConfig(credentials_file: Option[Path])
 
 class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
   type URL = AzureStorageFSURL
@@ -151,9 +151,9 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
       case _: IllegalArgumentException => false
     }
 
-  def getConfiguration(): Unit = ()
+  override def getConfiguration(): Unit = ()
 
-  def setConfiguration(config: Any): Unit = {}
+  override def setConfiguration(config: Any): Unit = {}
 
   // ABS errors if you attempt credentialed access for a public container,
   // so we try once with credentials, if that fails use anonymous access for
@@ -190,7 +190,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     getServiceClient(url).getBlobContainerClient(url.container)
   }
 
-  def openNoCompression(url: URL): SeekableDataInputStream = handlePublicAccessError(url) {
+  override def openNoCompression(url: URL): SeekableDataInputStream = handlePublicAccessError(url) {
     val blobSize = getBlobClient(url).getProperties.getBlobSize
 
     val is: SeekableInputStream = new FSSeekableInputStream {
@@ -238,7 +238,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     new WrappedSeekableDataInputStream(is)
   }
 
-  def createNoCompression(url: URL): PositionedDataOutputStream = retryTransientErrors {
+  override def createNoCompression(url: URL): PositionedDataOutputStream = retryTransientErrors {
     val blockBlobClient = getBlobClient(url).getBlockBlobClient
 
     val os: PositionedOutputStream = new FSPositionedOutputStream(4 * 1024 * 1024) {
@@ -268,7 +268,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     new WrappedPositionedDataOutputStream(os)
   }
 
-  def delete(url: URL, recursive: Boolean): Unit = retryTransientErrors {
+  override def delete(url: URL, recursive: Boolean): Unit = retryTransientErrors {
     val blobClient: BlobClient = getBlobClient(url)
 
     if (recursive) {
@@ -294,9 +294,9 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
     }
   }
 
-  def listDirectory(url: URL): Array[FileListEntry] = handlePublicAccessError(url) {
+  override def listDirectory(url: URL): IndexedSeq[FileListEntry] = handlePublicAccessError(url) {
     val blobContainerClient: BlobContainerClient = getContainerClient(url)
-    val statList: ArrayBuffer[FileListEntry] = ArrayBuffer()
+    val statList = ArraySeq.newBuilder[FileListEntry]
 
     val prefix = dropTrailingSlash(url.path) + "/"
     // collect all children of this directory (blobs and subdirectories)
@@ -304,10 +304,10 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
 
     prefixMatches.forEach(blobItem => statList += AzureStorageFileListEntry(url, blobItem))
 
-    statList.toArray
+    statList.result()
   }
 
-  def glob(url: URL): Array[FileListEntry] = handlePublicAccessError(url) {
+  override def glob(url: URL): IndexedSeq[FileListEntry] = handlePublicAccessError(url) {
     globWithPrefix(prefix = url.withPath(""), path = dropTrailingSlash(url.path))
   }
 
@@ -351,7 +351,7 @@ class AzureStorageFS(val credential: AzureCloudCredentials) extends FS {
       Some(getBlobClient(url).getProperties.getETag)
     }
 
-  def makeQualified(filename: String): String = {
+  override def makeQualified(filename: String): String = {
     parseUrl(filename): Unit
     filename
   }

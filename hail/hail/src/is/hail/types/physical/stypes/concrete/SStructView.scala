@@ -2,6 +2,7 @@ package is.hail.types.physical.stypes.concrete
 
 import is.hail.annotations.Region
 import is.hail.asm4s.{Settable, TypeInfo, Value}
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitCodeBuilder, IEmitCode}
 import is.hail.types.physical.{PCanonicalStruct, PType}
 import is.hail.types.physical.stypes.{EmitType, SType, SValue}
@@ -48,14 +49,14 @@ final class SStructView(
     restrict.view.zipWithIndex.map { case (f, i) => i -> parent.fieldIdx(f) }.toMap
 
   override lazy val fieldTypes: IndexedSeq[SType] =
-    Array.tabulate(size) { i =>
+    ArraySeq.tabulate(size) { i =>
       parent
         .fieldTypes(newToOldFieldMapping(i))
         .castRename(rename.fields(i).typ)
     }
 
   override lazy val fieldEmitTypes: IndexedSeq[EmitType] =
-    Array.tabulate(size) { i =>
+    ArraySeq.tabulate(size) { i =>
       parent
         .fieldEmitTypes(newToOldFieldMapping(i))
         .copy(st = fieldTypes(i))
@@ -106,7 +107,7 @@ final class SStructView(
       ct
     }
 
-  def storageType(): PType = {
+  override def storageType(): PType = {
     val pt = PCanonicalStruct(
       required = false,
       args = rename.fieldNames.zip(fieldEmitTypes.map(_.copiedType.storageType)): _*,

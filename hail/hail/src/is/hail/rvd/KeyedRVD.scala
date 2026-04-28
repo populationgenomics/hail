@@ -2,11 +2,11 @@ package is.hail.rvd
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.compat.mutable.Growable
 import is.hail.sparkextras._
 import is.hail.types.physical.PStruct
 import is.hail.types.virtual.TInterval
 import is.hail.utils._
-import is.hail.utils.compat.mutable.Growable
 
 class KeyedRVD(val rvd: RVD, val key: Int) {
   require(key <= rvd.typ.key.length && key >= 0)
@@ -83,7 +83,7 @@ class KeyedRVD(val rvd: RVD, val key: Int) {
       joinedType.copy(key = joinedType.key.take(realType.key.length)),
       right.rvd,
       key,
-    ) { (ctx, leftIt, rightIt) =>
+    ) { (_, ctx, leftIt, rightIt) =>
       val sideBuffer = ctx.freshRegion()
       joiner(
         ctx,
@@ -116,7 +116,7 @@ class KeyedRVD(val rvd: RVD, val key: Int) {
 
         (
           newTyp,
-          (ctx: RVDContext, it: Iterator[RegionValue], intervals: Iterator[RegionValue]) =>
+          (_, ctx: RVDContext, it: Iterator[RegionValue], intervals: Iterator[RegionValue]) =>
             f(
               ctx,
               OrderedRVIterator(lTyp, it, ctx, sm)
@@ -143,7 +143,7 @@ class KeyedRVD(val rvd: RVD, val key: Int) {
 
         (
           newTyp,
-          (ctx: RVDContext, it: Iterator[RegionValue], intervals: Iterator[RegionValue]) =>
+          (_, ctx: RVDContext, it: Iterator[RegionValue], intervals: Iterator[RegionValue]) =>
             f(
               ctx,
               OrderedRVIterator(lTyp, it, ctx, sm)
@@ -167,7 +167,7 @@ class KeyedRVD(val rvd: RVD, val key: Int) {
       joinedType,
       right.rvd,
       key,
-    ) { (ctx, leftIt, rightIt) =>
+    ) { (_, ctx, leftIt, rightIt) =>
       joiner(
         ctx,
         OrderedRVIterator(lTyp, leftIt, ctx, sm).leftJoinDistinct(OrderedRVIterator(
@@ -209,7 +209,7 @@ class KeyedRVD(val rvd: RVD, val key: Int) {
       this.virtType,
       right.rvd,
       key,
-    ) { (ctx, leftIt, rightIt) =>
+    ) { (_, ctx, leftIt, rightIt) =>
       OrderedRVIterator(lType, leftIt, ctx, sm)
         .merge(OrderedRVIterator(rType, rightIt, ctx, sm))
     }

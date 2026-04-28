@@ -24,7 +24,6 @@ from hailtop.utils import RETRY_FUNCTION_SCRIPT, check_shell, check_shell_output
 from .build import BuildConfiguration, Code
 from .constants import AUTHORIZED_USERS, COMPILER_TEAM, GITHUB_CLONE_URL, GITHUB_STATUS_CONTEXT, SERVICES_TEAM
 from .environment import DEPLOY_STEPS
-from .globals import is_test_deployment
 from .utils import GithubStatus, add_deployed_services, github_status
 
 repos_lock = asyncio.Lock()
@@ -395,11 +394,7 @@ class PR(Code):
     def github_status_from_build_state(self) -> GithubStatus:
         if self.build_state in ('failure', 'error'):
             return GithubStatus.FAILURE
-        if (
-            self.build_state == 'success'
-            and self.batch
-            and self.batch.attributes['target_sha'] == self.target_branch.sha
-        ):
+        if self.build_state == 'success' and self.batch:
             return GithubStatus.SUCCESS
         return GithubStatus.PENDING
 
@@ -407,13 +402,7 @@ class PR(Code):
         assert self.source_sha is not None
 
         log.info(f'{self.short_str()}: notify github state: {gh_status}')
-        if self.batch is None or isinstance(self.batch, MergeFailureBatch):
-            target_url = deploy_config.external_url(
-                'ci', f'/watched_branches/{self.target_branch.index}/pr/{self.number}'
-            )
-        else:
-            assert self.batch.id is not None
-            target_url = deploy_config.external_url('ci', f'/batches/{self.batch.id}')
+        target_url = deploy_config.external_url('ci', f'/watched_branches/{self.target_branch.index}/pr/{self.number}')
         data = {
             'state': gh_status.value,
             'target_url': target_url,
@@ -630,31 +619,36 @@ mkdir -p {shq(repo_dir)}
         return row is not None
 
     async def _update_batch(self, batch_client, db: Database):
-        # find the latest non-cancelled batch for source
+        # Finds the current build batch for this source: the most recent non-cancelled,
+        # non-invalidated batch. Batches are returned newest-first, and any invalidated
+        # batch implies that anything older than it is excluded automatically.
+        # In general, no current build batch is a signal that a new build should be started.
+
         batches = batch_client.list_batches(
             f'test=1 target_branch={self.target_branch.branch.short_str()} source_sha={self.source_sha} user:ci'
         )
-        min_batch = None
-        min_batch_status = None
+
+        current_build_batch = None
+        current_build_batch_status = None
         async for b in batches:
             if await self.is_invalidated_batch(b, db):
-                continue
+                break
             try:
                 s = await b.status()
             except Exception:
                 log.exception(f'failed to get the status for batch {b.id}')
                 raise
             if s['state'] != 'cancelled':
-                if min_batch is None or b.id > min_batch.id:
-                    min_batch = b
-                    min_batch_status = s
-        self.batch = min_batch
+                current_build_batch = b
+                current_build_batch_status = s
+                break
+        self.batch = current_build_batch
         self.source_sha_failed = None
 
-        if min_batch_status is None:
+        if current_build_batch_status is None:
             self.set_build_state(None)
-        elif min_batch_status['complete']:
-            if min_batch_status['state'] == 'success':
+        elif current_build_batch_status['complete']:
+            if current_build_batch_status['state'] == 'success':
                 self.set_build_state('success')
                 self.source_sha_failed = False
             else:
@@ -876,7 +870,7 @@ class WatchedBranch(Code):
         for pr in new_prs.values():
             await pr._update_github(gh)
 
-    async def _update_deploy(self, batch_client, db: Database):
+    async def _update_deploy(self, batch_client, db: Database):  # pylint: disable=unused-argument
         assert self.deployable
 
         if self.deploy_state:

@@ -2,6 +2,9 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits.toRichIterator
 import is.hail.expr._
 import is.hail.expr.ir.TableValue
 import is.hail.expr.ir.functions.{RelationalFunctions, TableToTableFunction}
@@ -11,7 +14,6 @@ import is.hail.sparkextras.ContextRDD
 import is.hail.types.physical.PType
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.utils.compat.immutable.ArraySeq
 import is.hail.variant.{Locus, RegionValueVariant}
 import is.hail.variant.VariantMethods.locusAllelesToString
 
@@ -20,7 +22,7 @@ import scala.jdk.CollectionConverters._
 
 import com.fasterxml.jackson.core.JsonParseException
 import org.apache.spark.sql.Row
-import org.json4s.{Formats, JValue}
+import org.json4s.{DefaultFormats, Formats, JValue}
 import org.json4s.jackson.JsonMethods
 
 case class VEPConfiguration(
@@ -33,7 +35,7 @@ object VEP {
 
   def readConfiguration(fs: FS, path: String): VEPConfiguration = {
     val jv = using(fs.open(path))(in => JsonMethods.parse(in))
-    implicit val formats: Formats = defaultJSONFormats + new TStructSerializer
+    implicit val formats: Formats = DefaultFormats + new TStructSerializer
     jv.extract[VEPConfiguration]
   }
 
@@ -86,7 +88,7 @@ class VEP(private val params: VEPParameters, conf: VEPConfiguration)
 
     val csqPattern = "CSQ=[^;^\\t]+".r
     val annotations =
-      inRvd.mapPartitionsWithIndex { (partIdx, _, it) =>
+      inRvd.mapPartitionsWithIndex { (partIdx, _, _, it) =>
         val pb = new ProcessBuilder(cmd.toList.asJava)
         val env = pb.environment()
         for { (k, v) <- conf.env } env.put(k, v)
@@ -129,7 +131,7 @@ class VEP(private val params: VEPParameters, conf: VEPConfiguration)
                     val a: Annotation =
                       csqPattern
                         .findFirstIn(s)
-                        .map(_.substring(4).split(",").to(ArraySeq))
+                        .map(v => ArraySeq.unsafeWrapArray(v.substring(4).split(",")))
                         .getOrElse {
                           logger.warn(
                             s"""No CSQ INFO field for VEP output variant ${locusAllelesToString(vepv)}.
@@ -209,7 +211,7 @@ class VEP(private val params: VEPParameters, conf: VEPConfiguration)
       RVD(
         inRvd.typ.copy(rowType = vepRowType),
         inRvd.partitioner,
-        ContextRDD.weaken(annotations).cmapPartitions { (ctx, it) =>
+        ContextRDD.weaken(annotations).cmapPartitions { (_, ctx, it) =>
           val rvb = ctx.rvb
 
           it.map { case (v, vep, proc) =>
@@ -261,7 +263,7 @@ class VEP(private val params: VEPParameters, conf: VEPConfiguration)
   def variantFromInput(input: String): (Locus, IndexedSeq[String]) =
     try {
       val a = input.split("\t")
-      (Locus(a(0), a(1).toInt), a(3) +: a(4).split(","))
+      (Locus(a(0), a(1).toInt), ArraySeq.unsafeWrapArray(a(3) +: a(4).split(",")))
     } catch {
       case e: Throwable => fatal(s"VEP returned invalid variant '$input'", e)
     }

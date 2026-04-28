@@ -111,7 +111,7 @@ object oauth2 {
       }
 
     private[this] def isExpired: Boolean =
-      token == null || OffsetDateTime.now.plusMinutes(AzureTokenRefreshMinutes.toLong).isBefore(
+      token == null || OffsetDateTime.now.plusMinutes(AzureTokenRefreshMinutes).isAfter(
         token.getExpiresAt
       )
   }
@@ -124,7 +124,7 @@ object oauth2 {
     val DefaultOAuth2Scopes: Array[String] =
       Array(".default")
 
-    private[AzureCloudCredentials] val AzureTokenRefreshMinutes = 5
+    private[AzureCloudCredentials] val AzureTokenRefreshMinutes = 5L
 
     def fromJson(jv: JValue, scopes: Array[String] = DefaultOAuth2Scopes): AzureCloudCredentials =
       AzureClientSecretCredentials(

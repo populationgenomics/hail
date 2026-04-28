@@ -2,6 +2,8 @@ package is.hail.methods
 
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
+import is.hail.collection.FastSeq
+import is.hail.collection.implicits.toRichIterator
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir.TableValue
 import is.hail.expr.ir.functions.TableToTableFunction
@@ -415,7 +417,7 @@ object Nirvana extends Logging {
     val prev = tv.rvd
 
     val annotations = prev
-      .mapPartitions { (_, it) =>
+      .mapPartitions { (_, _, it) =>
         val pb = new ProcessBuilder(cmd.asJava)
         val env = pb.environment()
         if (path.orNull != null)
@@ -468,7 +470,7 @@ object Nirvana extends Logging {
     val nirvanaRVD: RVD = RVD(
       nirvanaRVDType,
       prev.partitioner,
-      ContextRDD.weaken(annotations).cmapPartitions { (rvdContext, it) =>
+      ContextRDD.weaken(annotations).cmapPartitions { (_, rvdContext, it) =>
         val rvb = new RegionValueBuilder(ctx.stateManager, rvdContext.region)
 
         it.map { case (v, nirvana) =>
@@ -504,8 +506,8 @@ case class Nirvana(config: String, blockSize: Int = 500000) extends TableToTable
     )
   }
 
-  def preservesPartitionCounts: Boolean = false
+  override def preservesPartitionCounts: Boolean = false
 
-  def execute(ctx: ExecuteContext, tv: TableValue): TableValue =
+  override def execute(ctx: ExecuteContext, tv: TableValue): TableValue =
     Nirvana.annotate(ctx, tv, config, blockSize)
 }

@@ -2,6 +2,7 @@ package is.hail.types.virtual
 
 import is.hail.annotations.{Annotation, ExtendedOrdering, NDArray}
 import is.hail.backend.HailStateManager
+import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.{Nat, NatBase}
 
 object TNDArray {
@@ -46,7 +47,7 @@ final case class TNDArray(elementType: Type, nDimsBase: NatBase) extends Type {
     sb += '>'
   }
 
-  def _toPretty = s"NDArray[$elementType,$nDims]"
+  override def _toPretty = s"NDArray[$elementType,$nDims]"
 
   override def _pretty(sb: StringBuilder, indent: Int, compact: Boolean = false): Unit = {
     sb ++= "NDArray["
@@ -105,14 +106,14 @@ final case class TNDArray(elementType: Type, nDimsBase: NatBase) extends Type {
 
   override def subst(): TNDArray = TNDArray(elementType.subst(), nDimsBase.subst())
 
-  def _typeCheck(a: Annotation): Boolean = a match {
+  override def _typeCheck(a: Annotation): Boolean = a match {
     case nd: NDArray => nd.forall(e => elementType.typeCheck(e))
     case _ => false
   }
 
   override def mkOrdering(sm: HailStateManager, missingEqual: Boolean): ExtendedOrdering = null
 
-  lazy val shapeType: TTuple = TTuple(Array.fill(nDims)(TInt64): _*)
+  lazy val shapeType: TTuple = TTuple(ArraySeq.fill(nDims)(TInt64): _*)
 
   override def isIsomorphicTo(t: Type): Boolean =
     t match {

@@ -1,5 +1,7 @@
 package is.hail.io.fs
 
+import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.collection.implicits._
 import is.hail.utils._
 
 import scala.collection.parallel.CollectionConverters._
@@ -13,21 +15,21 @@ import org.apache.hadoop.fs.{EtagSource, FSDataInputStream, FSDataOutputStream, 
 class HadoopFileListEntry(fs: hadoop.fs.FileStatus) extends FileListEntry {
   val normalizedPath = fs.getPath
 
-  def getPath: String = fs.getPath.toString
+  override def getPath: String = fs.getPath.toString
 
-  def getActualUrl: String = fs.getPath.toString
+  override def getActualUrl: String = fs.getPath.toString
 
-  def getModificationTime: java.lang.Long = fs.getModificationTime
+  override def getModificationTime: java.lang.Long = fs.getModificationTime
 
-  def getLen: Long = fs.getLen
+  override def getLen: Long = fs.getLen
 
-  def isDirectory: Boolean = fs.isDirectory
+  override def isDirectory: Boolean = fs.isDirectory
 
-  def isFile: Boolean = fs.isFile
+  override def isFile: Boolean = fs.isFile
 
-  def isSymlink: Boolean = fs.isSymlink
+  override def isSymlink: Boolean = fs.isSymlink
 
-  def getOwner: String = fs.getOwner
+  override def getOwner: String = fs.getOwner
 }
 
 object HadoopFS {
@@ -47,7 +49,7 @@ object HadoopFS {
           closed = true
         }
 
-      def getPosition: Long = os.getPos
+      override def getPosition: Long = os.getPos
     }
 
   def toSeekableInputStream(is: FSDataInputStream): SeekableInputStream =
@@ -66,9 +68,9 @@ object HadoopFS {
           closed = true
         }
 
-      def seek(pos: Long): Unit = is.seek(pos)
+      override def seek(pos: Long): Unit = is.seek(pos)
 
-      def getPosition: Long = is.getPos
+      override def getPosition: Long = is.getPos
     }
 }
 
@@ -93,19 +95,19 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
   override def validUrl(filename: String): Boolean =
     Try(getFileSystem(filename)).isSuccess
 
-  def getConfiguration(): SerializableHadoopConfiguration = conf
+  override def getConfiguration(): SerializableHadoopConfiguration = conf
 
-  def setConfiguration(_conf: Any): Unit =
+  override def setConfiguration(_conf: Any): Unit =
     conf = _conf.asInstanceOf[SerializableHadoopConfiguration]
 
-  def createNoCompression(url: URL): PositionedDataOutputStream = {
+  override def createNoCompression(url: URL): PositionedDataOutputStream = {
     val os = url.hadoopFs.create(url.hadoopPath)
     new WrappedPositionedDataOutputStream(
       HadoopFS.toPositionedOutputStream(os)
     )
   }
 
-  def openNoCompression(url: URL): SeekableDataInputStream = {
+  override def openNoCompression(url: URL): SeekableDataInputStream = {
     val is =
       try
         url.hadoopFs.open(url.hadoopPath)
@@ -126,7 +128,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
   def getFileSystem(filename: String): hadoop.fs.FileSystem =
     new hadoop.fs.Path(filename).getFileSystem(conf.value)
 
-  def listDirectory(url: URL): Array[FileListEntry] = {
+  override def listDirectory(url: URL): IndexedSeq[FileListEntry] = {
     val statuses = url.hadoopFs.globStatus(url.hadoopPath)
     if (statuses == null) {
       throw new FileNotFoundException(url.toString)
@@ -135,6 +137,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
         .flatMap(url.hadoopFs.listStatus(_))
         .map(new HadoopFileListEntry(_))
         .toArray
+        .unsafeToArraySeq
     }
   }
 
@@ -147,22 +150,22 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
   def rmtree(dirname: String): Unit =
     getFileSystem(dirname).delete(new hadoop.fs.Path(dirname), true)
 
-  def delete(url: URL, recursive: Boolean): Unit =
+  override def delete(url: URL, recursive: Boolean): Unit =
     url.hadoopFs.delete(url.hadoopPath, recursive): Unit
 
-  override def globAll(filenames: Iterable[String]): Array[FileListEntry] = {
+  override def globAll(filenames: Iterable[String]): IndexedSeq[FileListEntry] = {
     filenames.flatMap { filename =>
       val fles = glob(filename)
       if (fles.isEmpty)
         logger.warn(s"'$filename' refers to no files")
       fles
-    }.toArray
+    }.to(ArraySeq)
   }
 
-  def glob(url: URL): Array[FileListEntry] = {
-    var files = url.hadoopFs.globStatus(url.hadoopPath)
+  override def glob(url: URL): IndexedSeq[FileListEntry] = {
+    var files = ArraySeq.unsafeWrapArray(url.hadoopFs.globStatus(url.hadoopPath))
     if (files == null)
-      files = Array.empty
+      files = ArraySeq.empty
     logger.info(
       s"globbing path $url returned ${files.length} files: ${files.map(_.getPath.getName).mkString(",")}"
     )
@@ -177,7 +180,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     fle
   }
 
-  def fileListEntry(url: URL): FileListEntry =
+  override def fileListEntry(url: URL): FileListEntry =
     new HadoopFileListEntry(url.hadoopFs.getFileStatus(url.hadoopPath))
 
   override def eTag(url: URL): Option[String] =
@@ -186,7 +189,7 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     else
       None
 
-  def makeQualified(path: String): String = {
+  override def makeQualified(path: String): String = {
     val ppath = new hadoop.fs.Path(path)
     val pathFS = ppath.getFileSystem(conf.value)
     pathFS.makeQualified(ppath).toString
