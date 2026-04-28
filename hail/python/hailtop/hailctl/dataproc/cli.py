@@ -192,7 +192,7 @@ def start(
         bool, Opt(help='Enable debug features on created cluster (heap dump on out-of-memory error)')
     ] = False,
     public_ip_address: Ann[
-        bool, Opt(help='Deprecated -- Hail 0.2.133 always enables public IP address.')
+        bool, Opt(help='Deprecated -- Hail 0.2.133 and later always enable public IP address.')
     ] = False,
 ):
     """
@@ -200,6 +200,9 @@ def start(
     """
     assert num_secondary_workers is not None
     assert num_workers is not None
+
+    if public_ip_address:
+        print('Info: public_ip_address is unnecessary, cpg-utils should omit it', file=sys.stderr)
 
     dataproc_start(
         name,

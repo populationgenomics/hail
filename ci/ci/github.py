@@ -24,7 +24,6 @@ from hailtop.utils import RETRY_FUNCTION_SCRIPT, check_shell, check_shell_output
 from .build import BuildConfiguration, Code
 from .constants import AUTHORIZED_USERS, COMPILER_TEAM, GITHUB_CLONE_URL, GITHUB_STATUS_CONTEXT, SERVICES_TEAM
 from .environment import DEPLOY_STEPS
-from .globals import is_test_deployment
 from .utils import GithubStatus, add_deployed_services, github_status
 
 repos_lock = asyncio.Lock()
@@ -871,7 +870,7 @@ class WatchedBranch(Code):
         for pr in new_prs.values():
             await pr._update_github(gh)
 
-    async def _update_deploy(self, batch_client, db: Database):
+    async def _update_deploy(self, batch_client, db: Database):  # pylint: disable=unused-argument
         assert self.deployable
 
         if self.deploy_state:

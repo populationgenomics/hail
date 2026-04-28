@@ -746,13 +746,14 @@ async def prod_deploy(request, userdata):
     await watched_branch._start_deploy(db=app[AppKeys.DB], batch_client=app[AppKeys.BATCH_CLIENT], steps=steps)
 
     batch = watched_branch.deploy_batch
-    if not isinstance(batch, MergeFailureBatch):
+    if batch is not None and not isinstance(batch, MergeFailureBatch):
         url = deploy_config.external_url('ci', f'/batches/{batch.id}')
         return web.Response(text=f'{url}\n')
     else:
         message = traceback.format_exc()
         log.info('prod deploy failed: ' + message, exc_info=True)
-        raise web.HTTPBadRequest(text=f'starting prod deploy failed due to\n{message}') from batch.exception
+        cause = batch.exception if isinstance(batch, MergeFailureBatch) else None
+        raise web.HTTPBadRequest(text=f'starting prod deploy failed due to\n{message}') from cause
 
 
 @routes.post('/api/v1alpha/batch_callback')

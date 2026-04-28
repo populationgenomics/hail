@@ -674,7 +674,7 @@ async def pool_config_update(request: web.Request, _) -> NoReturn:
             f'a non-negative integer less than or equal to max_live_instances {max_live_instances}',
         )
 
-        label = post['label']
+        label = str(post['label'])
 
         possible_worker_cores = []
         for cores in possible_cores_from_worker_type(pool.cloud, worker_type):
