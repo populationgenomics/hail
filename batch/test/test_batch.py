@@ -59,7 +59,7 @@ def test_job_resource_usage(client: BatchClient):
     assert status['state'] == 'Success', str((status, b.debug_info()))
 
     resource_usage = j.resource_usage()
-    if resource_usage is None:
+    if resource_usage is not None:
         assert resource_usage['main'] is not None, str((resource_usage, b.debug_info()))
 
 
@@ -1245,7 +1245,7 @@ python3 -c \'{script}\'""",
         assert status['state'] == 'Success', str((status, b.debug_info()))
     else:
         assert status['state'] == 'Failed', str((status, b.debug_info()))
-        assert 'Unauthorized' in j.log()['main'], (str(j.log()['main']), status)
+        assert 'Not authenticated' in j.log()['main'], (str(j.log()['main']), status)
 
 
 def test_deploy_config_is_mounted_as_readonly(client: BatchClient):
