@@ -800,7 +800,8 @@ class ServiceBackend(Backend[bc.Batch]):
 
             used_remote_tmpdir_results = await bounded_gather(
                 *[functools.partial(compile_job, j) for j in unsubmitted_jobs],
-                parallelism=150,
+                # JohnM 2026-05-25 Reduce from 150 as PythonJob._compile() uploads files to buckets
+                parallelism=50,
                 cancel_on_error=True,
             )
             used_remote_tmpdir |= any(used_remote_tmpdir_results)
