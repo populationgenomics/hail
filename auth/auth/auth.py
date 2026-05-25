@@ -250,6 +250,13 @@ async def get_healthcheck(_) -> web.Response:
     return web.Response()
 
 
+@routes.get('/helloreact')
+@web_security_headers
+@auth.maybe_authenticated_user
+async def hello_react(request: web.Request, userdata) -> web.Response:
+    return await render_template('auth', request, userdata, 'hello_react.html', {'use_tailwind': True})
+
+
 @routes.get('/swagger')
 @web_security_headers_swagger
 async def swagger(request):
@@ -625,7 +632,7 @@ async def post_create_role(request: web.Request, _) -> NoReturn:
 
 async def _get_users(db: Database, username: Optional[str] = None) -> List[dict]:
     _query = """
-SELECT users.id AS user_id, username, login_id, state, is_service_account, hail_identity, system_permissions.name AS permission_name
+SELECT users.id AS user_id, username, login_id, state, is_service_account, hail_identity, last_activated, system_permissions.name AS permission_name
 FROM users
 LEFT JOIN users_system_roles ON users.id = users_system_roles.user_id
 LEFT JOIN system_role_permissions ON users_system_roles.role_id = system_role_permissions.role_id
@@ -646,6 +653,7 @@ LEFT JOIN system_permissions ON system_role_permissions.permission_id = system_p
                 'state': user['state'],
                 'is_service_account': user['is_service_account'],
                 'hail_identity': user['hail_identity'],
+                'last_activated': user['last_activated'],
                 'system_permissions': {user['permission_name']: True} if user['permission_name'] else {},
             }
         elif user['permission_name']:
