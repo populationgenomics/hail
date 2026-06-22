@@ -582,7 +582,8 @@ object Main {
     r += node("I64", in("x", att("Long"))).withTraits(Atom)
     r += node("F32", in("x", att("Float"))).withTraits(Atom)
     r += node("F64", in("x", att("Double"))).withTraits(Atom)
-    r += node("Str", in("x", att("String"))).withTraits(Atom)
+    // Making Str < Atom would lead to code bloat
+    r += node("Str", in("x", att("String")))
       .withPreamble(
         "override def toString(): String = s\"\"\"Str(\"${StringEscapeUtils.escapeString(x)}\")\"\"\""
       ): @nowarn("msg=possible missing interpolator")
@@ -671,7 +672,9 @@ object Main {
     )
 
     r += node("MakeArray", in("args", child.*), _typ("TArray")).withCompanionExtension
-    r += node("MakeStream", in("args", child.*), _typ("TStream"), mmPerElt).withCompanionExtension
+    r += node("MakeStream", in("args", child.*), _typ("TStream"), mmPerElt)
+      .typed("TStream")
+      .withCompanionExtension
     r += node("ArrayRef", in("a", child), in("i", child), errorID)
     r += node(
       "ArraySlice",
@@ -943,7 +946,7 @@ object Main {
       .withTraits(NDArrayIR)
     r += node("NDArrayReindex", in("nd", child), in("indexExpr", att("Int").*))
       .withTraits(NDArrayIR)
-    r += node("NDArrayAgg", in("nd", child), in("axes", att("Int").*))
+    r += node("NDArrayAgg", in("nd", child), in("axes", att("Int").*)).withTraits(NDArrayIR)
     r += node("NDArrayWrite", in("nd", child), in("path", child)).typed("TVoid.type")
     r += node("NDArrayMatMul", in("l", child), in("r", child), errorID).withTraits(NDArrayIR)
     r += node(
