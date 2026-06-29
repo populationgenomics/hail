@@ -18,7 +18,7 @@ object Simplify {
 
   /** Transform 'ir' using simplification rules until none apply. */
   def apply(ctx: ExecuteContext, ir: BaseIR): BaseIR =
-    ctx.time(recur(ctx, ir))
+    TimedBlock.enter(recur(ctx, ir))
 
   private[this] def recur(ctx: ExecuteContext, ir: BaseIR): BaseIR =
     ir match {
@@ -1433,6 +1433,14 @@ object Simplify {
             ApplySpecial("land", FastSeq(), FastSeq(pred1, pred2), TBoolean, ErrorIDs.NO_ERROR),
           )
         )
+
+      // push MatrixFilterCols through MatrixMapEntries / MatrixFilterEntries
+      // so that column-reducing operations run before per-entry work
+      case MatrixFilterCols(MatrixMapEntries(child, newEntries), pred) =>
+        Some(MatrixMapEntries(MatrixFilterCols(child, pred), newEntries))
+
+      case MatrixFilterCols(MatrixFilterEntries(child, entryPred), colPred) =>
+        Some(MatrixFilterEntries(MatrixFilterCols(child, colPred), entryPred))
 
       case MatrixFilterEntries(MatrixFilterEntries(child, pred1), pred2) =>
         Some(MatrixFilterEntries(

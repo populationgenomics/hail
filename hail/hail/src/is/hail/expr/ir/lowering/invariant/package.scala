@@ -9,6 +9,7 @@ import is.hail.expr.ir.{
 import is.hail.expr.ir.NormalizeNames.needsRenaming
 import is.hail.expr.ir.defs.{ApplyIR, RelationalLet, RelationalRef}
 import is.hail.expr.ir.lowering.invariant.Flags.StrictInvariants
+import is.hail.utils.TimedBlock
 import is.hail.utils.implicits.toRichPredicate
 
 import scala.collection.mutable
@@ -37,11 +38,11 @@ package invariant {
   // These predicates can be fused together so that we traverse the ir at most once.
   private case class Fused(invariant: BaseIR => Boolean)(implicit E: Enclosing) extends Invariant {
     override def verify(ctx: ExecuteContext, ir: BaseIR): Unit =
-      ctx.time {
+      TimedBlock.enter {
         IRTraversal.trace(ir).foreach { case trace @ ir :: _ =>
           if (!invariant(ir)) throw new UnsatisfiedInvariantError(
             s"""Invariant ${E.value} forbids
-               |${trace.take(5).map(Pretty(ctx, _, preserveNames = true)).mkString("\nin\n")}
+               |${trace.take(5).map(Pretty(ctx, _)).mkString("\nin\n")}
                |""".stripMargin
           )
         }
@@ -102,9 +103,9 @@ package object invariant {
             !newNames.add(name) || names.put(name, ir).forall { orig =>
               throw new UnsatisfiedInvariantError(
                 s"""Invariant ${implicitly[Enclosing].value} forbids redefinition of '$name' in
-                   |${Pretty.ssaStyle(ir, preserveNames = true)}
+                   |${Pretty.ssaStyle(ir)}
                    |Originally bound in
-                   |${Pretty.ssaStyle(orig, preserveNames = true)}""".stripMargin
+                   |${Pretty.ssaStyle(orig)}""".stripMargin
               )
             }
           }
