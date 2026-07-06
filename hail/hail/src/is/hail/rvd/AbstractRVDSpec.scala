@@ -132,7 +132,7 @@ object AbstractRVDSpec {
         val contextsValue: IndexedSeq[Any] =
           (leftParts lazyZip rightParts lazyZip leftParts.indices)
             .map { (path1, path2, partIdx) =>
-              Row(Row(partIdx.toLong, path1), Row(partIdx.toLong, path2))
+              RowSeq(RowSeq(partIdx.toLong, path1), RowSeq(partIdx.toLong, path2))
             }
 
         val ctxIR = ToStream(Literal(TArray(reader.contextType), contextsValue))
@@ -187,7 +187,7 @@ object AbstractRVDSpec {
         val kSize = specLeft.key.size
         val contextsValues: IndexedSeq[Row] =
           partsAndIntervals.zipWithIndex.map { case ((partPath, interval), partIdx) =>
-            Row(
+            RowSeq(
               partIdx.toLong,
               s"$absPathLeft/parts/$partPath",
               s"$absPathRight/parts/$partPath",
@@ -257,7 +257,7 @@ abstract class AbstractRVDSpec {
       val contexts = ToStream(Literal(
         TArray(ctxType),
         absolutePartPaths(path).zipWithIndex.map {
-          case (x, i) => Row(i.toLong, x)
+          case (x, i) => RowSeq(i.toLong, x)
         },
       ))
 
@@ -464,19 +464,16 @@ case class IndexedRVDSpec2(
 
   override def indexSpec: AbstractIndexSpec = _indexSpec
 
-  override def partitioner(sm: HailStateManager): RVDPartitioner = {
-    val keyType = codecSpec2.encodedVirtualType.asInstanceOf[TStruct].select(key)._1
-    val rangeBoundsType = TArray(TInterval(keyType))
-    new RVDPartitioner(
-      sm,
-      keyType,
-      JSONAnnotationImpex.importAnnotation(
-        _jRangeBounds,
-        rangeBoundsType,
-        padNulls = false,
-      ).asInstanceOf[IndexedSeq[Interval]],
-    )
-  }
+  private[this] val keyType: TStruct =
+    codecSpec2.encodedVirtualType.asInstanceOf[TStruct].select(_key)._1
+
+  private[this] lazy val partitionBounds: IndexedSeq[Interval] =
+    JSONAnnotationImpex
+      .importAnnotation(_jRangeBounds, TArray(TInterval(keyType)), padNulls = false)
+      .asInstanceOf[IndexedSeq[Interval]]
+
+  override def partitioner(sm: HailStateManager): RVDPartitioner =
+    new RVDPartitioner(sm, keyType, partitionBounds)
 
   override def partFiles: IndexedSeq[String] = _partFiles
 
@@ -513,7 +510,7 @@ case class IndexedRVDSpec2(
         val intersectionInterval =
           extendedNP.rangeBounds(newPartIdx)
             .intersect(extendedNP.kord, oldInterval).get
-        Row(
+        RowSeq(
           oldPartIdx.toLong,
           s"$path/parts/$partFile",
           s"$path/${indexSpec.relPath}/$partFile.idx",
