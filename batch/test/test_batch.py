@@ -59,7 +59,7 @@ def test_job_resource_usage(client: BatchClient):
     assert status['state'] == 'Success', str((status, b.debug_info()))
 
     resource_usage = j.resource_usage()
-    if resource_usage is None:
+    if resource_usage is not None:
         assert resource_usage['main'] is not None, str((resource_usage, b.debug_info()))
 
 
@@ -963,9 +963,11 @@ def test_authorized_users_only():
         (session.post, '/api/v1alpha/billing_projects/foo/reopen', 401),
         (session.post, '/api/v1alpha/billing_projects/foo/delete', 401),
         (session.post, '/api/v1alpha/billing_limits/foo/edit', 401),
+        (session.get, '/api/v1alpha/billing_breakdown', 401),
         (session.get, '/api/v1alpha/batches/0/jobs/0', 401),
         (session.get, '/api/v1alpha/batches/0/jobs/0/log', 401),
         (session.get, '/api/v1alpha/batches/0/jobs/0/resource_usage', 401),
+        (session.get, '/api/v1alpha/batches/0/jobs/0/jvm_profile', 401),
         (session.get, '/api/v1alpha/batches', 401),
         (session.post, '/api/v1alpha/batches/create', 401),
         (session.post, '/api/v1alpha/batches/0/jobs/create', 401),
@@ -1245,7 +1247,7 @@ python3 -c \'{script}\'""",
         assert status['state'] == 'Success', str((status, b.debug_info()))
     else:
         assert status['state'] == 'Failed', str((status, b.debug_info()))
-        assert 'Unauthorized' in j.log()['main'], (str(j.log()['main']), status)
+        assert 'Not authenticated' in j.log()['main'], (str(j.log()['main']), status)
 
 
 def test_deploy_config_is_mounted_as_readonly(client: BatchClient):
@@ -1407,8 +1409,8 @@ def test_verify_private_network_is_restricted(client: BatchClient):
         assert False
 
 
-async def test_old_clients_that_submit_mount_docker_socket_false_is_ok(client: BatchClient):
-    b = create_batch(client)._async_batch
+async def test_old_clients_that_submit_mount_docker_socket_false_is_ok(async_client: AioBatchClient):
+    b = create_batch(async_client)
     await b._open_batch()
     b.create_job(DOCKER_ROOT_IMAGE, command=['sleep', '30'])
     update_id = await b._create_update()
@@ -1425,8 +1427,8 @@ async def test_old_clients_that_submit_mount_docker_socket_false_is_ok(client: B
             await b._submit_jobs(update_id, [spec_bytes], pbar_task)
 
 
-async def test_old_clients_that_submit_mount_docker_socket_true_is_rejected(client: BatchClient):
-    b = create_batch(client)._async_batch
+async def test_old_clients_that_submit_mount_docker_socket_true_is_rejected(async_client: AioBatchClient):
+    b = create_batch(async_client)
     await b._open_batch()
     b.create_job(DOCKER_ROOT_IMAGE, command=['sleep', '30'])
     update_id = await b._create_update()
@@ -2232,8 +2234,8 @@ def test_cancel_job_group_with_different_nested_updates(client: BatchClient):
         b.cancel()
 
 
-async def test_get_and_cancel_job_group_with_unsubmitted_job_group_updates(client: BatchClient):
-    b = create_batch(client)._async_batch
+async def test_get_and_cancel_job_group_with_unsubmitted_job_group_updates(async_client: AioBatchClient):
+    b = create_batch(async_client)
     jg = b.create_job_group()
     jg.create_job(DOCKER_ROOT_IMAGE, ['sleep', '300'])
     await b.submit()

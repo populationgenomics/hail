@@ -1,3 +1,8 @@
+repoPrefix: /repo
+
+alwaysRunSteps:
+  - merge_code
+
 steps:
   - kind: buildImage2
     name: git_make_bash_image
@@ -455,6 +460,8 @@ steps:
         script: /io/sql/009-add-users-last-active.sql
       - name: refactor-roles
         script: /io/sql/010-refactor-roles.sql
+      - name: refactor-system-permissions
+        script: /io/sql/011-refactor-system-permissions.sql
     inputs:
       - from: /repo/auth/sql
         to: /io/sql
@@ -632,8 +639,10 @@ steps:
     contextPath: /io/repo/docker/vep/
     publishAs: hailgenetics/vep-grch37-85
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/docker/hailgenetics/vep
+        to: /io/repo/docker/hailgenetics/vep
+      - from: /repo/docker/vep
+        to: /io/repo/docker/vep
     dependsOn:
       - merge_code
   - kind: buildImage2
@@ -642,8 +651,10 @@ steps:
     contextPath: /io/repo/docker/vep/
     publishAs: hailgenetics/vep-grch38-95
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/docker/hailgenetics/vep
+        to: /io/repo/docker/hailgenetics/vep
+      - from: /repo/docker/vep
+        to: /io/repo/docker/vep
     dependsOn:
       - merge_code
   - kind: buildImage2
@@ -667,6 +678,38 @@ steps:
     dependsOn:
       - hail_ubuntu_image
       - merge_code
+  - kind: runImage
+    name: build_ui
+    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
+    script: |
+      set -ex
+      cd /io/repo/services/ui
+      npm ci
+      npm run build
+    inputs:
+      - from: /repo/services/ui
+        to: /io/repo/services/ui
+    outputs:
+      - from: /io/repo/services/ui/dist/ci
+        to: /compiled-js/ci
+      - from: /io/repo/services/ui/dist/batch
+        to: /compiled-js/batch
+    dependsOn:
+      - merge_code
+  - kind: runImage
+    name: check_ui
+    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
+    script: |
+      set -ex
+      cd /io/repo/services/ui
+      npm ci
+      npm test
+      npm run check
+    inputs:
+      - from: /repo/services/ui
+        to: /io/repo/services/ui
+    dependsOn:
+      - merge_code
   - kind: buildImage2
     name: batch_image
     dockerFile: /io/repo/batch/Dockerfile
@@ -689,9 +732,13 @@ steps:
         to: /io/repo/gear
       - from: /repo/web_common
         to: /io/repo/web_common
+      - from: /compiled-js/batch
+        to: /io/repo/batch/batch/front_end/static/compiled-js
     dependsOn:
       - hail_ubuntu_image
       - merge_code
+      - build_ui
+      - check_ui
   - kind: buildImage2
     name: hailgenetics_hailtop_image
     dockerFile: /io/repo/docker/hailgenetics/hailtop/Dockerfile
@@ -709,35 +756,6 @@ steps:
     dependsOn:
       - merge_code
       - hail_ubuntu_image
-  - kind: runImage
-    name: build_ui
-    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
-    script: |
-      set -ex
-      cd /io/repo/services/ui
-      npm ci
-      npm run build
-    inputs:
-      - from: /repo/services/ui
-        to: /io/repo/services/ui
-    outputs:
-      - from: /io/repo/services/ui/dist/ci
-        to: /compiled-js/ci
-    dependsOn:
-      - merge_code
-  - kind: runImage
-    name: check_ui
-    image: node:20-slim@sha256:a82f40540f5959e0003fb7b3c0f80490def2927be8bdbee7e3e0ac65cce3be92
-    script: |
-      set -ex
-      cd /io/repo/services/ui
-      npm ci
-      npm run check
-    inputs:
-      - from: /repo/services/ui
-        to: /io/repo/services/ui
-    dependsOn:
-      - merge_code
   - kind: buildImage2
     name: ci_image
     dockerFile: /io/repo/ci/Dockerfile
@@ -775,6 +793,35 @@ steps:
       - merge_code
       - copy_third_party_images
   - kind: runImage
+    name: download_mill_and_maven_deps
+    image:
+      valueFrom: base_image.image
+    resources:
+      memory: standard
+      cpu: '2'
+    script: |
+      set -ex
+      cd /io/repo/hail
+
+      export HAIL_BUILD_MODE=Release
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      # force download of mill binary and coursier dependencies
+      sh mill --no-daemon 'hail.__.{prepareOffline,scalaCompilerClasspath,javaHome}'
+      tar -C /io -czf /io/mill-cache.tgz cache
+    inputs:
+      - from: /repo/hail
+        to: /io/repo/hail
+    outputs:
+      - from: /io/mill-cache.tgz
+        to: /mill-cache.tgz
+      - from: /io/repo/hail/out
+        to: /derived/root/hail/out
+    dependsOn:
+      - base_image
+      - merge_code
+  - kind: runImage
     name: build_hail_jar_and_wheel
     image:
       valueFrom: base_image.image
@@ -785,7 +832,12 @@ steps:
       set -ex
       cd /io/repo/hail
 
+      tar -C /io -xzf /io/mill-cache.tgz
+
       export MILLOPTS='--no-daemon' HAIL_BUILD_MODE=Release
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
       time retry sh mill --no-daemon --version
 
       # We've encountered the following sporadic error in CI between `mill`
@@ -808,16 +860,25 @@ steps:
       BYTES=$(du build/deploy/dist/hail-*-py3-none-any.whl | awk '{print $1}')
       (( BYTES < 209715200 )) || exit 1
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
+      - from: /repo/README.md
+        to: /io/repo/README.md
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
+      - from: /derived/root/hail/out
+        to: /io/repo/hail/out
     outputs:
-      - from: /io/repo/hail/out
-        to: /derived/release/hail/out/
+      - from: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
+        to: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
       - from: /io/repo/hail/build/deploy/dist
         to: /derived/release/hail/build/deploy/dist
     dependsOn:
       - base_image
       - merge_code
+      - download_mill_and_maven_deps
   - kind: runImage
     name: test_install_in_isolation_python3_11
     image:
@@ -885,7 +946,13 @@ steps:
       set -ex
       cd /io/repo/hail
 
-      export MILLOPTS='--no-daemon' HAIL_BUILD_MODE=CI
+      tar -C /io -xzf /io/mill-cache.tgz
+
+      export MILLOPTS='--no-daemon'
+      export HAIL_BUILD_MODE=CI
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
       time retry sh mill --no-daemon --version
 
       # See `build_hail_jar_and_wheel`
@@ -897,8 +964,16 @@ steps:
 
       time retry make wheel
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
+      - from: /repo/README.md
+        to: /io/repo/README.md
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
+      - from: /derived/root/hail/out
+        to: /io/repo/hail/out
     outputs:
       - from: /io/repo/hail/out
         to: /derived/debug/hail/out
@@ -907,8 +982,9 @@ steps:
     dependsOn:
       - base_image
       - merge_code
+      - download_mill_and_maven_deps
   - kind: runImage
-    name: build_debug_hail_test_jar
+    name: build_debug_hail_test
     image:
       valueFrom: base_image.image
     resources:
@@ -918,20 +994,23 @@ steps:
       set -ex
       cd /io/repo/hail
 
-      export MILLOPTS='--no-daemon' HAIL_BUILD_MODE=CI
-      time retry sh mill --no-daemon --version
+      tar -C /io -xzf /io/mill-cache.tgz
 
-      # See `build_hail_jar_and_wheel`
-      time retry make shadowTestJar
-      if [ ! -f out/hail/2.12/test/assembly.dest/out.jar ]; then
-          echo 'no out.jar found after mill assembly returned. going to sleep'
-          sleep 5
-      fi
+      export HAIL_BUILD_MODE=CI
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      export SCALA_VERSION=2.12
+      time sh mill --no-daemon hail[].test.{compile,testForkGrouping}
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
       - from: /derived/debug/hail/out
         to: /io/repo/hail/out
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
     outputs:
       - from: /io/repo/hail/out
         to: /derived/debug/hail/out
@@ -939,6 +1018,7 @@ steps:
       - base_image
       - merge_code
       - build_hail_debug_jar_and_wheel
+      - download_mill_and_maven_deps
   - kind: runImage
     name: build_hail_test_artifacts
     image:
@@ -950,18 +1030,14 @@ steps:
       time tar czf test.tar.gz -C python test pytest.ini
       time tar czf resources.tar.gz -C hail/test resources
       time tar czf data.tar.gz -C python/hail/docs data
-      time TESTNG_SPLITS=5 python3 generate_splits.py
-      time tar czf splits.tar.gz testng-splits-*.xml
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/hail
+        to: /io/repo/hail
     outputs:
       - from: /io/repo/hail/test.tar.gz
         to: /test.tar.gz
       - from: /io/repo/hail/resources.tar.gz
         to: /resources.tar.gz
-      - from: /io/repo/hail/splits.tar.gz
-        to: /splits.tar.gz
       - from: /io/repo/hail/data.tar.gz
         to: /data.tar.gz
     dependsOn:
@@ -1074,22 +1150,26 @@ steps:
       cpu: '2'
     script: |
       set -ex
-      cd /io
-      mkdir -p hail/test
-      tar xzf resources.tar.gz -C hail/test
-      tar xzf splits.tar.gz
-      export HAIL_TEST_SKIP_R=1
-      java -cp hail-test.jar:$SPARK_HOME/jars/* org.testng.TestNG -listener is.hail.LogTestListener testng-splits-$HAIL_RUN_IMAGE_SPLIT_INDEX.xml
+      cd /io/repo/hail
+
+      tar -C /io -xzf /io/mill-cache.tgz
+
+      export HAIL_BUILD_MODE='CI'
+      export NO_COLOR=1
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      export SCALA_VERSION=2.12
+      sh mill --no-daemon -j1 hail[].test.testCISplit --split $HAIL_RUN_IMAGE_SPLIT_INDEX --totalSplits 5
     inputs:
-      - from: /resources.tar.gz
-        to: /io/resources.tar.gz
-      - from: /derived/debug/hail/out/hail/2.12/test/assembly.dest/out.jar
-        to: /io/hail-test.jar
-      - from: /splits.tar.gz
-        to: /io/splits.tar.gz
-    outputs:
-      - from: /io/test-output
-        to: /test-output
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
+      - from: /derived/debug/hail/out
+        to: /io/repo/hail/out
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
     secrets:
       - name: test-gsa-key
         namespace:
@@ -1099,11 +1179,12 @@ steps:
       - default_ns
       - hail_run_image
       - create_test_gsa_keys
-      - build_debug_hail_test_jar
+      - build_debug_hail_test
       - build_hail_test_artifacts
+      - download_mill_and_maven_deps
   - kind: runImage
     name: test_hail_python
-    numSplits: 28
+    numSplits: 22
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -1275,7 +1356,7 @@ steps:
       - gcp
   - kind: runImage
     name: test_hail_python_local_backend
-    numSplits: 48
+    numSplits: 22
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -1474,7 +1555,7 @@ steps:
     inputs:
       - from: /repo/docker/hailgenetics/hail
         to: /io/repo/docker/hailgenetics/hail
-      - from: /repo/hail/python/pinned-requirements.txt
+      - from: /repo/hail/python/pinned-requirements-py310.txt
         to: /io/repo/hail/python/pinned-requirements.txt
       - from: /derived/release/hail/build/deploy/dist
         to: /io/repo/wheel
@@ -1660,12 +1741,20 @@ steps:
     image:
       valueFrom: hail_linting_image.image
     resources:
-      memory: 8G
+      memory: 16G
     script: |
       set -ex
       cd /io/repo
+      tar -C /io -xzf /io/mill-cache.tgz
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      export MILLOPTS=--no-daemon
+      # This also compiles with scala 2.13, so asserts there are no compiler errors or warnings
       make check-hail
     inputs:
+      - from: /repo/.git
+        to: /io/repo/.git
       - from: /repo/Makefile
         to: /io/repo/Makefile
       - from: /repo/pylintrc
@@ -1676,28 +1765,16 @@ steps:
         to: /io/repo/hail
       - from: /repo/config.mk
         to: /io/repo/config.mk
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
+      - from: /derived/root/hail/out/hail
+        to: /io/repo/hail/out/hail
+      - from: /derived/root/hail/out/Env
+        to: /io/repo/hail/out/Env
     dependsOn:
       - hail_linting_image
       - merge_code
-  - kind: runImage
-    name: compile_hail_213
-    image:
-      valueFrom: base_image.image
-    resources:
-      memory: standard
-      cpu: '2'
-    script: |
-      set -ex
-      cd /io/repo/hail
-
-      HAIL_BUILD_MODE='CI'
-      time retry sh mill --no-daemon hail[2.13].__.compile
-    inputs:
-      - from: /repo
-        to: /io/repo
-    dependsOn:
-      - base_image
-      - merge_code
+      - download_mill_and_maven_deps
   - kind: runImage
     name: get_pip_versioned_docs
     image:
@@ -1739,8 +1816,10 @@ steps:
       memory: standard
       cpu: '2'
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/hail/env/HAIL_PIP_VERSION
+        to: /io/repo/hail/env/HAIL_PIP_VERSION
+      - from: /repo/.git
+        to: /io/repo/.git
       - from: /www.tar.gz
         to: /io/www.tar.gz
     outputs:
@@ -1809,13 +1888,12 @@ steps:
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
 
       {% if default_ns.name == "default" %}
-      hailctl auth create-user --developer {{ code.username }} {{ code.login_id }}
+      hailctl auth create-user {{ code.username }} {{ code.login_id }} developer billing_manager sysadmin
       {% else %}
       hailctl auth create-user \
-        --developer \
         --hail-identity {{ code.hail_identity }} \
         --hail-credentials-secret-name {{ code.username }}-gsa-key \
-        {{ code.username }} {{ code.login_id }}
+        {{ code.username }} {{ code.login_id }} developer billing_manager sysadmin
       {% endif %}
     secrets:
       - name: test-dev-gsa-key
@@ -2525,12 +2603,11 @@ steps:
       export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
       {% for user in code.get("developers", []) %}
-      {% if user['username'] != 'test-dev' %}
+      {% if user['username'] != 'test-dev' and user['login_id'] is not none %}
       hailctl auth create-user \
-        --developer \
         --hail-identity {{ user["hail_identity"] }} \
         --hail-credentials-secret-name {{ user["username"] }}-gsa-key \
-        {{ user["username"] }} {{ user["login_id"] }}
+        {{ user["username"] }} {{ user["login_id"] }} developer billing_manager sysadmin
       {% endif %}
       {% endfor %}
     secrets:
@@ -2671,6 +2748,7 @@ steps:
               -vv \
               --instafail \
               --durations=50 \
+              --asyncio-mode=auto \
               /io/test_requester_pays_parsing.py
     inputs:
       - from: /derived/release/hail/build/deploy/dist
@@ -2878,6 +2956,63 @@ steps:
       - workdir_image
       - hail_ubuntu_image
   - kind: runImage
+    name: batch_worker_image_regression_tests
+    numSplits: 1
+    image:
+      valueFrom: batch_image.image
+    script: |
+      set -ex
+
+      export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
+      export HAIL_TEST_GSA_KEY_FILE=/test-gsa-key/key.json
+      export HAIL_TEST_DEV_GSA_KEY_FILE=/test-dev-gsa-key/key.json
+      export HAIL_GSA_KEY_FILE=/test-gsa-key/key.json
+      export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
+      export DOCKER_PREFIX="{{ global.docker_prefix }}"
+      export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
+      export HAIL_TOKEN="{{ token }}"
+      export HAIL_CLOUD="{{ global.cloud }}"
+      export HAIL_PRODUCTION_DOMAIN="{{ global.domain }}"
+      export HAIL_BATCH_REMOTE_TMPDIR="{{ global.test_storage_uri }}/batch_worker_image_regression_tests/{{ token }}/"
+
+      hail-pip-install -r /io/dev-requirements.txt
+
+      python3 -m pytest \
+              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              --log-date-format="%Y-%m-%dT%H:%M:%S" \
+              --log-format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d:%(funcName)s %(message)s" \
+              --timeout=660 \
+              /io/test/test_worker_image_security.py
+    inputs:
+      - from: /repo/batch/test
+        to: /io/test
+      - from: /repo/hail/python/dev/pinned-requirements.txt
+        to: /io/dev-requirements.txt
+    port: 5000
+    timeout: 1800
+    secrets:
+      - name: test-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-gsa-key
+      - name: test-dev-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-dev-gsa-key
+    dependsOn:
+      - create_deploy_config
+      - create_accounts
+      - default_ns
+      - merge_code
+      - deploy_batch
+      - batch_image
+  - kind: runImage
     name: test_auth
     numSplits: 1
     image:
@@ -2898,6 +3033,7 @@ steps:
               --log-date-format="%Y-%m-%dT%H:%M:%S" \
               --log-format="%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d:%(funcName)s %(message)s" \
               --timeout=360 \
+              --ignore=/io/test/test_system_permissions.py \
               /io/test/
     inputs:
       - from: /repo/auth/test
@@ -2907,6 +3043,7 @@ steps:
     timeout: 1500
     dependsOn:
       - auth_image
+
   - kind: runImage
     name: delete_test_billing_projects
     resources:
@@ -3003,8 +3140,28 @@ steps:
       - test
       - dev
     inputs:
-      - from: /repo
-        to: /io/repo
+      - from: /repo/ci
+        to: /io/repo/ci
+      - from: /repo/tls
+        to: /io/repo/tls
+      - from: /repo/pylintrc
+        to: /io/repo/pylintrc
+      - from: /repo/check-sql.sh
+        to: /io/repo/check-sql.sh
+      - from: /repo/pyproject.toml
+        to: /io/repo/pyproject.toml
+      - from: /repo/docker
+        to: /io/repo/docker
+      - from: /repo/gear
+        to: /io/repo/gear
+      - from: /repo/hail/python
+        to: /io/repo/hail/python
+      - from: /repo/hail/Makefile
+        to: /io/repo/hail/Makefile
+      - from: /repo/hail/env_var.mk
+        to: /io/repo/hail/env_var.mk
+      - from: /repo/web_common
+        to: /io/repo/web_common
     dependsOn:
       - default_ns
       - ci_utils_image
@@ -3056,6 +3213,49 @@ steps:
       - deploy_ci_agent
       - create_certs
       - hail_buildkit_image
+  - kind: runImage
+    name: test_system_permissions
+    resources:
+      memory: standard
+      cpu: '0.25'
+    image:
+      valueFrom: auth_image.image
+    script: |
+      set -ex
+      export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
+      export HAIL_DEPLOY_CONFIG_FILE=/deploy-config/deploy-config.json
+      export GOOGLE_APPLICATION_CREDENTIALS=/test-dev-gsa-key/key.json
+
+      hail-pip-install -r /io/dev-requirements.txt
+
+      python3 -m pytest \
+              --log-cli-level=INFO -s -r A -vv --instafail \
+              --durations=50 --timeout=600 \
+              /io/test/test_system_permissions.py
+    inputs:
+      - from: /repo/auth/test
+        to: /io/test
+      - from: /repo/hail/python/dev/pinned-requirements.txt
+        to: /io/dev-requirements.txt
+    timeout: 900
+    secrets:
+      - name: test-tokens
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /user-tokens
+      - name: test-dev-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-dev-gsa-key
+    dependsOn:
+      - create_deploy_config
+      - create_accounts
+      - default_ns
+      - deploy_auth
+      - deploy_batch
+      - deploy_ci
+      - deploy_monitoring
+      - auth_image
   - kind: runImage
     name: test_ci_unit
     resources:
@@ -3192,7 +3392,7 @@ steps:
       - create_accounts
       - default_ns
       - hail_dev_image
-      - hail_debug_wheel
+      - build_hail_debug_jar_and_wheel
       - deploy_batch
   - kind: runImage
     name: test_hailctl_batch
@@ -3288,6 +3488,35 @@ steps:
       - default_ns
       - merge_code
       - deploy_batch
+  - kind: runImage
+    name: test_hailctl_unit
+    resources:
+      memory: standard
+      cpu: '0.25'
+    image:
+      valueFrom: hail_dev_image.image
+    script: |
+      set -ex
+      cd /io/repo
+      python3 -m pytest \
+              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              --timeout=120 \
+              hail/python/test/hailtop/hailctl/batch/test_jobs_unit.py
+    inputs:
+      - from: /repo/hail/python
+        to: /io/repo/hail/python
+    scopes:
+      - test
+      - dev
+    dependsOn:
+      - merge_code
+      - hail_dev_image
   - kind: runImage
     name: test_batch_docs
     image:
@@ -3445,203 +3674,6 @@ steps:
     clouds:
       - gcp
   - kind: runImage
-    name: release
-    image:
-      valueFrom: ci_utils_image.image
-    script: |
-      set -ex
-      cd /io
-
-      gcloud auth activate-service-account --key-file=/ci-deploy-0-1--hail-is-hail/ci-deploy-0-1--hail-is-hail.json
-
-      gcloud auth -q configure-docker {{ global.docker_prefix.split('/')[0] }}
-      cat /docker-hub-hailgenetics/password | skopeo login --username hailgenetics --password-stdin docker.io
-
-      cp /pypi-credentials/pypirc $HOME/.pypirc
-      printf 'Authorization: token ' > github-oauth
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >>github-oauth
-      printf '#!/bin/bash\necho ' > git-askpass
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >>git-askpass
-      chmod 755 git-askpass
-      export GIT_ASKPASS=/io/git-askpass
-
-      cd /io/repo/hail
-      export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
-
-      if git ls-remote --exit-code --tags origin $HAIL_PIP_VERSION
-      then
-          echo "tag $HAIL_PIP_VERSION already exists"
-          echo '0' > /io/release-hail-flag
-          exit 0
-      fi
-
-      # #14452 - must build wheel with release `hailtop/hailctl/deploy.yaml`
-      # use `-o` to prevent `mill` from rebuilding the "SHADOW_JAR"
-      make upload-artifacts HAIL_BUILD_MODE=Release DEPLOY_REMOTE=origin \
-        -o out/hail/2.12/assembly.dest/out.jar
-
-      echo Setting arguments and invoking release.sh.
-
-      HAIL_VERSION=$(cat env/HAIL_VERSION) \
-      WHEEL="build/deploy/dist/hail-${HAIL_PIP_VERSION}-py3-none-any.whl" \
-      GIT_VERSION=$(cat env/REVISION) \
-      REMOTE=origin \
-      GITHUB_OAUTH_HEADER_FILE=/io/github-oauth \
-      HAIL_GENETICS_HAIL_IMAGE=docker://{{ hailgenetics_hail_image.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_10=docker://{{ hailgenetics_hail_image_python_3_10.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_11=docker://{{ hailgenetics_hail_image.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_12=docker://{{ hailgenetics_hail_image_python_3_12.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_13=docker://{{ hailgenetics_hail_image_python_3_13.image }} \
-      HAIL_GENETICS_HAILTOP_IMAGE=docker://{{ hailgenetics_hailtop_image.image }} \
-      HAIL_GENETICS_VEP_GRCH37_85_IMAGE=docker://{{ hailgenetics_vep_grch37_85_image.image }} \
-      HAIL_GENETICS_VEP_GRCH38_95_IMAGE=docker://{{ hailgenetics_vep_grch38_95_image.image }} \
-      WEBSITE_TAR=/io/www.tar.gz \
-      bash scripts/release.sh
-
-      echo '1' > /io/release-hail-flag
-    inputs:
-      - from: /repo
-        to: /io/repo
-      - from: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
-        to: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
-      - from: /www.tar.gz
-        to: /io/www.tar.gz
-    outputs:
-      - from: /io/release-hail-flag
-        to: /release-hail-flag
-    secrets:
-      - name: pypi-credentials
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /pypi-credentials
-      - name: ci-deploy-0-1--hail-is-hail
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /ci-deploy-0-1--hail-is-hail
-      - name: docker-hub-hailgenetics
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /docker-hub-hailgenetics
-      - name: hail-ci-0-1-github-oauth-token
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /hail-ci-0-1-github-oauth-token
-    scopes:
-      - deploy
-      - dev
-    dependsOn:
-      - default_ns
-      - ci_utils_image
-      - merge_code
-      - hailgenetics_hail_image
-      - hailgenetics_hail_image_python_3_10
-      - hailgenetics_hail_image_python_3_12
-      - hailgenetics_hail_image_python_3_13
-      - hailgenetics_hailtop_image
-      - hailgenetics_vep_grch37_85_image
-      - hailgenetics_vep_grch38_95_image
-      - build_hail_jar_and_wheel
-      - test_hail_java
-      - test_hail_python
-      - test_hailtop_python
-      - test_hail_python_local_backend
-      - test_hail_python_service_backend_gcp
-      - test_hail_scala_fs
-      - test_hail_services_java
-      - test_hail_spark_conf_requester_pays_parsing
-      - test_dataproc-37
-      - test_dataproc-38
-      - make_docs
-    clouds:
-      - gcp
-  - kind: runImage
-    name: deploy_wheel
-    image:
-      valueFrom: ci_utils_image.image
-    script: |
-      set -ex
-      gcloud auth activate-service-account --key-file=/gsa-key/key.json
-      HAIL_WHEEL_FILE=hail-$(cat /io/repo/hail/env/HAIL_PIP_VERSION)-py3-none-any.whl
-      gcloud storage cp "/io/wheel/$HAIL_WHEEL_FILE" "gs://cpg-hail-ci/wheels/$HAIL_WHEEL_FILE"
-    inputs:
-      - from: /repo
-        to: /io/repo
-      - from: /derived/release/hail/build/deploy/dist
-        to: /io/wheel
-    scopes:
-      - deploy
-      - dev
-    dependsOn:
-      - default_ns
-      - ci_utils_image
-      - build_hail_jar_and_wheel
-    clouds:
-      - gcp
-  - kind: runImage
-    name: deploy_hailgenetics_image
-    image:
-      valueFrom: ci_utils_image.image
-    script: |
-      set -ex
-      gcloud auth -q configure-docker australia-southeast1-docker.pkg.dev
-      skopeo copy docker://{{ hailgenetics_hail_image.image }} docker://australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hail:$(cat /io/repo/hail/env/HAIL_PIP_VERSION)
-      skopeo copy docker://{{ hailgenetics_hailtop_image.image }} docker://australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hailtop:$(cat /io/repo/hail/env/HAIL_PIP_VERSION)
-    inputs:
-      - from: /repo
-        to: /io/repo
-    scopes:
-      - deploy
-      - dev
-    dependsOn:
-      - default_ns
-      - ci_utils_image
-      - hailgenetics_hail_image
-      - hailgenetics_hailtop_image
-    clouds:
-      - gcp
-  - kind: runImage
-    name: make_terra_prs
-    image:
-      valueFrom: ci_utils_image.image
-    dependsOn:
-      - default_ns
-      - ci_utils_image
-      - release
-    inputs:
-      - from: /release-hail-flag
-        to: /io/release-hail-flag
-      - from: /repo
-        to: /io/repo
-    secrets:
-      - name: hail-ci-0-1-github-oauth-token
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /hail-ci-0-1-github-oauth-token
-    clouds:
-      - gcp
-    scopes:
-      - deploy
-      - dev
-    script: |
-      set -ex
-      if [[ $(< /io/release-hail-flag) != '1' ]]
-      then
-          echo 'Skipping making terra update prs (no new release published)'
-          exit 0
-      fi
-
-      printf 'Authorization: token ' > github-oauth
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/github-oauth
-      printf '#!/bin/bash\necho ' > git-askpass
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/git-askpass
-      chmod 755 /io/git-askpass
-      export GIT_ASKPASS=/io/git-askpass
-
-      cd /io/repo/hail
-      export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
-      export GITHUB_OAUTH_HEADER_FILE=/io/github-oauth
-      bash scripts/make-terra-prs.sh
-  - kind: runImage
     name: mirror_hailgenetics_images
     image: quay.io/skopeo/stable:v1.13.2
     script: |
@@ -3755,11 +3787,9 @@ steps:
     resources:
       memory: standard
       cpu: '2'
+      storage: 6Gi
     script: |
       set -ex
-      cd /io
-      mkdir -p src/test
-      tar xzf resources.tar.gz -C src/test
 
       export HAIL_CLOUD={{ global.cloud }}
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
@@ -3767,12 +3797,18 @@ steps:
       export HAIL_FS_TEST_CLOUD_RESOURCES_URI={{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/test/resources/fs
       export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}
 
+      cd /io/repo/hail
+
+      tar -C /io -xzf /io/mill-cache.tgz
+
+      export HAIL_BUILD_MODE='CI'
+      export NO_COLOR=1
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      export SCALA_VERSION=2.12
       set +e
-      java -Xms7500M -Xmx7500M \
-           -cp hail-test.jar:$SPARK_HOME/jars/* \
-           org.testng.TestNG \
-           -listener is.hail.LogTestListener \
-           testng-fs.xml
+      sh mill --no-daemon -j2 hail[].test.test-fs
       exit_code=$?
       set -e
       if [[ $exit_code -eq 2 ]]
@@ -3783,12 +3819,14 @@ steps:
           exit $exit_code
       fi
     inputs:
-      - from: /resources.tar.gz
-        to: /io/resources.tar.gz
-      - from: /derived/debug/hail/out/hail/2.12/test/assembly.dest/out.jar
-        to: /io/hail-test.jar
-      - from: /repo/hail/testng-fs.xml
-        to: /io/testng-fs.xml
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
+      - from: /derived/debug/hail/out
+        to: /io/repo/hail/out
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
     secrets:
       - name: test-gsa-key
         namespace:
@@ -3800,9 +3838,10 @@ steps:
       - create_certs
       - create_accounts
       - hail_run_image
-      - build_debug_hail_test_jar
+      - build_debug_hail_test
       - build_hail_test_artifacts
       - upload_test_resources_to_blob_storage
+      - download_mill_and_maven_deps
   - kind: runImage
     name: test_hail_services_java
     image:
@@ -3810,27 +3849,33 @@ steps:
     resources:
       memory: standard
       cpu: '2'
+      storage: 6Gi
     script: |
       set -ex
 
       export HAIL_CLOUD={{ global.cloud }}
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
 
-      cd /io
-      mkdir -p src/test
-      tar xzf resources.tar.gz -C src/test
-      java -Xms7500M -Xmx7500M \
-           -cp hail-test.jar:$SPARK_HOME/jars/* \
-           org.testng.TestNG \
-           -listener is.hail.LogTestListener \
-           testng-services.xml
+      cd /io/repo/hail
+
+      tar -C /io -xzf /io/mill-cache.tgz
+
+      export HAIL_BUILD_MODE='CI'
+      export NO_COLOR=1
+      export COURSIER_CACHE='/io/cache/coursier/v1'
+      export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
+      export MILL_DOWNLOAD_PATH=/io/cache/mill
+      export SCALA_VERSION=2.12
+      sh mill --no-daemon -j2 hail[].test.test-services
     inputs:
-      - from: /resources.tar.gz
-        to: /io/resources.tar.gz
-      - from: /derived/debug/hail/out/hail/2.12/test/assembly.dest/out.jar
-        to: /io/hail-test.jar
-      - from: /repo/hail/testng-services.xml
-        to: /io/testng-services.xml
+      - from: /repo/hail
+        to: /io/repo/hail
+      - from: /repo/.git
+        to: /io/repo/.git
+      - from: /derived/debug/hail/out
+        to: /io/repo/hail/out
+      - from: /mill-cache.tgz
+        to: /io/mill-cache.tgz
     secrets:
       - name: test-gsa-key
         namespace:
@@ -3842,10 +3887,163 @@ steps:
       - create_certs
       - create_accounts
       - hail_run_image
-      - build_debug_hail_test_jar
+      - build_debug_hail_test
       - build_hail_test_artifacts
       - upload_query_jar
       - deploy_batch
+      - download_mill_and_maven_deps
+  - kind: runImage
+    name: release
+    image:
+      valueFrom: ci_utils_image.image
+    script: |
+      set -ex
+      cd /io
+
+      gcloud auth activate-service-account --key-file=/ci-deploy-0-1--hail-is-hail/ci-deploy-0-1--hail-is-hail.json
+
+      gcloud auth -q configure-docker {{ global.docker_prefix.split('/')[0] }}
+      cat /docker-hub-hailgenetics/password | skopeo login --username hailgenetics --password-stdin docker.io
+
+      cp /pypi-credentials/pypirc $HOME/.pypirc
+      printf 'Authorization: token ' > github-oauth
+      cat /hail-ci-0-1-github-oauth-token/oauth-token >>github-oauth
+      printf '#!/bin/bash\necho ' > git-askpass
+      cat /hail-ci-0-1-github-oauth-token/oauth-token >>git-askpass
+      chmod 755 git-askpass
+      export GIT_ASKPASS=/io/git-askpass
+
+      cd /io/repo/hail
+      export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
+
+      if git ls-remote --exit-code --tags origin $HAIL_PIP_VERSION
+      then
+          echo "tag $HAIL_PIP_VERSION already exists"
+          echo '0' > /io/release-hail-flag
+          exit 0
+      fi
+
+      # #14452 - must build wheel with release `hailtop/hailctl/deploy.yaml`
+      # use `-o` to prevent `mill` from rebuilding the "SHADOW_JAR"
+      make upload-artifacts HAIL_BUILD_MODE=Release DEPLOY_REMOTE=origin \
+        -o out/hail/2.12/assembly.dest/out.jar
+
+      echo Setting arguments and invoking release.sh.
+
+      HAIL_VERSION=$(cat env/HAIL_VERSION) \
+      WHEEL="build/deploy/dist/hail-${HAIL_PIP_VERSION}-py3-none-any.whl" \
+      GIT_VERSION=$(cat env/REVISION) \
+      REMOTE=origin \
+      GITHUB_OAUTH_HEADER_FILE=/io/github-oauth \
+      HAIL_GENETICS_HAIL_IMAGE=docker://{{ hailgenetics_hail_image.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_10=docker://{{ hailgenetics_hail_image_python_3_10.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_11=docker://{{ hailgenetics_hail_image.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_12=docker://{{ hailgenetics_hail_image_python_3_12.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_13=docker://{{ hailgenetics_hail_image_python_3_13.image }} \
+      HAIL_GENETICS_HAILTOP_IMAGE=docker://{{ hailgenetics_hailtop_image.image }} \
+      HAIL_GENETICS_VEP_GRCH37_85_IMAGE=docker://{{ hailgenetics_vep_grch37_85_image.image }} \
+      HAIL_GENETICS_VEP_GRCH38_95_IMAGE=docker://{{ hailgenetics_vep_grch38_95_image.image }} \
+      WEBSITE_TAR=/io/www.tar.gz \
+      bash scripts/release.sh
+
+      echo '1' > /io/release-hail-flag
+    inputs:
+      - from: /repo
+        to: /io/repo
+      - from: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
+        to: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
+      - from: /www.tar.gz
+        to: /io/www.tar.gz
+    outputs:
+      - from: /io/release-hail-flag
+        to: /release-hail-flag
+    secrets:
+      - name: pypi-credentials
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /pypi-credentials
+      - name: ci-deploy-0-1--hail-is-hail
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /ci-deploy-0-1--hail-is-hail
+      - name: docker-hub-hailgenetics
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /docker-hub-hailgenetics
+      - name: hail-ci-0-1-github-oauth-token
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /hail-ci-0-1-github-oauth-token
+    scopes:
+      - deploy
+      - dev
+    dependsOn:
+      - default_ns
+      - ci_utils_image
+      - merge_code
+      - hailgenetics_hail_image
+      - hailgenetics_hail_image_python_3_10
+      - hailgenetics_hail_image_python_3_12
+      - hailgenetics_hail_image_python_3_13
+      - hailgenetics_hailtop_image
+      - hailgenetics_vep_grch37_85_image
+      - hailgenetics_vep_grch38_95_image
+      - build_hail_jar_and_wheel
+      - test_hail_java
+      - test_hail_python
+      - test_hailtop_python
+      - test_hail_python_local_backend
+      - test_hail_python_service_backend_gcp
+      - test_hail_scala_fs
+      - test_hail_services_java
+      - test_hail_spark_conf_requester_pays_parsing
+      - test_dataproc-37
+      - test_dataproc-38
+      - make_docs
+    clouds:
+      - gcp
+  - kind: runImage
+    name: make_terra_prs
+    image:
+      valueFrom: ci_utils_image.image
+    dependsOn:
+      - default_ns
+      - ci_utils_image
+      - release
+    inputs:
+      - from: /release-hail-flag
+        to: /io/release-hail-flag
+      - from: /repo
+        to: /io/repo
+    secrets:
+      - name: hail-ci-0-1-github-oauth-token
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /hail-ci-0-1-github-oauth-token
+    clouds:
+      - gcp
+    scopes:
+      - deploy
+      - dev
+    script: |
+      set -ex
+      if [[ $(< /io/release-hail-flag) != '1' ]]
+      then
+          echo 'Skipping making terra update prs (no new release published)'
+          exit 0
+      fi
+
+      printf 'Authorization: token ' > github-oauth
+      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/github-oauth
+      printf '#!/bin/bash\necho ' > git-askpass
+      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/git-askpass
+      chmod 755 /io/git-askpass
+      export GIT_ASKPASS=/io/git-askpass
+
+      cd /io/repo/hail
+      export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
+      export GITHUB_OAUTH_HEADER_FILE=/io/github-oauth
+      bash scripts/make-terra-prs.sh
   - kind: runImage
     name: start_hail_benchmark
     scopes:

@@ -28,7 +28,7 @@ object Pretty {
     elideLiterals: Boolean = true,
     maxLen: Int = -1,
     allowUnboundRefs: Boolean = false,
-    preserveNames: Boolean = false,
+    preserveNames: Boolean = true,
   ): String = {
     val useSSA = ctx != null && ctx.getFlag("use_ssa_logs") != null
     val pretty =
@@ -56,9 +56,11 @@ object Pretty {
     elideLiterals: Boolean = true,
     maxLen: Int = -1,
     allowUnboundRefs: Boolean = false,
+    preserveNames: Boolean = true,
   ): String = {
     val pretty =
-      new Pretty(width, ribbonWidth, elideLiterals, maxLen, allowUnboundRefs, useSSA = true)
+      new Pretty(width, ribbonWidth, elideLiterals, maxLen, allowUnboundRefs, useSSA = true,
+        preserveNames = preserveNames)
     pretty(ir)
   }
 
@@ -639,7 +641,7 @@ class Pretty(
       single(prettyStringLiteral(JsonMethods.compact(writer.toJValue), elide = elideLiterals))
     case ReadValue(_, reader, reqType) =>
       FastSeq(prettyStringLiteral(JsonMethods.compact(reader.toJValue)), reqType.parsableString())
-    case WriteValue(_, _, writer, _) =>
+    case WriteValue(_, _, writer) =>
       single(prettyStringLiteral(JsonMethods.compact(writer.toJValue)))
     case MakeNDArray(_, _, _, errorId) => FastSeq(errorId.toString)
 
@@ -771,7 +773,7 @@ class Pretty(
           if (i == 1) some(MatrixIR.globalName -> "g")
           else None
         case _: MatrixMapRows =>
-          if (i == 1) matrixBlockArgs map { _ :+ (Name("n_rows") -> "n_rows") }
+          if (i == 1) matrixBlockArgs map { _ :+ (Name("n_cols") -> "n_cols") }
           else None
         case NDArrayMap(_, name, _) =>
           if (i == 1) some(name -> "elt")
@@ -908,7 +910,7 @@ class Pretty(
       bindings: Env[String],
       prefix: String,
       origName: Option[Name],
-      scope: Int = Scope.EVAL,
+      scope: Scope = Scope.EVAL,
     ): (Doc, String) = {
       val (pre, body) = pretty(ir, bindings)
       val ident = prefix + uniqueify(getIdentBase(ir), origName)

@@ -675,7 +675,7 @@ class RVD(
 
     val pred: (RVDContext, Long) => Boolean = (ctx: RVDContext, ptr: Long) => {
       val ur = new UnsafeRow(localRowPType, ctx.r, ptr)
-      val key = Row.fromSeq(
+      val key = RowSeq.fromSeq(
         kRowFieldIdx.map(i => ur.get(i))
       )
       intervalsBc.value.contains(key)
@@ -845,10 +845,9 @@ class RVD(
     ctx: ExecuteContext,
     path: String,
     idxRelPath: String,
-    stageLocally: Boolean,
     codecSpec: AbstractTypedCodecSpec,
   ): IndexedSeq[FileWriteMetadata] = {
-    val fileData = crdd.writeRows(ctx, path, idxRelPath, typ, stageLocally, codecSpec)
+    val fileData = crdd.writeRows(ctx, path, idxRelPath, typ, codecSpec)
     val spec = MakeRVDSpec(
       codecSpec,
       fileData.map(_.path),
@@ -1010,8 +1009,8 @@ class RVD(
         val interval = r.getAs[Interval](rightTyp.kFieldIdx(0))
         if (interval != null) {
           val wrappedInterval = interval.copy(
-            start = Row(interval.start),
-            end = Row(interval.end),
+            start = RowSeq(interval.start),
+            end = RowSeq(interval.end),
           )
           val bytes = encoder.regionValueToBytes(ctx.r, ptr)
           partBc.value.queryInterval(wrappedInterval).map(i => ((i, interval), bytes))
@@ -1375,7 +1374,6 @@ object RVD extends Logging {
     rvds: IndexedSeq[RVD],
     paths: IndexedSeq[String],
     bufferSpec: BufferSpec,
-    stageLocally: Boolean,
   ): IndexedSeq[IndexedSeq[FileWriteMetadata]] = {
     val first = rvds.head
     rvds.foreach { rvd =>
@@ -1388,7 +1386,6 @@ object RVD extends Logging {
     }
 
     val sc = SparkBackend.sparkContext
-    val localTmpdir = execCtx.localTmpdir
     val fs = execCtx.fs
 
     val nRVDs = rvds.length
@@ -1428,7 +1425,6 @@ object RVD extends Logging {
         ContextRDD.inCtx { (hcl, ctx) =>
           val fullPath = paths(originIdx)
           val fileData = RichContextRDDRegionValue.writeSplitRegion(
-            localTmpdir,
             fsBc.value,
             fullPath,
             localTyp,
@@ -1437,7 +1433,6 @@ object RVD extends Logging {
             hcl,
             ctx,
             partDigits,
-            stageLocally,
             makeIndexWriter,
             os => makeRowsEnc(os, hcl),
             os => makeEntriesEnc(os, hcl),
@@ -1446,7 +1441,7 @@ object RVD extends Logging {
         }
     }
 
-    val partFilePartitionCounts = execCtx.time {
+    val partFilePartitionCounts = TimedBlock.enter {
       val rdd = new OriginUnionRDD(first.crdd.rdd.sparkContext, rvds.map(_.crdd.rdd), partF)
       new ContextRDD(rdd).collect()
     }
@@ -1458,7 +1453,7 @@ object RVD extends Logging {
 
     val fileData = fileDataByOrigin.map(_.result())
 
-    execCtx.timer.time("writeMetadataInParallel")(
+    TimedBlock.enter("writeMetadataInParallel")(
       fileData.zipWithIndex
         .par
         .foreach { case (partFiles, i) =>

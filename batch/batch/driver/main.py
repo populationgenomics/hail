@@ -28,6 +28,7 @@ from gear import (
     CommonAiohttpAppKeys,
     Database,
     K8sCache,
+    SystemPermission,
     Transaction,
     check_csrf_token,
     get_authenticator,
@@ -47,6 +48,7 @@ from hailtop.hail_logging import AccessLogger
 from hailtop.utils import (
     AsyncWorkerPool,
     Notice,
+    cost_str,
     dump_all_stacktraces,
     flatten,
     periodically_call,
@@ -58,6 +60,7 @@ from web_common import (
     setup_aiohttp_jinja2,
     setup_common_static_routes,
     web_security_headers,
+    web_security_headers_inline_styles,
 )
 
 from ..batch import cancel_job_group_in_db
@@ -206,7 +209,7 @@ async def get_healthcheck(_) -> web.Response:
 
 
 @routes.get('/check_invariants')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_check_invariants(request: web.Request, _) -> web.Response:
     db: Database = request.app['db']
     incremental_result, resource_agg_result = await asyncio.gather(
@@ -303,7 +306,7 @@ async def deactivate_instance(_, instance: Instance) -> web.Response:
 
 
 @routes.post('/instances/{instance_name}/kill')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def kill_instance(request: web.Request, _) -> NoReturn:
     instance_name = request.match_info['instance_name']
 
@@ -448,7 +451,7 @@ async def billing_update(request, instance):
 @routes.get('/')
 @routes.get('')
 @web_security_headers
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_index(request, userdata):
     app = request.app
     db: Database = app['db']
@@ -483,8 +486,8 @@ FROM user_inst_coll_resources;
 
 
 @routes.get('/quotas')
-@web_security_headers
-@auth.authenticated_developers_only()
+@web_security_headers_inline_styles
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_quotas(request, userdata):
     if CLOUD != 'gcp':
         return await render_template('batch-driver', request, userdata, 'quotas.html', {"plot_json": None})
@@ -572,8 +575,15 @@ def validate_int(session, name, value, predicate, description):
     return validate(session, name, i, predicate, description)
 
 
+@routes.get('/helloreact')
+@web_security_headers_inline_styles
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
+async def hello_react(request: web.Request, userdata) -> web.Response:
+    return await render_template('batch-driver', request, userdata, 'hello_react.html', {'use_tailwind': True})
+
+
 @routes.post('/configure-feature-flags')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def configure_feature_flags(request: web.Request, _) -> NoReturn:
     app = request.app
     db: Database = app['db']
@@ -597,7 +607,7 @@ UPDATE feature_flags SET compact_billing_tables = %s, oms_agent = %s, dockerhub_
 
 
 @routes.post('/config-update/pool/{pool}')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def pool_config_update(request: web.Request, _) -> NoReturn:
     app = request.app
     db: Database = app['db']
@@ -805,7 +815,7 @@ async def pool_config_update(request: web.Request, _) -> NoReturn:
 
 
 @routes.post('/config-update/jpim')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def job_private_config_update(request: web.Request, _) -> NoReturn:
     app = request.app
     jpim: JobPrivateInstanceManager = app['driver'].job_private_inst_manager
@@ -884,7 +894,7 @@ async def job_private_config_update(request: web.Request, _) -> NoReturn:
 
 @routes.get('/inst_coll/pool/{pool}')
 @web_security_headers
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_pool(request, userdata):
     app = request.app
     inst_coll_manager: InstanceCollectionManager = app['driver'].inst_coll_manager
@@ -922,7 +932,7 @@ async def get_pool(request, userdata):
 
 @routes.get('/inst_coll/jpim')
 @web_security_headers
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_job_private_inst_manager(request, userdata):
     app = request.app
     jpim: JobPrivateInstanceManager = app['driver'].job_private_inst_manager
@@ -951,7 +961,7 @@ async def get_job_private_inst_manager(request, userdata):
 
 
 @routes.post('/freeze')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def freeze_batch(request: web.Request, _) -> NoReturn:
     app = request.app
     db: Database = app['db']
@@ -973,7 +983,7 @@ UPDATE globals SET frozen = 1;
 
 
 @routes.post('/unfreeze')
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.UPDATE_DEPLOYED_SYSTEM_STATE)
 async def unfreeze_batch(request: web.Request, _) -> NoReturn:
     app = request.app
     db: Database = app['db']
@@ -996,7 +1006,7 @@ UPDATE globals SET frozen = 0;
 
 @routes.get('/user_resources')
 @web_security_headers
-@auth.authenticated_developers_only()
+@auth.authenticated_users_with_permission(SystemPermission.READ_DEPLOYED_SYSTEM_STATE)
 async def get_user_resources(request, userdata):
     app = request.app
     db: Database = app['db']
@@ -1307,6 +1317,10 @@ async def monitor_billing_limits(app):
         limit = record['limit']
         accrued_cost = record['accrued_cost']
         if limit is not None and accrued_cost >= limit:
+            log.warning(
+                f'billing project {record["billing_project"]} has exceeded its limit; '
+                f'accrued={cost_str(accrued_cost)} limit={cost_str(limit)}; cancelling running batches'
+            )
             running_batches = db.execute_and_fetchall(
                 """
 SELECT id
@@ -1316,6 +1330,7 @@ WHERE billing_project = %s AND state = 'running';
                 (record['billing_project'],),
             )
             async for batch in running_batches:
+                log.warning(f'cancelling running batch {batch["id"]}. Project out of money.')
                 await _cancel_job_group(app, batch['id'], ROOT_JOB_GROUP_ID)
 
 

@@ -10,6 +10,7 @@ import is.hail.collection.implicits._
 import is.hail.expr.ir.analyses.PartitionCounts
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.{ExecuteRelational, LoweringPipeline}
+import is.hail.expr.ir.lowering.Optimize.Flags.Optimize
 import is.hail.io.BufferSpec
 import is.hail.linalg.BlockMatrix
 import is.hail.rvd.RVDContext
@@ -20,6 +21,7 @@ import is.hail.types.virtual._
 import is.hail.utils._
 
 import scala.collection.compat._
+import scala.util.control.ControlThrowable
 
 import org.apache.spark.sql.Row
 
@@ -28,9 +30,7 @@ object Interpret extends Logging {
 
   def apply(tir: TableIR, ctx: ExecuteContext): TableValue = {
     val lowered =
-      LoweringPipeline.legacyRelationalLowerer(ctx, tir).asInstanceOf[TableIR].noSharing(
-        ctx
-      )
+      LoweringPipeline.legacyRelationalLowerer(ctx, tir).asInstanceOf[TableIR]
     ExecuteRelational(ctx, lowered).asTableValue(ctx)
   }
 
@@ -39,11 +39,8 @@ object Interpret extends Logging {
     ExecuteRelational(ctx, lowered).asTableValue(ctx)
   }
 
-  def apply(bmir: BlockMatrixIR, ctx: ExecuteContext): BlockMatrix = {
-    val lowered =
-      LoweringPipeline.legacyRelationalLowerer(ctx, bmir).asInstanceOf[BlockMatrixIR]
-    lowered.execute(ctx)
-  }
+  def apply(bmir: BlockMatrixIR, ctx: ExecuteContext): BlockMatrix =
+    LoweringPipeline.legacyRelationalLowerer(ctx, bmir).asInstanceOf[BlockMatrixIR].execute(ctx)
 
   def apply[T](ctx: ExecuteContext, ir: IR): T =
     apply[T](ctx, ir, Env.empty[(Any, Type)], FastSeq[(Any, Type)]())
@@ -64,7 +61,7 @@ object Interpret extends Logging {
   }
 
   def alreadyLowered(ctx: ExecuteContext, ir: IR): Any =
-    ctx.local(flags = ctx.flags - Optimize.Flags.Optimize) { ctx =>
+    ctx.local(flags = ctx.flags - Optimize) { ctx =>
       run(ctx, ir, Env.empty, FastSeq(), Memo.empty)
     }
 
@@ -379,7 +376,7 @@ object Interpret extends Logging {
             case s: Set[_] =>
               ArraySeq.sorted(s.asInstanceOf[Set[Any]])(implicitly, ordering)
             case d: Map[_, _] =>
-              ArraySeq.sorted[Any](d.iterator.map { case (k, v) => Row(k, v) })(
+              ArraySeq.sorted[Any](d.iterator.map { case (k, v) => RowSeq(k, v) })(
                 implicitly,
                 ordering,
               )
@@ -772,15 +769,34 @@ object Interpret extends Logging {
           }
         }
         ()
+      case TailLoop(name, params, _, body) =>
+        val names = params.map(_._1)
+
+        var vals: IndexedSeq[Any] =
+          params.map(p => interpret(p._2, env, args))
+
+        def go: Any =
+          while (true)
+            try return interpret(body, env.bindIterable(names.zip(vals)), args)
+            catch {
+              case LoopCtrl(`name`, params) =>
+                vals = params
+            }
+
+        go
+
+      case Recur(name, exprs, _) =>
+        throw LoopCtrl(name, exprs.map(e => interpret(e, env, args)))
+
       case MakeStruct(fields) =>
-        Row.fromSeq(fields.map { case (_, fieldIR) => interpret(fieldIR, env, args) })
+        RowSeq.fromSeq(fields.map { case (_, fieldIR) => interpret(fieldIR, env, args) })
       case SelectFields(old, fields) =>
         val oldt = tcoerce[TStruct](old.typ)
         val oldRow = interpret(old, env, args).asInstanceOf[Row]
         if (oldRow == null)
           null
         else
-          Row.fromSeq(fields.map(id => oldRow.get(oldt.fieldIdx(id))))
+          RowSeq.fromSeq(fields.map(id => oldRow.get(oldt.fieldIdx(id))))
       case InsertFields(old, fields, fieldOrder) =>
         var struct = interpret(old, env, args)
         if (struct != null)
@@ -789,7 +805,7 @@ object Interpret extends Logging {
               val m = fields.toMap
               val oldIndices =
                 old.typ.asInstanceOf[TStruct].fields.map(f => f.name -> f.index).toMap
-              Row.fromSeq(fds.map(name =>
+              RowSeq.fromSeq(fds.map(name =>
                 m.get(name).map(interpret(_, env, args)).getOrElse(
                   struct.asInstanceOf[Row].get(oldIndices(name))
                 )
@@ -816,7 +832,7 @@ object Interpret extends Logging {
           oValue.asInstanceOf[Row].get(fieldIndex)
         }
       case MakeTuple(types) =>
-        Row.fromSeq(types.map { case (_, x) => interpret(x, env, args) })
+        RowSeq.fromSeq(types.map { case (_, x) => interpret(x, env, args) })
       case GetTupleElement(o, idx) =>
         val oValue = interpret(o, env, args)
         if (oValue == null)
@@ -912,7 +928,7 @@ object Interpret extends Logging {
         ExecuteRelational(ctx, child).asTableValue(ctx).globals.safeJavaValue
       case TableCollect(child) =>
         val tv = ExecuteRelational(ctx, child).asTableValue(ctx)
-        Row(tv.rvd.collect(ctx), tv.globals.safeJavaValue)
+        RowSeq(tv.rvd.collect(ctx), tv.globals.safeJavaValue)
       case TableMultiWrite(children, writer) =>
         val tvs = children.map(child => ExecuteRelational(ctx, child).asTableValue(ctx))
         writer(ctx, tvs)
@@ -1097,4 +1113,6 @@ object Interpret extends Logging {
         uuid4()
     }
   }
+
+  final private case class LoopCtrl(name: Name, args: IndexedSeq[Any]) extends ControlThrowable
 }

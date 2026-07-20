@@ -470,6 +470,15 @@ class InvalidImageRepository(Exception):
     pass
 
 
+class DockerInspectError(Exception):
+    def __init__(self, image_ref: str, batch_id: Optional[int], job_id: Optional[int]):
+        super().__init__(
+            f'docker inspect failed for {image_ref} (batch_id={batch_id}, job_id={job_id}); '
+            f'possible causes: insufficient storage (private VMs need at least 3-6x the compressed image size to unpack layers), '
+            f'architecture mismatch (image built for a different CPU arch), or corrupt download'
+        )
+
+
 class Image:
     @staticmethod
     async def _pull_with_auth_refresh(
@@ -485,11 +494,15 @@ class Image:
         credentials: Optional[Dict[str, str]],
         client_session: httpx.ClientSession,
         pool: concurrent.futures.ThreadPoolExecutor,
+        batch_id: Optional[int] = None,
+        job_id: Optional[int] = None,
     ):
         self.image_name = name
         self.credentials = credentials
         self.client_session = client_session
         self.pool = pool
+        self.batch_id = batch_id
+        self.job_id = job_id
 
         image_ref = parse_docker_image_reference(name)
         if image_ref.tag is None and image_ref.digest is None:
@@ -552,15 +565,23 @@ class Image:
             except DockerError as e:
                 if e.status == 404 and 'pull access denied' in e.message:
                     raise ImageCannotBePulled from e
-                if e.status == 500 and (
+                if e.status == 404 and 'not found' in e.message:
+                    raise ImageNotFound from e
+                if e.status in (403, 500) and (
                     (
                         'artifactregistry.repositories.downloadArtifacts' in e.message
-                        and 'denied on resource' in e.message
+                        # quoted resource path means the repo itself is invalid/inaccessible
+                        and 'denied on resource "' in e.message
                     )
                     or 'Caller does not have permission' in e.message
                     or 'unauthorized' in e.message
                 ):
                     raise ImageCannotBePulled from e
+                # newer Docker/GAR returns 403 with no explicit resource path when image doesn't exist
+                if e.status == 403 and (
+                    'artifactregistry.repositories.downloadArtifacts' in e.message and 'may not exist' in e.message
+                ):
+                    raise ImageNotFound from e
                 if e.status == 500 and 'denied: retrieving permissions failed' in e.message:
                     if n_pull_attempts <= 2:
                         await docker_call_retry(
@@ -586,10 +607,18 @@ class Image:
         try:
             image_config, _ = await check_exec_output('docker', 'inspect', self.image_ref_str)
         except:
-            # inspect non-deterministically fails sometimes
-            await asyncio.sleep(1)
-            await pull()
-            image_config, _ = await check_exec_output('docker', 'inspect', self.image_ref_str)
+            # inspect non-deterministically fails sometimes; backoff up to ~60s total
+            last_inspect_error: Exception = RuntimeError('unreachable')
+            for delay in (1, 2, 4, 8, 15, 30):
+                await asyncio.sleep(delay)
+                await pull()
+                try:
+                    image_config, _ = await check_exec_output('docker', 'inspect', self.image_ref_str)
+                    break
+                except Exception as inspect_error:
+                    last_inspect_error = inspect_error
+            else:
+                raise DockerInspectError(self.image_ref_str, self.batch_id, self.job_id) from last_inspect_error
         image_configs[self.image_ref_str] = json.loads(image_config)[0]
 
     async def _ensure_image_is_pulled(
@@ -745,7 +774,7 @@ def user_error(e):
         # bucket name and your credentials.\n')
         if b'Bad credentials for bucket' in e.stderr:
             return True
-    if isinstance(e, (ImageNotFound, ImageCannotBePulled, InvalidImageRepository)):
+    if isinstance(e, (ImageNotFound, ImageCannotBePulled, InvalidImageRepository, DockerInspectError)):
         return True
     if isinstance(e, (ContainerTimeoutError, ContainerDeletedError)):
         return True
@@ -854,6 +883,8 @@ class Container:
                 self.short_error = 'image cannot be pulled'
             elif isinstance(e, InvalidImageRepository):
                 self.short_error = 'image repository is invalid'
+            elif isinstance(e, DockerInspectError):
+                self.short_error = 'docker inspect failed'
 
             self.state = 'error'
             self.error = traceback.format_exc()
@@ -1133,7 +1164,7 @@ class Container:
 
         uid, gid = await self._get_in_container_user()
         weight = worker_fraction_in_1024ths(self.cpu_in_mcpu)
-        workdir = self.image.image_config['Config']['WorkingDir']
+        workdir = self.image.image_config['Config'].get('WorkingDir', '')
         default_docker_capabilities = [
             'CAP_CHOWN',
             'CAP_DAC_OVERRIDE',
@@ -1246,7 +1277,7 @@ class Container:
 
     async def _get_in_container_user(self) -> Tuple[int, int]:
         assert self.image.image_config
-        user = self.image.image_config['Config']['User']
+        user = self.image.image_config['Config'].get('User', '')
         if not user:
             return 0, 0
         if ":" in user:
@@ -1268,7 +1299,7 @@ class Container:
         assert self.netns
         # Only supports empty volumes
         external_volumes: List[MountSpecification] = []
-        volumes = self.image.image_config['Config']['Volumes']
+        volumes = self.image.image_config['Config'].get('Volumes')
         if volumes:
             for v_container_path in volumes:
                 if v_container_path.startswith('/'):
@@ -1366,7 +1397,7 @@ class Container:
         assert self.image.image_config
         assert CLOUD_WORKER_API
         env = (
-            (self.image.image_config['Config']['Env'] or [])
+            (self.image.image_config['Config'].get('Env') or [])
             + CLOUD_WORKER_API.cloud_specific_env_vars_for_user_jobs
             + self.env  # User-defined env variables should take precedence
         )
@@ -1859,7 +1890,14 @@ class DockerJob(Job):
             task_manager=self.task_manager,
             fs=self.worker.fs,
             name=self.container_name('main'),
-            image=Image(job_spec['process']['image'], self.credentials, client_session, pool),
+            image=Image(
+                job_spec['process']['image'],
+                self.credentials,
+                client_session,
+                pool,
+                batch_id=self.batch_id,
+                job_id=self.job_id,
+            ),
             scratch_dir=f'{self.scratch}/main',
             command=job_spec['process']['command'],
             cpu_in_mcpu=self.cpu_in_mcpu,

@@ -58,7 +58,7 @@ pylint-hailtop:
 
 .PHONY: check-hail
 check-hail: check-hail-fast pylint-hailtop
-	cd hail && HAIL_BUILD_MODE=Dev SCALA_VERSION=2.13 $(MILL) $(MILLOPTS) hail[].__.checkFormat + hail[].__.fix --check
+	cd hail && HAIL_BUILD_MODE=CI SCALA_VERSION=2.13 $(MILL) $(MILLOPTS) hail.__.checkFormat + hail.__.fix --check
 
 .PHONY: check-batch
 check-batch: check-batch-fast pylint-batch
@@ -108,10 +108,30 @@ install-dev-requirements:
 		-r batch/pinned-requirements.txt \
 		-r ci/pinned-requirements.txt
 
+.PHONY: update-hail-ubuntu
+update-hail-ubuntu:
+	@command -v skopeo >/dev/null 2>&1 || { echo 'ERROR: skopeo is required. Install with: brew install skopeo'; exit 1; }
+	python3 update-hail-ubuntu.py
+	NAMESPACE=default $(MAKE) -C docker/third-party copy
+
+.PHONY: update-gateways-envoy
+update-gateways-envoy:
+	python3 update-envoy.py
+	$(MAKE) -C gateway deploy
+	$(MAKE) -C internal-gateway deploy
+	kubectl rollout status deployment gateway-deployment
+	kubectl rollout status deployment internal-gateway
+	kubectl get deployment gateway-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'
+	kubectl get deployment internal-gateway -o jsonpath='{.spec.template.spec.containers[0].image}'
+	@echo ''
+	@echo 'If traffic to hail.is services seems degraded, roll back with:'
+	@echo '  kubectl rollout undo deployment gateway-deployment && kubectl rollout undo deployment internal-gateway'
+
 .PHONY: generate-pip-lockfiles
 generate-pip-lockfiles:
 	./generate-pip-lockfile.sh hail/python/hailtop
 	./generate-pip-lockfile.sh hail/python
+	uv pip compile --python-version 3.10 --python-platform linux --upgrade hail/python/requirements.txt --output-file=hail/python/pinned-requirements-py310.txt
 	./generate-pip-lockfile.sh hail/python/dev
 	./generate-pip-lockfile.sh gear
 	./generate-pip-lockfile.sh web_common
@@ -181,14 +201,39 @@ hail-buildkit-image: ci/buildkit/Dockerfile
 	./docker-build.sh ci buildkit/Dockerfile $(IMAGE_NAME) --build-arg DOCKER_PREFIX=$(DOCKER_PREFIX)
 	echo $(IMAGE_NAME) > $@
 
-services/ui/dist/ci/flaky_tests.js: $(shell git ls-files services/ui)
-	cd services/ui && npm ci && npm run build
+services/ui/dist/.built: services/ui/node_modules/.package-lock.json $(shell git ls-files services/ui)
+	cd services/ui && npm run build
+	touch $@
 
-ci/ci/static/compiled-js/flaky_tests.js: services/ui/dist/ci/flaky_tests.js
-	mkdir -p ci/ci/static/compiled-js
+ci/ci/static/compiled-js/flaky_tests.js: services/ui/dist/.built
+	mkdir -p $(@D)
 	cp services/ui/dist/ci/flaky_tests.js $@
 
 ci-image: ci/ci/static/compiled-js/flaky_tests.js
+
+batch/batch/front_end/static/compiled-js/job.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/batch/job.js $@
+
+batch-image: batch/batch/front_end/static/compiled-js/job.js
+
+batch/batch/driver/static/compiled-js/index.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/batch_driver/index.js $@
+
+batch-image: batch/batch/driver/static/compiled-js/index.js
+
+monitoring/monitoring/static/compiled-js/index.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/monitoring/index.js $@
+
+monitoring-image: monitoring/monitoring/static/compiled-js/index.js
+
+auth/auth/static/compiled-js/index.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/auth/index.js $@
+
+auth-image: auth/auth/static/compiled-js/index.js
 
 batch/jvm-entryway/out/assembly.dest/out.jar: $(shell git ls-files batch/jvm-entryway)
 	cd batch/jvm-entryway && $(MILL) $(MILLOPTS) assembly
@@ -253,17 +298,16 @@ endif
 tailwind-compile-watch:
 	cd web_common && npx tailwindcss --watch -i input.css -o web_common/static/css/output.css
 
-ifeq ($(SERVICE),ci)
-run-dev-proxy: ci/ci/static/compiled-js/flaky_tests.js
-tailwind-compile-watch: ci/ci/static/compiled-js/flaky_tests.js
-DEVSERVER_TARGETS = tailwind-compile-watch run-dev-proxy ui-js-watch
-else
-DEVSERVER_TARGETS = tailwind-compile-watch run-dev-proxy
-endif
+run-dev-proxy: ci/ci/static/compiled-js/flaky_tests.js \
+    batch/batch/front_end/static/compiled-js/job.js \
+    batch/batch/driver/static/compiled-js/index.js \
+    monitoring/monitoring/static/compiled-js/index.js \
+    auth/auth/static/compiled-js/index.js
+DEVSERVER_TARGETS = tailwind-compile-watch run-dev-proxy ui-js-watch ui-js-watch-batch ui-js-watch-batch-driver ui-js-watch-monitoring ui-js-watch-auth
 
 .PHONY: run-dev-proxy
 run-dev-proxy:
-	SERVICE=$(SERVICE) adev runserver --root . --static web_common/web_common/static devbin/dev_proxy.py
+	adev runserver --root . --static web_common/web_common/static devbin/dev_proxy.py
 
 services/ui/node_modules/.package-lock.json: services/ui/package.json services/ui/package-lock.json
 	npm ci --prefix services/ui
@@ -272,6 +316,22 @@ services/ui/node_modules/.package-lock.json: services/ui/package.json services/u
 ui-js-watch: services/ui/node_modules/.package-lock.json
 	cd services/ui && npx esbuild src/ci/flaky_tests.tsx --bundle --jsx=automatic --format=esm --outfile=../../ci/ci/static/compiled-js/flaky_tests.js --minify --watch=forever
 
+.PHONY: ui-js-watch-batch
+ui-js-watch-batch: services/ui/node_modules/.package-lock.json
+	cd services/ui && npx esbuild src/batch/job.tsx --bundle --jsx=automatic --format=esm --outfile=../../batch/batch/front_end/static/compiled-js/job.js --minify --watch=forever
+
+.PHONY: ui-js-watch-batch-driver
+ui-js-watch-batch-driver: services/ui/node_modules/.package-lock.json
+	cd services/ui && npx esbuild src/batch_driver/index.tsx --bundle --jsx=automatic --format=esm --outfile=../../batch/batch/driver/static/compiled-js/index.js --minify --watch=forever
+
+.PHONY: ui-js-watch-monitoring
+ui-js-watch-monitoring: services/ui/node_modules/.package-lock.json
+	cd services/ui && npx esbuild src/monitoring/index.tsx --bundle --jsx=automatic --format=esm --outfile=../../monitoring/monitoring/static/compiled-js/index.js --minify --watch=forever
+
+.PHONY: ui-js-watch-auth
+ui-js-watch-auth: services/ui/node_modules/.package-lock.json
+	cd services/ui && npx esbuild src/auth/index.tsx --bundle --jsx=automatic --format=esm --outfile=../../auth/auth/static/compiled-js/index.js --minify --watch=forever
+
 .PHONY: check-devserver-deps
 check-devserver-deps:
 	@if ! command -v adev > /dev/null 2>&1; then \
@@ -279,10 +339,9 @@ check-devserver-deps:
 		echo 'fix: run "make install-dev-requirements" (and/or "source .venv/bin/activate" if using a venv)' >&2; \
 		exit 1; \
 	fi
-	@SERVICE=$(SERVICE) python3 -c "\
-import importlib.metadata as m, sys, os; \
-svc = os.environ.get('SERVICE', ''); \
-pkgs = ['gear', 'web_common'] + ([svc] if svc else []); \
+	@python3 -c "\
+import importlib.metadata as m, sys; \
+pkgs = ['gear', 'web_common', 'batch', 'ci', 'monitoring', 'auth']; \
 installed = {d.name for d in m.distributions()}; \
 missing = [p for p in pkgs if p not in installed]; \
 (print('error: missing packages: ' + ', '.join(missing), file=sys.stderr), \
@@ -291,7 +350,7 @@ missing = [p for p in pkgs if p not in installed]; \
 
 .PHONY: devserver
 devserver: check-devserver-deps
-	$(MAKE) -j 3 $(DEVSERVER_TARGETS)
+	$(MAKE) -j 7 $(DEVSERVER_TARGETS)
 
 .PHONY: benchmark
 benchmark: hail-dev-image

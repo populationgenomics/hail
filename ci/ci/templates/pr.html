@@ -20,6 +20,8 @@
   <thead>
     <tr>
       <th>id</th>
+      <th>reason</th>
+      <th>started</th>
       <th>state</th>
     </tr>
   </thead>
@@ -29,6 +31,8 @@
       <td class="numeric-cell">
         <a rel="noopener" href="{{ batch_base_url }}/batches/{{ batch['id'] }}">{{ batch['id'] }}</a>
       </td>
+      <td>{{ batch.get('attributes', {}).get('reason', '') }}</td>
+      <td>{{ batch.get('time_created', '') }}</td>
       <td>
         {% if 'state' in batch and batch['state'] %}
         {{ batch_state_icon(batch['state']) }} {{ batch['state'] }}
@@ -144,7 +148,7 @@
       {% endfor %}
       <div>labels: {{ pr.labels|join(", ") }}</div>
     </div>
-    {% if active_pr %}
+    {% if userdata['system_permissions']['manage_ci'] %}
     <form action="{{ base_path }}/watched_branches/{{ wb.index }}/pr/{{ pr.number }}/retry" method="post">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}"/>
       <button type="submit">Retry</button>

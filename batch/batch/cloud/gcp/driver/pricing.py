@@ -179,6 +179,8 @@ def instance_family_from_sku(sku: dict) -> Optional[str]:
     category = sku['category']
     if category['resourceGroup'] == 'N1Standard':
         return 'n1'
+    if sku['description'].startswith("N2 Instance") or sku['description'].startswith("Spot Preemptible N2 Instance"):
+        return 'n2'
     if sku['description'].startswith("G2 Instance") or sku['description'].startswith("Spot Preemptible G2 Instance"):
         return 'g2'
     if sku['description'].startswith("A2 Instance") or sku['description'].startswith("Spot Preemptible A2 Instance"):
@@ -283,7 +285,7 @@ def process_accelerator_sku(sku: dict, regions: List[str]) -> List[GCPAccelerato
 def process_memory_sku(sku: dict, regions: List[str]) -> List[GCPMemoryPrice]:
     category = sku['category']
     assert category['resourceFamily'] == 'Compute', sku
-    assert 'Ram' in sku['description']
+    assert 'Ram' in sku['description'] or 'Memory' in sku['description']
 
     instance_family = instance_family_from_sku(sku)
     preemptible = preemptible_from_sku(sku)
@@ -378,6 +380,13 @@ async def fetch_prices(
             # therefore, it is safe to skip adding prices for reserved resources.
             continue
 
+        if 'DWS' in sku['description']:
+            # DWS (Dynamic Workload Scheduler) is another example of the same problem as reserved
+            # resources. The hail product names are the same but the SKUs are different. Since we
+            # also don't use DWS, we can skip DWS SKUs too to avoid bringing in the wrong resources
+            # and prices.
+            continue
+
         if 'GPU' in category['resourceGroup']:
             for accelerator_price in process_accelerator_sku(sku, regions):
                 yield accelerator_price
@@ -385,7 +394,7 @@ async def fetch_prices(
             if 'Core' in sku['description']:
                 for compute_price in process_compute_sku(sku, regions):
                     yield compute_price
-            elif 'Ram' in sku['description']:
+            elif 'Ram' in sku['description'] or 'Memory' in sku['description']:
                 for memory_price in process_memory_sku(sku, regions):
                     yield memory_price
         elif category['resourceFamily'] == 'Storage':

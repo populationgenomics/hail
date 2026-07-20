@@ -1,3 +1,4 @@
+//| mill-version: 1.0.6
 //| mill-jvm-version: 17
 package build
 
@@ -16,7 +17,7 @@ import org.typelevel.scalacoptions.*
 object Settings:
   val hailMajorMinorVersion = "0.2"
   val hailPatchVersion = "138"
-  val scalaMinorVersions = Map("2.12" -> "2.12.20", "2.12.13" -> "2.12.13", "2.13" -> "2.13.13")
+  val scalaMinorVersions = Map("2.12" -> "2.12.18", "2.13" -> "2.13.16")
 
 
 object Env extends Module:
@@ -27,7 +28,8 @@ object Env extends Module:
 
 
 trait HailJavaModule extends JavaModule:
-  override def jvmId = "11"
+  override def jvmId: T[String] =
+    "11"
 
   override def javacOptions: T[Seq[String]] = {
     val `java-1.8` =
