@@ -31,6 +31,7 @@ from gear import (
     monitor_endpoints_middleware,
     setup_aiohttp_session,
     transaction,
+    version_response,
 )
 from gear.auth import AIOHTTPHandler, get_session_id
 from gear.cloud_config import get_global_config
@@ -606,10 +607,30 @@ async def rest_login(request: web.Request) -> web.Response:
     })
 
 
+@routes.get('/api/v1alpha/version')
+@auth.maybe_authenticated_user
+async def get_version(_, userdata: Optional[UserData]) -> web.Response:
+    return version_response(userdata)
+
+
 @routes.get('/api/v1alpha/oauth2-client')
 async def hailctl_oauth_client(request):  # pylint: disable=unused-argument
     idp = IdentityProvider.GOOGLE if CLOUD == 'gcp' else IdentityProvider.MICROSOFT
     return json_response({'idp': idp.value, 'oauth2_client': request.app[AppKeys.HAILCTL_CLIENT_CONFIG]})
+
+
+@routes.get('/api/v1alpha/support')
+async def get_support(request):  # pylint: disable=unused-argument
+    try:
+        global_config = get_global_config()
+        support_email = global_config.get('support_email', '')
+    except (FileNotFoundError, OSError):
+        support_email = ''
+    return json_response({
+        'cloud': CLOUD,
+        'inactive_user_timeout_days': INACTIVE_USER_TIMEOUT_DAYS,
+        'support_email': support_email,
+    })
 
 
 @routes.get('/roles')
@@ -1155,20 +1176,18 @@ async def patch_system_roles_for_user(request: web.Request, _) -> web.Response:
 
     # Verify user exists - and get a user record - from either ID or unique username:
     if isinstance(user_id, int):
-        user = await db.select_and_fetchone(
-            "SELECT id, username FROM users WHERE id = %s AND state = 'active'", (user_id,)
-        )
+        user = await db.select_and_fetchone("SELECT id, username, state FROM users WHERE id = %s", (user_id,))
     else:
-        user = await db.select_and_fetchone(
-            "SELECT id, username FROM users WHERE username = %s AND state = 'active'", (user_id,)
-        )
+        user = await db.select_and_fetchone("SELECT id, username, state FROM users WHERE username = %s", (user_id,))
 
     if not user:
-        raise web.HTTPNotFound(text='User not found or not active')
+        raise web.HTTPNotFound(text='User not found')
 
     @transaction(db)
     async def modify_roles(tx):
         if 'role_addition' in body:
+            if user['state'] != 'active':
+                raise web.HTTPBadRequest(text=f'Cannot add roles to user {user["username"]} with state {user["state"]}')
             role_name = body['role_addition']
 
             # Check if user already has this role
@@ -1385,6 +1404,8 @@ def run():
     setup_aiohttp_session(app)
 
     setup_common_static_routes(routes)
+    os.makedirs(f'{AUTH_ROOT}/static/compiled-js', exist_ok=True)
+    routes.static('/auth/static/compiled-js', f'{AUTH_ROOT}/static/compiled-js')
     app.add_routes(routes)
     app.router.add_get("/metrics", server_stats)
 
