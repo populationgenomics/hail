@@ -569,6 +569,7 @@ async def api_patch_pool(request: web.Request, userdata: UserData) -> web.Respon
         'worker_max_idle_time_secs',
         'standing_worker_max_idle_time_secs',
         'job_queue_scheduling_window_secs',
+        'label',
     }
     unknown = set(body) - writable
     if unknown:
@@ -597,6 +598,7 @@ async def api_patch_pool(request: web.Request, userdata: UserData) -> web.Respon
         worker_max_idle_time_secs=merged['worker_max_idle_time_secs'],
         standing_worker_max_idle_time_secs=merged['standing_worker_max_idle_time_secs'],
         job_queue_scheduling_window_secs=merged['job_queue_scheduling_window_secs'],
+        label=merged['label'],
     )
     await proposed.update_database(request.app['db'])
     pool.configure(proposed)
