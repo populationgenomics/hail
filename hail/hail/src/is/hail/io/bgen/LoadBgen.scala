@@ -1,6 +1,6 @@
 package is.hail.io.bgen
 
-import is.hail.annotations.Region
+import is.hail.annotations.{Region, RowSeq}
 import is.hail.asm4s._
 import is.hail.asm4s.implicits.valueToRichCodeRegion
 import is.hail.backend.ExecuteContext
@@ -9,11 +9,10 @@ import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits._
 import is.hail.expr.ir.{
   EmitCode, EmitCodeBuilder, EmitMethodBuilder, EmitSettable, EmitValue, IEmitCode, IR,
-  LowerMatrixIR, MatrixHybridReader, MatrixReader, PartitionNativeIntervalReader, TableNativeReader,
-  TableReader,
+  MatrixHybridReader, MatrixReader, PartitionNativeIntervalReader, TableNativeReader, TableReader,
 }
-import is.hail.expr.ir.defs.{Literal, MakeStruct, PartitionReader, ReadPartition, Ref, ToStream}
-import is.hail.expr.ir.lowering.{TableStage, TableStageDependency}
+import is.hail.expr.ir.defs.{Literal, MakeStruct, PartitionReader, ReadPartition, ToStream}
+import is.hail.expr.ir.lowering.{LowerMatrixIR, TableStage, TableStageDependency}
 import is.hail.expr.ir.streams.StreamProducer
 import is.hail.io._
 import is.hail.io.fs.{FS, FileListEntry, SeekableDataInputStream}
@@ -274,9 +273,10 @@ object LoadBgen extends Logging {
     val indexFiles = getIndexFileNames(fs, files, indexFileMap)
 
     val bgenFilesWhichAreMisssingIdx2Files = files.zip(indexFiles).filterNot {
-      case (_, index) => index.endsWith("idx2") && fs.isFile(index + "/index") && fs.isFile(
+      case (_, index) =>
+        index.endsWith("idx2") && (fs.isFile(index) || fs.isFile(index + "/index") && fs.isFile(
           index + "/metadata.json.gz"
-        )
+        ))
     }.map(_._1.getPath)
 
     if (bgenFilesWhichAreMisssingIdx2Files.nonEmpty)
@@ -566,7 +566,7 @@ class MatrixBGENReader(
               arraysToZip += sampleIds.indices.map(_.toLong)
 
             val fields = arraysToZip.result()
-            Literal(ta, sampleIds.indices.map(i => Row.fromSeq(fields.map(_.apply(i)))))
+            Literal(ta, sampleIds.indices.map(i => RowSeq.fromSeq(fields.map(_.apply(i)))))
           },
         )))
       case None => MakeStruct(FastSeq())
@@ -603,7 +603,7 @@ class MatrixBGENReader(
           rangeBounds ++= strictBgenKey.rangeBounds
 
           strictShortKey.partitionBoundsIRRepresentation.value.asInstanceOf[IndexedSeq[_]]
-            .foreach(interval => contexts += Row(fileIdx, interval))
+            .foreach(interval => contexts += RowSeq(fileIdx, interval))
         }
 
         val partitioner =
@@ -620,7 +620,7 @@ class MatrixBGENReader(
           partitioner = partitioner,
           dependency = TableStageDependency.none,
           contexts = ToStream(Literal(TArray(reader.contextType), contexts.result())),
-          (ref: Ref) => ReadPartition(ref, requestedType.rowType, reader),
+          ref => ReadPartition(ref, requestedType.rowType, reader),
         )
 
       case None =>
@@ -643,7 +643,7 @@ class MatrixBGENReader(
             file.intervals.length == file.partN.length && file.intervals.length == file.partStarts.length
           )
           file.intervals.indices.foreach { idxInFile =>
-            contexts += Row(fileIdx, file.partStarts(idxInFile), file.partN(idxInFile), partIdx)
+            contexts += RowSeq(fileIdx, file.partStarts(idxInFile), file.partN(idxInFile), partIdx)
             partIdx += 1
           }
           fileIdx += 1
@@ -654,7 +654,7 @@ class MatrixBGENReader(
           partitioner = partitioner,
           dependency = TableStageDependency.none,
           contexts = ToStream(Literal(TArray(reader.contextType), contexts.result())),
-          (ref: Ref) => ReadPartition(ref, requestedType.rowType, reader),
+          ref => ReadPartition(ref, requestedType.rowType, reader),
         )
     }
   }

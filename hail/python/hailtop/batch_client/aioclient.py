@@ -284,10 +284,12 @@ class Job:
             tries += 1
             await sleep_before_try(tries)
 
-    async def container_log(self, container_name: str) -> bytes:
+    async def container_log(self, container_name: str, attempt_id: Optional[str] = None) -> bytes:
         self._raise_if_not_submitted()
+        params = {'attempt_id': attempt_id} if attempt_id else {}
         async with await self._client._get(
-            f'/api/v1alpha/batches/{self.batch_id}/jobs/{self.job_id}/log/{container_name}'
+            f'/api/v1alpha/batches/{self.batch_id}/jobs/{self.job_id}/log/{container_name}',
+            params=params,
         ) as resp:
             return await resp.read()
 
@@ -433,11 +435,11 @@ class JobGroup:
         q: Optional[str] = None,
         version: Optional[int] = None,
         recursive: bool = False,
+        last_job_id: Optional[int] = None,
     ) -> AsyncIterator[JobListEntryV1Alpha]:
         self._raise_if_not_submitted()
         if version is None:
             version = 1
-        last_job_id = None
         while True:
             params: Dict[str, Any] = {'recursive': str(recursive)}
             if q is not None:
@@ -575,6 +577,13 @@ class BatchAlreadyCreatedError(Exception):
     pass
 
 
+class BatchNotAuthenticatedError(Exception):
+    def __init__(self):
+        super().__init__(
+            "Not authenticated with Hail Batch.\n\nPlease run:\n\n    hailctl auth login\n\nto obtain credentials. If problems persist, try logging in to the web UI to check account status."
+        )
+
+
 class BatchDebugInfo(TypedDict):
     status: Dict[str, Any]
     jobs: List[JobListEntryV1Alpha]
@@ -660,9 +669,14 @@ class Batch:
         self._raise_if_not_created()
         await self._root_job_group.cancel()
 
-    def jobs(self, q: Optional[str] = None, version: Optional[int] = None) -> AsyncIterator[JobListEntryV1Alpha]:
+    def jobs(
+        self,
+        q: Optional[str] = None,
+        version: Optional[int] = None,
+        last_job_id: Optional[int] = None,
+    ) -> AsyncIterator[JobListEntryV1Alpha]:
         self._raise_if_not_created()
-        return self._root_job_group.jobs(q, version, recursive=True)
+        return self._root_job_group.jobs(q, version, recursive=True, last_job_id=last_job_id)
 
     def job_groups(self) -> AsyncIterator[JobGroup]:
         self._raise_if_not_created()
@@ -1317,21 +1331,27 @@ class BatchClient:
             warnings.warn(f"DEPRECATED: {deprecation_message}")
         return response
 
+    async def _request(self, method: str, path: str, **kwargs) -> aiohttp.ClientResponse:
+        try:
+            resp = await getattr(self._session, method)(self.url + path, headers=self._headers, **kwargs)
+        except httpx.ClientResponseError as err:
+            if err.status == 401:
+                # Replace the generic 401 error with our custom BatchNotAuthenticatedError to give better feedback:
+                raise BatchNotAuthenticatedError() from None
+            raise
+        return await self._warn_if_deprecated(resp)
+
     async def _get(self, path, params=None) -> aiohttp.ClientResponse:
-        return await self._warn_if_deprecated(
-            await self._session.get(self.url + path, params=params, headers=self._headers)
-        )
+        return await self._request('get', path, params=params)
 
     async def _post(self, path, data=None, json=None) -> aiohttp.ClientResponse:
-        return await self._warn_if_deprecated(
-            await self._session.post(self.url + path, data=data, json=json, headers=self._headers)
-        )
+        return await self._request('post', path, data=data, json=json)
 
     async def _patch(self, path) -> aiohttp.ClientResponse:
-        return await self._warn_if_deprecated(await self._session.patch(self.url + path, headers=self._headers))
+        return await self._request('patch', path)
 
     async def _delete(self, path) -> aiohttp.ClientResponse:
-        return await self._warn_if_deprecated(await self._session.delete(self.url + path, headers=self._headers))
+        return await self._request('delete', path)
 
     def reset_billing_project(self, billing_project):
         self.billing_project = billing_project

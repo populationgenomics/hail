@@ -6,10 +6,9 @@ import is.hail.asm4s.implicits.{codeToRichCodeRegion, valueToRichCodeRegion}
 import is.hail.backend.{DriverRuntimeContext, ExecuteContext, HailTaskContext}
 import is.hail.collection.{ByteArrayArrayBuilder, FastSeq}
 import is.hail.collection.compat.immutable.ArraySeq
+import is.hail.expr.ir.Emit.{EmitBlockMaxChunkSize, EmitBlockSizeThreshold}
 import is.hail.expr.ir.agg.{AggStateSig, ArrayAggStateSig, GroupedStateSig}
-import is.hail.expr.ir.analyses.{
-  ComputeMethodSplits, ControlFlowPreventsSplit, ParentPointers, SemanticHash,
-}
+import is.hail.expr.ir.analyses.{ComputeMethodSplits, ControlFlowPreventsSplit, SemanticHash}
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.TableStageDependency
 import is.hail.expr.ir.ndarrays.EmitNDArray
@@ -36,10 +35,10 @@ import java.io._
 // class for holding all information computed ahead-of-time that we need in the emitter
 object EmitContext {
   def analyze(ctx: ExecuteContext, ir: IR, pTypeEnv: Env[PType] = Env.empty): EmitContext = {
-    ctx.time {
+    TimedBlock.enter {
       val usesAndDefs = ComputeUsesAndDefs(ir, errorIfFreeVariables = false)
       val requiredness = Requiredness(ir, usesAndDefs, ctx, pTypeEnv)
-      val inLoopCriticalPath = ControlFlowPreventsSplit(ir, ParentPointers(ir), usesAndDefs)
+      val inLoopCriticalPath = ControlFlowPreventsSplit(ir, usesAndDefs)
       val methodSplits = ComputeMethodSplits(ctx, ir, inLoopCriticalPath)
       new EmitContext(
         ctx,
@@ -97,6 +96,10 @@ case class EmitEnv(bindings: Env[EmitValue], inputValues: IndexedSeq[EmitValue])
 }
 
 object Emit {
+
+  private[ir] var EmitBlockSizeThreshold = 4
+  val EmitBlockMaxChunkSize = 16
+
   def apply[C](
     ctx: EmitContext,
     ir: IR,
@@ -105,7 +108,7 @@ object Emit {
     nParams: Int,
     aggs: Option[IndexedSeq[AggStateSig]] = None,
   ): Option[SingleCodeType] =
-    ctx.executeContext.time {
+    TimedBlock.enter {
       TypeCheck(ctx.executeContext, ir)
 
       val mb = fb.apply_method
@@ -2992,21 +2995,12 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
           decoded
         }
 
-      case WriteValue(value, path, writer, stagingFile) =>
+      case WriteValue(value, path, writer) =>
         emitI(path).flatMap(cb) { case pv: SStringValue =>
           emitI(value).map(cb) { v =>
-            val s = stagingFile.map(emitI(_).getOrAssert(cb).asString)
-            val os = cb.memoize(mb.createUnbuffered(s.getOrElse(pv).loadString(cb)))
+            val os = cb.memoize(mb.createUnbuffered(pv.loadString(cb)))
             writer.writeValue(cb, v, os)
             cb += os.invoke[Unit]("close")
-            s.foreach { stage =>
-              cb += mb.getFS.invoke[String, String, Boolean, Unit](
-                "copy",
-                stage.loadString(cb),
-                pv.loadString(cb),
-                const(true),
-              )
-            }
             pv
           }
         }
@@ -3458,22 +3452,22 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         val unified = impl.unify(typeArgs, args.map(_.typ), rt)
         assert(unified)
 
-        val emitArgs = args.map(a => EmitCode.fromI(mb)(emitI(a, _)))
-
-        val argSTypes = emitArgs.map(_.st)
-        val retType = impl.computeStrictReturnEmitType(ir.typ, argSTypes)
-        val k = (fn, typeArgs, argSTypes, retType)
-        val meth =
-          methods.get(k) match {
-            case Some(funcMB) =>
-              funcMB
-            case None =>
-              val funcMB = impl.getAsMethod(mb.ecb, retType, typeArgs, argSTypes: _*)
-              methods.update(k, funcMB)
-              funcMB
-          }
         EmitCode.fromI(mb) { cb =>
-          val emitArgs = args.map(a => EmitCode.fromI(cb.emb)(emitI(a, _)))
+          val emitArgs = args.map(a => EmitCode.fromI(mb)(emitI(a, _)))
+
+          val argSTypes = emitArgs.map(_.st)
+          val retType = impl.computeStrictReturnEmitType(ir.typ, argSTypes)
+          val k = (fn, typeArgs, argSTypes, retType)
+          val meth =
+            methods.get(k) match {
+              case Some(funcMB) =>
+                funcMB
+              case None =>
+                val funcMB = impl.getAsMethod(mb.ecb, retType, typeArgs, argSTypes: _*)
+                methods.update(k, funcMB)
+                funcMB
+            }
+
           IEmitCode.multiMapEmitCodes(cb, emitArgs) { codeArgs =>
             cb.invokeSCode(
               meth,
@@ -3586,7 +3580,7 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         EmitStream.produce(this, ir, cb, cb.emb, r, env, container)
       else this.emitI(ir, cb, r, env, container, loopEnv)
 
-    def emitVoid(ir: IR, cb: EmitCodeBuilder, env: EmitEnv, r: Value[Region]): Unit =
+    def emitVoid(cb: EmitCodeBuilder, ir: IR, r: Value[Region], env: EmitEnv): Unit =
       this.emitVoid(cb, ir, r, env, container, loopEnv)
 
     val uses: mutable.Set[Name] =
@@ -3595,16 +3589,22 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         case None => mutable.Set.empty
       }
 
+    @inline def skip(b: Binding): Boolean =
+      IsPure(b.value) && !uses.contains(b.name)
+
+    @inline def cantEmitInSeparateMethod(ir: IR): Boolean =
+      ir.typ.isInstanceOf[TStream] || ctx.inLoopCriticalPath.contains(ir)
+
     /* Emit a sequence of bindings into a code builder. Each is added to the environment of all
      * following bindings. Any bindings which is unused and has no side effects is skipped (this is
      * mostly an optimization, but it is important not to emit unused streams). */
-    def emitChunk(cb: EmitCodeBuilder, bindings: Seq[Binding], env: EmitEnv, r: Value[Region])
+    def emitChunk(cb: EmitCodeBuilder, bindings: Iterable[Binding], env: EmitEnv, r: Value[Region])
       : EmitEnv =
-      bindings.foldLeft(env) { case (newEnv, Binding(name, ir, Scope.EVAL)) =>
+      bindings.foldLeft(env) { case (newEnv, b @ Binding(name, ir, Scope.EVAL)) =>
         if (ir.typ == TVoid) {
-          emitVoid(ir, cb, newEnv, r)
+          emitVoid(cb, ir, r, newEnv)
           newEnv
-        } else if (IsPure(ir) && !uses.contains(name)) {
+        } else if (skip(b)) {
           newEnv
         } else {
           val value = emitI(ir, cb, newEnv, r)
@@ -3639,9 +3639,6 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
         newEnv
       }
 
-      def cantEmitInSeparateMethod(ir: IR): Boolean =
-        ir.typ.isInstanceOf[TStream] || ctx.inLoopCriticalPath.contains(ir)
-
       // end of bindings, emit any pending chunk and return the final environment
       if (pos == let.bindings.length) {
         if (chunkSize > 0)
@@ -3650,35 +3647,34 @@ class Emit[C](val ctx: EmitContext, val cb: EmitClassBuilder[C]) {
           return env
       }
 
-      val Binding(curName, curIR, Scope.EVAL) = let.bindings(pos)
+      val b @ Binding(name, expr, Scope.EVAL) = let.bindings(pos)
 
-      // skip over unused streams
-      if (curIR.typ.isInstanceOf[TStream] && !uses.contains(curName)) {
-        go(env, chunkStart, pos + 1, chunkSize, groupIdx)
-      } else if (chunkSize == 16 || (chunkSize > 0 && cantEmitInSeparateMethod(curIR))) {
-        /* emit the current chunk if it's either max size, or broken by a stream or other control
-         * flow */
+      // skip over unused expressions
+      if (skip(b)) go(env, chunkStart, pos + 1, chunkSize, groupIdx)
+      else if (
+        chunkSize == EmitBlockMaxChunkSize || (chunkSize > 0 && cantEmitInSeparateMethod(expr))
+      ) {
+        // emit the current chunk if
+        // - it's either max size, or
+        // - broken by a stream or other control flow
         val newEnv = emitChunkInSeparateMethod()
         go(newEnv, pos, pos, 0, groupIdx + 1)
-      } else if (curIR.typ.isInstanceOf[TStream]) {
-        // emit a stream, assuming we've already emitted any prior chunk
-        assert(chunkSize == 0) // no pending bindings
-        val value = emitI(curIR, cb, env, r)
-        val memo = cb.memoizeMaybeStreamValue(value, s"let_$curName")
-        val newEnv = env.bind(curName, memo)
+      } else if (cantEmitInSeparateMethod(expr)) {
+        // all previous bindings must have been emitted by the case above
+        assert(chunkSize == 0)
+        val value = emitI(expr, cb, env, r)
+        val memo = cb.memoizeMaybeStreamValue(value, s"let_$name")
+        val newEnv = env.bind(name, memo)
         go(newEnv, pos + 1, pos + 1, 0, groupIdx)
       } else {
-        // add cur binding to pending chunk
+        // add current binding to pending chunk
         go(env, chunkStart, pos + 1, chunkSize + 1, groupIdx)
       }
     }
 
     // don't split into separate methods if the bindings list is small
-    if (let.bindings.size > 4) {
-      go(env, 0, 0, 0, 0)
-    } else {
-      emitChunk(cb, let.bindings, env, r)
-    }
+    if (let.bindings.length > EmitBlockSizeThreshold) go(env, 0, 0, 0, 0)
+    else emitChunk(cb, let.bindings, env, r)
   }
 }
 
