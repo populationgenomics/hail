@@ -4029,6 +4029,28 @@ steps:
     clouds:
       - gcp
   - kind: runImage
+    name: deploy_hailgenetics_image
+    image:
+      valueFrom: ci_utils_image.image
+    script: |
+      set -ex
+      gcloud auth -q configure-docker australia-southeast1-docker.pkg.dev
+      skopeo copy docker://{{ hailgenetics_hail_image.image }} docker://australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hail:$(cat /io/repo/hail/env/HAIL_PIP_VERSION)
+      skopeo copy docker://{{ hailgenetics_hailtop_image.image }} docker://australia-southeast1-docker.pkg.dev/hail-295901/hail/hailgenetics/hailtop:$(cat /io/repo/hail/env/HAIL_PIP_VERSION)
+    inputs:
+      - from: /repo
+        to: /io/repo
+    scopes:
+      - deploy
+      - dev
+    dependsOn:
+      - default_ns
+      - ci_utils_image
+      - hailgenetics_hail_image
+      - hailgenetics_hailtop_image
+    clouds:
+      - gcp
+  - kind: runImage
     name: make_terra_prs
     image:
       valueFrom: ci_utils_image.image
