@@ -4029,6 +4029,29 @@ steps:
     clouds:
       - gcp
   - kind: runImage
+    name: deploy_wheel
+    image:
+      valueFrom: ci_utils_image.image
+    script: |
+      set -ex
+      gcloud auth activate-service-account --key-file=/gsa-key/key.json
+      HAIL_WHEEL_FILE=hail-$(cat /io/repo/hail/env/HAIL_PIP_VERSION)-py3-none-any.whl
+      gcloud storage cp "/io/wheel/$HAIL_WHEEL_FILE" "gs://cpg-hail-ci/wheels/$HAIL_WHEEL_FILE"
+    inputs:
+      - from: /repo
+        to: /io/repo
+      - from: /derived/release/hail/build/deploy/dist
+        to: /io/wheel
+    scopes:
+      - deploy
+      - dev
+    dependsOn:
+      - default_ns
+      - ci_utils_image
+      - build_hail_jar_and_wheel
+    clouds:
+      - gcp
+  - kind: runImage
     name: deploy_hailgenetics_image
     image:
       valueFrom: ci_utils_image.image
