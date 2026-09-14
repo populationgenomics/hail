@@ -26,7 +26,11 @@ steps:
       mkdir -p repo
       cd repo
       {{ code.checkout_script }}
-      make -C hail python-version-info HAIL_BUILD_MODE=Release MILLOPTS=--no-daemon
+      make -C hail python-version-info env/SPARK_VERSION HAIL_BUILD_MODE=Release MILLOPTS=--no-daemon
+      {% if code.get('pip_version') %}
+      _make_pip_version=$(cat hail/env/HAIL_PIP_VERSION)
+      [[ "$_make_pip_version" == "{{ code.get('pip_version') }}" ]] || { echo "HAIL_PIP_VERSION mismatch: CI parsed {{ code.get('pip_version') }} from Makefile but make produced $_make_pip_version"; exit 1; }
+      {% endif %}
     outputs:
       - from: /io/repo/
         to: /repo
@@ -102,46 +106,6 @@ steps:
       - merge_code
       - copy_third_party_images
   - kind: buildImage2
-    name: hail_ubuntu_image_python_3_10
-    dockerFile: /io/repo/docker/hail-ubuntu/Dockerfile
-    contextPath: /io/repo
-    publishAs: hail-ubuntu-python-3-10
-    buildArgs:
-      - name: PYTHON_VERSION
-        value: "3.10"
-    resources:
-      storage: 10Gi
-      cpu: "2"
-      memory: standard
-    inputs:
-      - from: /repo/docker/hail-ubuntu
-        to: /io/repo/docker/hail-ubuntu
-      - from: /repo/gear/pinned-requirements.txt
-        to: /io/repo/gear/pinned-requirements.txt
-    dependsOn:
-      - merge_code
-      - copy_third_party_images
-  - kind: buildImage2
-    name: hail_ubuntu_image_python_3_12
-    dockerFile: /io/repo/docker/hail-ubuntu/Dockerfile
-    contextPath: /io/repo
-    publishAs: hail-ubuntu-python-3-12
-    buildArgs:
-      - name: PYTHON_VERSION
-        value: "3.12"
-    resources:
-      storage: 10Gi
-      cpu: "2"
-      memory: standard
-    inputs:
-      - from: /repo/docker/hail-ubuntu
-        to: /io/repo/docker/hail-ubuntu
-      - from: /repo/gear/pinned-requirements.txt
-        to: /io/repo/gear/pinned-requirements.txt
-    dependsOn:
-      - merge_code
-      - copy_third_party_images
-  - kind: buildImage2
     name: hail_ubuntu_image_python_3_13
     dockerFile: /io/repo/docker/hail-ubuntu/Dockerfile
     contextPath: /io/repo
@@ -151,6 +115,28 @@ steps:
         value: "3.13"
       - name: SKIP_GCLOUD_PROFILER
         value: "true" # Python 3.13 does not support google-cloud-profiler yet
+    resources:
+      storage: 10Gi
+      cpu: "2"
+      memory: standard
+    inputs:
+      - from: /repo/docker/hail-ubuntu
+        to: /io/repo/docker/hail-ubuntu
+      - from: /repo/gear/pinned-requirements.txt
+        to: /io/repo/gear/pinned-requirements.txt
+    dependsOn:
+      - merge_code
+      - copy_third_party_images
+  - kind: buildImage2
+    name: hail_ubuntu_image_python_3_14
+    dockerFile: /io/repo/docker/hail-ubuntu/Dockerfile
+    contextPath: /io/repo
+    publishAs: hail-ubuntu-python-3-14
+    buildArgs:
+      - name: PYTHON_VERSION
+        value: "3.14"
+      - name: SKIP_GCLOUD_PROFILER
+        value: "true"
     resources:
       storage: 10Gi
       cpu: "2"
@@ -716,10 +702,14 @@ steps:
       - build_ui
   - kind: runImage
     name: check_ui
+    scopes:
+      - test
+      - dev
     image: node:24-slim@sha256:d45d78e7929b46875bbd4e29bea672d5bc48186c6c3588306521c815e78352d6
     script: |
       set -ex
       cd /io/repo/services/ui
+      export FORCE_COLOR=1
       npm ci
       npm test
       npm run check
@@ -875,7 +865,7 @@ steps:
       # This was likely from running mill in server mode; mill main exits before
       # the jar has finished being written.
       time retry make shadowJar
-      if [ ! -f out/hail/2.12/assembly.dest/out.jar ]; then
+      if [ ! -f out/hail/assembly.dest/out.jar ]; then
           echo 'no out.jar found after mill assembly returned. going to sleep'
           sleep 5
       fi
@@ -897,8 +887,8 @@ steps:
       - from: /derived/root/hail/out
         to: /io/repo/hail/out
     outputs:
-      - from: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
-        to: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
+      - from: /io/repo/hail/out/hail/assembly.dest/out.jar
+        to: /derived/release/hail/out/hail/assembly.dest/out.jar
       - from: /io/repo/hail/build/deploy/dist
         to: /derived/release/hail/build/deploy/dist
     dependsOn:
@@ -906,14 +896,17 @@ steps:
       - merge_code
       - download_mill_and_maven_deps
   - kind: runImage
-    name: test_install_in_isolation_python3_11
+    name: test_install_in_isolation_python3_12
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: base_image.image
     script: |
       set -ex
       cd /io/
       
-      uv venv --python 3.11 --seed _venv
+      uv venv --python 3.12 --seed _venv
       source _venv/bin/activate
       
       pip install /io/wheel/hail-*-py3-none-any.whl
@@ -956,13 +949,21 @@ steps:
         namespace:
           valueFrom: default_ns.name
         mountPath: /test-dataproc-service-account-key
+    forceIfLabeled:
+      - run-dataproc-tests
+    onlyIfRelease: true
     scopes:
       - deploy
       - dev
+    forceIfLabeled:
+      - run-dataproc-tests
     clouds:
       - gcp
   - kind: runImage
     name: build_hail_debug_jar_and_wheel
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: base_image.image
     resources:
@@ -983,7 +984,7 @@ steps:
 
       # See `build_hail_jar_and_wheel`
       time retry make shadowJar
-      if [ ! -f out/hail/2.12/assembly.dest/out.jar ]; then
+      if [ ! -f out/hail/assembly.dest/out.jar ]; then
           echo 'no out.jar found after mill assembly returned. going to sleep'
           sleep 5
       fi
@@ -1011,6 +1012,9 @@ steps:
       - download_mill_and_maven_deps
   - kind: runImage
     name: build_debug_hail_test
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: base_image.image
     resources:
@@ -1026,8 +1030,7 @@ steps:
       export COURSIER_CACHE='/io/cache/coursier/v1'
       export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
       export MILL_DOWNLOAD_PATH=/io/cache/mill
-      export SCALA_VERSION=2.12
-      time sh mill --no-daemon hail[].test.{compile,testForkGrouping}
+      time sh mill --no-daemon hail.test.{compile,testForkGrouping}
     inputs:
       - from: /repo/hail
         to: /io/repo/hail
@@ -1047,6 +1050,9 @@ steps:
       - download_mill_and_maven_deps
   - kind: runImage
     name: build_hail_test_artifacts
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: base_image.image
     script: |
@@ -1099,6 +1105,7 @@ steps:
 
       cd /io/batch/jvm-entryway
       time retry sh mill --no-daemon --version
+      sh mill --no-daemon palantirformat --check
       sh mill --no-daemon assembly
     inputs:
       - from: /repo/batch
@@ -1139,6 +1146,9 @@ steps:
       - jvm_entryway_jar
   - kind: runImage
     name: upload_test_resources_to_blob_storage
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hailgenetics_hailtop_image.image
     script: |
@@ -1168,6 +1178,9 @@ steps:
       - merge_code
   - kind: runImage
     name: test_hail_java
+    scopes:
+      - test
+      - dev
     numSplits: 5
     image:
       valueFrom: hail_run_image.image
@@ -1181,12 +1194,10 @@ steps:
       tar -C /io -xzf /io/mill-cache.tgz
 
       export HAIL_BUILD_MODE='CI'
-      export NO_COLOR=1
       export COURSIER_CACHE='/io/cache/coursier/v1'
       export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
       export MILL_DOWNLOAD_PATH=/io/cache/mill
-      export SCALA_VERSION=2.12
-      sh mill --no-daemon -j1 hail[].test.testCISplit --split $HAIL_RUN_IMAGE_SPLIT_INDEX --totalSplits 5
+      sh mill --no-daemon -j1 hail.test.test-main --split $HAIL_RUN_IMAGE_SPLIT_INDEX --totalSplits 5
     inputs:
       - from: /repo/hail
         to: /io/repo/hail
@@ -1210,6 +1221,9 @@ steps:
       - download_mill_and_maven_deps
   - kind: runImage
     name: test_hail_python
+    scopes:
+      - test
+      - dev
     numSplits: 22
     image:
       valueFrom: hail_run_image.image
@@ -1240,6 +1254,7 @@ steps:
       export PYSPARK_SUBMIT_ARGS="--driver-memory 6g pyspark-shell"
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -1273,6 +1288,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_hailtop_python_fs
+    scopes:
+      - test
+      - dev
     numSplits: 5
     image:
       valueFrom: hailgenetics_hailtop_image.image
@@ -1293,6 +1311,7 @@ steps:
       export AWS_SHARED_CREDENTIALS_FILE=/test-aws-key/credentials
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -1326,6 +1345,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_hail_python_unchecked_allocator
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -1347,6 +1369,7 @@ steps:
       export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}/{{ token }}
       export PYSPARK_SUBMIT_ARGS="--driver-memory 6g pyspark-shell"
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -1382,6 +1405,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_hail_python_local_backend
+    scopes:
+      - test
+      - dev
     numSplits: 22
     image:
       valueFrom: hail_run_image.image
@@ -1416,6 +1442,7 @@ steps:
       hailctl config set query/backend local
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -1449,6 +1476,9 @@ steps:
       - build_hail_test_artifacts
   - kind: runImage
     name: test_python_docs
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -1472,6 +1502,7 @@ steps:
 
       # NB: do not use --timeout with doctest because there is no way to override it.
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -1568,50 +1599,6 @@ steps:
       - build_hail_jar_and_wheel
       - hail_ubuntu_image
   - kind: buildImage2
-    name: hailgenetics_hail_image_python_3_10
-    dockerFile: /io/repo/docker/hailgenetics/hail/Dockerfile
-    contextPath: /io/repo
-    publishAs: hailgenetics/hail
-    buildArgs:
-      - name: BASE_IMAGE
-        value:
-          valueFrom: hail_ubuntu_image_python_3_10.image
-      - name: HAIL_WHEEL_DIR
-        value: /wheel
-    inputs:
-      - from: /repo/docker/hailgenetics/hail
-        to: /io/repo/docker/hailgenetics/hail
-      - from: /repo/hail/python/pinned-requirements-py310.txt
-        to: /io/repo/hail/python/pinned-requirements.txt
-      - from: /derived/release/hail/build/deploy/dist
-        to: /io/repo/wheel
-    dependsOn:
-      - merge_code
-      - build_hail_jar_and_wheel
-      - hail_ubuntu_image_python_3_10
-  - kind: buildImage2
-    name: hailgenetics_hail_image_python_3_12
-    dockerFile: /io/repo/docker/hailgenetics/hail/Dockerfile
-    contextPath: /io/repo
-    publishAs: hailgenetics/hail
-    buildArgs:
-      - name: BASE_IMAGE
-        value:
-          valueFrom: hail_ubuntu_image_python_3_12.image
-      - name: HAIL_WHEEL_DIR
-        value: /wheel
-    inputs:
-      - from: /repo/docker/hailgenetics/hail
-        to: /io/repo/docker/hailgenetics/hail
-      - from: /repo/hail/python/pinned-requirements.txt
-        to: /io/repo/hail/python/pinned-requirements.txt
-      - from: /derived/release/hail/build/deploy/dist
-        to: /io/repo/wheel
-    dependsOn:
-      - merge_code
-      - build_hail_jar_and_wheel
-      - hail_ubuntu_image_python_3_12
-  - kind: buildImage2
     name: hailgenetics_hail_image_python_3_13
     dockerFile: /io/repo/docker/hailgenetics/hail/Dockerfile
     contextPath: /io/repo
@@ -1633,41 +1620,47 @@ steps:
       - merge_code
       - build_hail_jar_and_wheel
       - hail_ubuntu_image_python_3_13
+  - kind: buildImage2
+    name: hailgenetics_hail_image_python_3_14
+    dockerFile: /io/repo/docker/hailgenetics/hail/Dockerfile
+    contextPath: /io/repo
+    publishAs: hailgenetics/hail
+    buildArgs:
+      - name: BASE_IMAGE
+        value:
+          valueFrom: hail_ubuntu_image_python_3_14.image
+      - name: HAIL_WHEEL_DIR
+        value: /wheel
+    inputs:
+      - from: /repo/docker/hailgenetics/hail
+        to: /io/repo/docker/hailgenetics/hail
+      - from: /repo/hail/python/pinned-requirements.txt
+        to: /io/repo/hail/python/pinned-requirements.txt
+      - from: /derived/release/hail/build/deploy/dist
+        to: /io/repo/wheel
+    dependsOn:
+      - merge_code
+      - build_hail_jar_and_wheel
+      - hail_ubuntu_image_python_3_14
   - kind: runImage
     name: test_hailgenetics_hail_image
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hailgenetics_hail_image.image
-    script: |
-      set -ex
-      python3 -c 'import sys; assert sys.version_info.major == 3 and sys.version_info.minor == 11, sys.version_info'
-      python3 -c 'import hail as hl; hl.balding_nichols_model(3, 100, 100)._force_count_rows()'
-      python3 -c 'import numpy; import pandas; import sklearn; import scipy'
-    dependsOn:
-      - hailgenetics_hail_image
-  - kind: runImage
-    name: test_hailgenetics_hail_image_python_3_10
-    image:
-      valueFrom: hailgenetics_hail_image_python_3_10.image
-    script: |
-      set -ex
-      python3 -c 'import sys; assert sys.version_info.major == 3 and sys.version_info.minor == 10, sys.version_info'
-      python3 -c 'import hail as hl; hl.balding_nichols_model(3, 100, 100)._force_count_rows()'
-      python3 -c 'import numpy; import pandas; import sklearn; import scipy'
-    dependsOn:
-      - hailgenetics_hail_image_python_3_10
-  - kind: runImage
-    name: test_hailgenetics_hail_image_python_3_12
-    image:
-      valueFrom: hailgenetics_hail_image_python_3_12.image
     script: |
       set -ex
       python3 -c 'import sys; assert sys.version_info.major == 3 and sys.version_info.minor == 12, sys.version_info'
       python3 -c 'import hail as hl; hl.balding_nichols_model(3, 100, 100)._force_count_rows()'
       python3 -c 'import numpy; import pandas; import sklearn; import scipy'
     dependsOn:
-      - hailgenetics_hail_image_python_3_12
+      - hailgenetics_hail_image
   - kind: runImage
     name: test_hailgenetics_hail_image_python_3_13
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hailgenetics_hail_image_python_3_13.image
     script: |
@@ -1677,6 +1670,17 @@ steps:
       python3 -c 'import numpy; import pandas; import sklearn; import scipy'
     dependsOn:
       - hailgenetics_hail_image_python_3_13
+  - kind: runImage
+    name: test_hailgenetics_hail_image_python_3_14
+    image:
+      valueFrom: hailgenetics_hail_image_python_3_14.image
+    script: |
+      set -ex
+      python3 -c 'import sys; assert sys.version_info.major == 3 and sys.version_info.minor == 14, sys.version_info'
+      python3 -c 'import hail as hl; hl.balding_nichols_model(3, 100, 100)._force_count_rows()'
+      python3 -c 'import numpy; import pandas; import sklearn; import scipy'
+    dependsOn:
+      - hailgenetics_hail_image_python_3_14
   - kind: buildImage2
     name: hail_dev_image
     dockerFile: /io/repo/docker/Dockerfile.hail-dev
@@ -1697,7 +1701,7 @@ steps:
       inline: |
         ARG BASE_IMAGE={{ hail_ubuntu_image.image }}
         FROM $BASE_IMAGE
-        RUN hail-apt-get-install git make openjdk-11-jre-headless
+        RUN hail-apt-get-install git make openjdk-21-jre-headless
         COPY hail/python/pinned-requirements.txt hail-requirements.txt
         COPY hail/python/dev/pinned-requirements.txt dev-requirements.txt
         COPY gear/pinned-requirements.txt gear-requirements.txt
@@ -1732,6 +1736,9 @@ steps:
       - hail_ubuntu_image
   - kind: runImage
     name: check_pip_requirements
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_linting_image.image
     script: |
@@ -1747,6 +1754,9 @@ steps:
       - merge_code
   - kind: runImage
     name: check_services
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_linting_image.image
     script: |
@@ -1764,6 +1774,9 @@ steps:
       - merge_code
   - kind: runImage
     name: check_hail
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_linting_image.image
     resources:
@@ -2005,6 +2018,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_monitoring
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -2016,6 +2032,7 @@ steps:
       export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -2045,6 +2062,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_auth_copy_paste_login
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -2107,6 +2127,9 @@ steps:
       - hailgenetics_hailtop_image
   - kind: runImage
     name: test_auth_copy_paste_login_timeout
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -2649,7 +2672,7 @@ steps:
       - hailgenetics_hailtop_image
       - deploy_batch
   - kind: runImage
-    name: upload_query_jar
+    name: upload_spark_jars
     image:
       valueFrom: hailgenetics_hailtop_image.image
     script: |
@@ -2657,20 +2680,52 @@ steps:
       export GOOGLE_APPLICATION_CREDENTIALS=/batch-gsa-key/key.json
 
       {% if deploy %}
-      HAIL_QUERY_JAR_URL={{ global.query_storage_uri }}
+      export JAR_PREFIX={{ global.query_storage_uri }}
       {% else %}
-      HAIL_QUERY_JAR_URL={{ global.test_storage_uri }}/{{ default_ns.name }}
+      export JAR_PREFIX={{ global.test_storage_uri }}/{{ default_ns.name }}
       {% endif %}
-      HAIL_QUERY_JAR_URL=${HAIL_QUERY_JAR_URL}/jars/$(cat /io/REVISION).jar
 
-      python3 -m hailtop.aiotools.copy 'null' '[{"from": "/io/hail.jar", "to": "'${HAIL_QUERY_JAR_URL}'"}]'
+      bash /io/upload-spark-jars.sh {{ default_ns.name }} $(cat /io/SPARK_VERSION)
     secrets:
       - name: batch-gsa-key
         namespace:
           valueFrom: default_ns.name
         mountPath: /batch-gsa-key
     inputs:
-      - from: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
+      - from: /repo/hail/scripts/upload-spark-jars.sh
+        to: /io/upload-spark-jars.sh
+      - from: /repo/hail/env/SPARK_VERSION
+        to: /io/SPARK_VERSION
+    dependsOn:
+      - default_ns
+      - merge_code
+      - create_test_gsa_keys
+      - hailgenetics_hailtop_image
+  - kind: runImage
+    name: upload_query_jar
+    image:
+      valueFrom: hailgenetics_hailtop_image.image
+    script: |
+      set -ex
+      export GOOGLE_APPLICATION_CREDENTIALS=/batch-gsa-key/key.json
+      export UPLOAD_RELEASE_JAR=true
+      
+      {% if deploy %}
+      export JAR_PREFIX={{ global.query_storage_uri }}
+      {% else %}
+      export JAR_PREFIX={{ global.test_storage_uri }}/{{ default_ns.name }}
+      {% endif %}
+      
+      bash /io/upload-qob-jar.sh {{ default_ns.name }} $(cat /io/REVISION) /io/hail.jar
+    secrets:
+      - name: batch-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /batch-gsa-key
+    inputs:
+      - from: /repo/hail/scripts/upload-qob-jar.sh
+        to: /io/upload-qob-jar.sh
+      - from: /derived/release/hail/out/hail/assembly.dest/out.jar
         to: /io/hail.jar
       - from: /repo/hail/env/REVISION
         to: /io/REVISION
@@ -2681,9 +2736,13 @@ steps:
       - build_hail_jar_and_wheel
       - merge_code
       - create_test_gsa_keys
+      - upload_spark_jars
   - kind: runImage
     name: test_hail_python_service_backend_gcp
-    numSplits: 16
+    scopes:
+      - test
+      - dev
+    numSplits: 15
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -2714,6 +2773,7 @@ steps:
       export HAIL_BATCH_REMOTE_TMPDIR={{ global.test_storage_uri }}
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -2723,6 +2783,7 @@ steps:
               --durations=50 \
               --ignore=test/hailtop/ \
               --ignore=test/hail/matrixtable/test_file_formats.py \
+              --ignore=test/hail/utils/test_hl_hadoop_and_hail_fs.py \
               -m backend \
               --timeout=600 \
               test
@@ -2754,7 +2815,82 @@ steps:
     clouds:
       - gcp
   - kind: runImage
+    name: test_hail_python_service_backend_gcp_fs
+    scopes:
+      - test
+      - dev
+    image:
+      valueFrom: hail_run_image.image
+    resources:
+      cpu: '0.25'
+      preemptible: False
+    script: |
+      set -ex
+      python3 -m pip install --no-dependencies /io/wheel/hail-*-py3-none-any.whl
+
+      cd /io/repo/hail/python
+
+      export HAIL_CLOUD={{ global.cloud }}
+      export HAIL_DEFAULT_NAMESPACE={{ default_ns.name }}
+      export HAIL_TEST_STORAGE_URI={{ global.test_storage_uri }}/{{ token }}
+      export HAIL_TEST_RESOURCES_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/test/resources/"
+      export HAIL_DOCTEST_DATA_DIR="{{ global.test_storage_uri }}/{{ upload_test_resources_to_blob_storage.token }}/doctest/data/"
+      export HAIL_GENETICS_VEP_GRCH37_85_IMAGE={{ hailgenetics_vep_grch37_85_image.image }}
+      export HAIL_GENETICS_VEP_GRCH38_95_IMAGE={{ hailgenetics_vep_grch38_95_image.image }}
+      export GOOGLE_APPLICATION_CREDENTIALS=/test-gsa-key/key.json
+
+      export GCS_REQUESTER_PAYS_PROJECT=broad-ctsa
+
+      export HAIL_QUERY_BACKEND=batch
+      export HAIL_BATCH_REGIONS={{ global.gcp_region }}
+      export HAIL_BATCH_BILLING_PROJECT=test
+      export HAIL_BATCH_REMOTE_TMPDIR={{ global.test_storage_uri }}
+
+      python3 -m pytest \
+              --color=yes \
+              -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              -m backend \
+              --timeout=600 \
+              test/hail/utils/test_hl_hadoop_and_hail_fs.py
+    timeout: 900
+    inputs:
+      - from: /derived/release/hail/build/deploy/dist
+        to: /io/wheel
+      - from: /repo/hail/python/pytest.ini
+        to: /io/repo/hail/python/pytest.ini
+      - from: /repo/hail/python/test
+        to: /io/repo/hail/python/test
+    secrets:
+      - name: test-gsa-key
+        namespace:
+          valueFrom: default_ns.name
+        mountPath: /test-gsa-key
+    dependsOn:
+      - default_ns
+      - merge_code
+      - deploy_batch
+      - create_deploy_config
+      - create_accounts
+      - hail_run_image
+      - upload_query_jar
+      - upload_spark_jars
+      - upload_test_resources_to_blob_storage
+      - build_hail_jar_and_wheel
+      - hailgenetics_vep_grch37_85_image
+      - hailgenetics_vep_grch38_95_image
+    clouds:
+      - gcp
+  - kind: runImage
     name: test_hail_spark_conf_requester_pays_parsing
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -2767,6 +2903,7 @@ steps:
       export YOU_MAY_OVERWRITE_MY_SPARK_DEFAULTS_CONF_AND_HAILCTL_SETTINGS=1
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -2832,6 +2969,9 @@ steps:
       - hail_ubuntu_image
   - kind: runImage
     name: test_batch
+    scopes:
+      - test
+      - dev
     numSplits: 5
     image:
       valueFrom: batch_image.image
@@ -2864,6 +3004,7 @@ steps:
       hail-pip-install -r /io/dev-requirements.txt
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -2909,6 +3050,9 @@ steps:
       - gpu_image
   - kind: runImage
     name: test_batch_job_private_machines
+    scopes:
+      - test
+      - dev
     numSplits: 1
     image:
       valueFrom: batch_image.image
@@ -2940,6 +3084,7 @@ steps:
       hail-pip-install -r /io/dev-requirements.txt
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -2983,6 +3128,9 @@ steps:
       - hail_ubuntu_image
   - kind: runImage
     name: batch_worker_image_regression_tests
+    scopes:
+      - test
+      - dev
     numSplits: 1
     image:
       valueFrom: batch_image.image
@@ -3004,6 +3152,7 @@ steps:
       hail-pip-install -r /io/dev-requirements.txt
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3040,6 +3189,9 @@ steps:
       - batch_image
   - kind: runImage
     name: test_auth
+    scopes:
+      - test
+      - dev
     numSplits: 1
     image:
       valueFrom: auth_image.image
@@ -3049,6 +3201,7 @@ steps:
       hail-pip-install -r /io/dev-requirements.txt
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3106,6 +3259,7 @@ steps:
       - merge_code
       - batch_image
       - deploy_batch
+    after:
       - test_batch
   - kind: runImage
     name: create_ci_test_repo
@@ -3241,6 +3395,9 @@ steps:
       - hail_buildkit_image
   - kind: runImage
     name: test_system_permissions
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -3255,6 +3412,7 @@ steps:
       hail-pip-install -r /io/dev-requirements.txt
 
       python3 -m pytest \
+              --color=yes \
               --log-cli-level=INFO -s -r A -vv --instafail \
               --durations=50 --timeout=600 \
               /io/test/test_system_permissions.py
@@ -3293,6 +3451,7 @@ steps:
       set -ex
       hail-pip-install -r /io/dev-requirements.txt
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3307,6 +3466,8 @@ steps:
         to: /io/ci
       - from: /repo/hail/python/dev/pinned-requirements.txt
         to: /io/dev-requirements.txt
+      - from: /repo/build.yaml
+        to: /io/build.yaml
     scopes:
       - test
       - dev
@@ -3329,6 +3490,7 @@ steps:
       export NAMESPACE="{{ default_ns.name }}"
       pip install /io/ci
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3360,6 +3522,9 @@ steps:
       - create_ci_test_repo
   - kind: runImage
     name: test_hailtop_python
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -3390,6 +3555,7 @@ steps:
       hailctl config set batch/remote_tmpdir {{ global.test_storage_uri }}/test_hailtop_python/{{ token }}/
 
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3422,6 +3588,9 @@ steps:
       - deploy_batch
   - kind: runImage
     name: test_hailctl_batch
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
@@ -3509,6 +3678,7 @@ steps:
     dependsOn:
       - hailgenetics_hail_image
       - upload_query_jar
+      - upload_spark_jars
       - create_deploy_config
       - create_accounts
       - default_ns
@@ -3525,6 +3695,7 @@ steps:
       set -ex
       cd /io/repo
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3545,6 +3716,9 @@ steps:
       - hail_dev_image
   - kind: runImage
     name: test_batch_docs
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_dev_image.image
     script: |
@@ -3554,6 +3728,7 @@ steps:
       hailctl config set batch/billing_project test
       hailctl config set batch/remote_tmpdir {{ global.test_storage_uri }}/test_batch_docs/{{ token }}/
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -3612,6 +3787,7 @@ steps:
       - default_ns
       - hail_ubuntu_image
       - create_ci_test_repo
+    after:
       - deploy_ci
       - test_ci
   - kind: runImage
@@ -3629,12 +3805,6 @@ steps:
       gcloud config set project hail-vdc
       gcloud config set dataproc/region us-central1
 
-      if git ls-remote --exit-code --tags origin $(cat hail/env/HAIL_PIP_VERSION)
-      then
-          echo "tag $HAIL_PIP_VERSION already exists"
-          exit 0
-      fi
-
       cd hail
       make test-dataproc-37 HAIL_BUILD_MODE=Release \
           -o $(ls build/deploy/dist/hail-*-py3-none-any.whl)
@@ -3642,7 +3812,7 @@ steps:
       - ci_utils_image
       - default_ns
       - build_hail_jar_and_wheel
-      - test_install_in_isolation_python3_11
+      - test_install_in_isolation_python3_12
       - upload_temporary_hailctl_artifacts
     inputs:
       - from: /repo
@@ -3657,6 +3827,9 @@ steps:
     scopes:
       - deploy
       - dev
+    forceIfLabeled:
+      - run-dataproc-tests
+    onlyIfRelease: true
     clouds:
       - gcp
   - kind: runImage
@@ -3674,12 +3847,6 @@ steps:
       gcloud config set project hail-vdc
       gcloud config set dataproc/region us-central1
 
-      if git ls-remote --exit-code --tags origin $(cat hail/env/HAIL_PIP_VERSION)
-      then
-          echo "tag $HAIL_PIP_VERSION already exists"
-          exit 0
-      fi
-
       cd hail
       make test-dataproc-38 HAIL_BUILD_MODE=Release \
           -o $(ls build/deploy/dist/hail-*-py3-none-any.whl)
@@ -3687,7 +3854,7 @@ steps:
       - ci_utils_image
       - default_ns
       - build_hail_jar_and_wheel
-      - test_install_in_isolation_python3_11
+      - test_install_in_isolation_python3_12
       - upload_temporary_hailctl_artifacts
     inputs:
       - from: /repo
@@ -3697,6 +3864,9 @@ steps:
     scopes:
       - deploy
       - dev
+    forceIfLabeled:
+      - run-dataproc-tests
+    onlyIfRelease: true
     clouds:
       - gcp
   - kind: runImage
@@ -3784,6 +3954,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_website
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hailgenetics_hailtop_image.image
     script: |
@@ -3808,6 +3981,9 @@ steps:
       - gcp
   - kind: runImage
     name: test_hail_scala_fs
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -3828,13 +4004,11 @@ steps:
       tar -C /io -xzf /io/mill-cache.tgz
 
       export HAIL_BUILD_MODE='CI'
-      export NO_COLOR=1
       export COURSIER_CACHE='/io/cache/coursier/v1'
       export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
       export MILL_DOWNLOAD_PATH=/io/cache/mill
-      export SCALA_VERSION=2.12
       set +e
-      sh mill --no-daemon -j2 hail[].test.test-fs
+      sh mill --no-daemon -j2 hail.test.test-fs
       exit_code=$?
       set -e
       if [[ $exit_code -eq 2 ]]
@@ -3870,6 +4044,9 @@ steps:
       - download_mill_and_maven_deps
   - kind: runImage
     name: test_hail_services_java
+    scopes:
+      - test
+      - dev
     image:
       valueFrom: hail_run_image.image
     resources:
@@ -3887,12 +4064,10 @@ steps:
       tar -C /io -xzf /io/mill-cache.tgz
 
       export HAIL_BUILD_MODE='CI'
-      export NO_COLOR=1
       export COURSIER_CACHE='/io/cache/coursier/v1'
       export COURSIER_ARCHIVE_CACHE='/io/cache/coursier/arc'
       export MILL_DOWNLOAD_PATH=/io/cache/mill
-      export SCALA_VERSION=2.12
-      sh mill --no-daemon -j2 hail[].test.test-services
+      sh mill --no-daemon -j2 hail.test.test-services
     inputs:
       - from: /repo/hail
         to: /io/repo/hail
@@ -3916,6 +4091,7 @@ steps:
       - build_debug_hail_test
       - build_hail_test_artifacts
       - upload_query_jar
+      - upload_spark_jars
       - deploy_batch
       - download_mill_and_maven_deps
   - kind: runImage
@@ -3942,17 +4118,10 @@ steps:
       cd /io/repo/hail
       export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
 
-      if git ls-remote --exit-code --tags origin $HAIL_PIP_VERSION
-      then
-          echo "tag $HAIL_PIP_VERSION already exists"
-          echo '0' > /io/release-hail-flag
-          exit 0
-      fi
-
       # #14452 - must build wheel with release `hailtop/hailctl/deploy.yaml`
       # use `-o` to prevent `mill` from rebuilding the "SHADOW_JAR"
       make upload-artifacts HAIL_BUILD_MODE=Release DEPLOY_REMOTE=origin \
-        -o out/hail/2.12/assembly.dest/out.jar
+        -o out/hail/assembly.dest/out.jar
 
       echo Setting arguments and invoking release.sh.
 
@@ -3962,27 +4131,21 @@ steps:
       REMOTE=origin \
       GITHUB_OAUTH_HEADER_FILE=/io/github-oauth \
       HAIL_GENETICS_HAIL_IMAGE=docker://{{ hailgenetics_hail_image.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_10=docker://{{ hailgenetics_hail_image_python_3_10.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_11=docker://{{ hailgenetics_hail_image.image }} \
-      HAIL_GENETICS_HAIL_IMAGE_PY_3_12=docker://{{ hailgenetics_hail_image_python_3_12.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_12=docker://{{ hailgenetics_hail_image.image }} \
       HAIL_GENETICS_HAIL_IMAGE_PY_3_13=docker://{{ hailgenetics_hail_image_python_3_13.image }} \
+      HAIL_GENETICS_HAIL_IMAGE_PY_3_14=docker://{{ hailgenetics_hail_image_python_3_14.image }} \
       HAIL_GENETICS_HAILTOP_IMAGE=docker://{{ hailgenetics_hailtop_image.image }} \
       HAIL_GENETICS_VEP_GRCH37_85_IMAGE=docker://{{ hailgenetics_vep_grch37_85_image.image }} \
       HAIL_GENETICS_VEP_GRCH38_95_IMAGE=docker://{{ hailgenetics_vep_grch38_95_image.image }} \
       WEBSITE_TAR=/io/www.tar.gz \
       bash scripts/release.sh
-
-      echo '1' > /io/release-hail-flag
     inputs:
       - from: /repo
         to: /io/repo
-      - from: /derived/release/hail/out/hail/2.12/assembly.dest/out.jar
-        to: /io/repo/hail/out/hail/2.12/assembly.dest/out.jar
+      - from: /derived/release/hail/out/hail/assembly.dest/out.jar
+        to: /io/repo/hail/out/hail/assembly.dest/out.jar
       - from: /www.tar.gz
         to: /io/www.tar.gz
-    outputs:
-      - from: /io/release-hail-flag
-        to: /release-hail-flag
     secrets:
       - name: pypi-credentials
         namespace:
@@ -4000,6 +4163,7 @@ steps:
         namespace:
           valueFrom: default_ns.name
         mountPath: /hail-ci-0-1-github-oauth-token
+    onlyIfRelease: true
     scopes:
       - deploy
       - dev
@@ -4008,9 +4172,8 @@ steps:
       - ci_utils_image
       - merge_code
       - hailgenetics_hail_image
-      - hailgenetics_hail_image_python_3_10
-      - hailgenetics_hail_image_python_3_12
       - hailgenetics_hail_image_python_3_13
+      - hailgenetics_hail_image_python_3_14
       - hailgenetics_hailtop_image
       - hailgenetics_vep_grch37_85_image
       - hailgenetics_vep_grch38_95_image
@@ -4020,11 +4183,12 @@ steps:
       - test_hailtop_python
       - test_hail_python_local_backend
       - test_hail_python_service_backend_gcp
+      - test_hail_python_service_backend_gcp_fs
       - test_hail_scala_fs
       - test_hail_services_java
       - test_hail_spark_conf_requester_pays_parsing
-      - test_dataproc-37
-      - test_dataproc-38
+      # - test_dataproc-37
+      # - test_dataproc-38
       - make_docs
     clouds:
       - gcp
@@ -4074,49 +4238,8 @@ steps:
     clouds:
       - gcp
   - kind: runImage
-    name: make_terra_prs
-    image:
-      valueFrom: ci_utils_image.image
-    dependsOn:
-      - default_ns
-      - ci_utils_image
-      - release
-    inputs:
-      - from: /release-hail-flag
-        to: /io/release-hail-flag
-      - from: /repo
-        to: /io/repo
-    secrets:
-      - name: hail-ci-0-1-github-oauth-token
-        namespace:
-          valueFrom: default_ns.name
-        mountPath: /hail-ci-0-1-github-oauth-token
-    clouds:
-      - gcp
-    scopes:
-      - deploy
-      - dev
-    script: |
-      set -ex
-      if [[ $(< /io/release-hail-flag) != '1' ]]
-      then
-          echo 'Skipping making terra update prs (no new release published)'
-          exit 0
-      fi
-
-      printf 'Authorization: token ' > github-oauth
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/github-oauth
-      printf '#!/bin/bash\necho ' > git-askpass
-      cat /hail-ci-0-1-github-oauth-token/oauth-token >> /io/git-askpass
-      chmod 755 /io/git-askpass
-      export GIT_ASKPASS=/io/git-askpass
-
-      cd /io/repo/hail
-      export HAIL_PIP_VERSION=$(cat env/HAIL_PIP_VERSION)
-      export GITHUB_OAUTH_HEADER_FILE=/io/github-oauth
-      bash scripts/make-terra-prs.sh
-  - kind: runImage
     name: start_hail_benchmark
+    onlyIfRelease: true
     scopes:
       - deploy
       - dev
@@ -4135,17 +4258,8 @@ steps:
         to: /io/repo/hail/env
       - from: /repo/hail/scripts/benchmark_in_batch.py
         to: /io/repo/hail/scripts/benchmark_in_batch.py
-      - from: /release-hail-flag
-        to: /io/release-hail-flag
     script: |
       set -ex
-
-      # only run benchmarks iff we've published a new release
-      if [[ $(< /io/release-hail-flag) != '1' ]]
-      then
-          echo 'Skipping benchmarks (no new release published).'
-          exit 0
-      fi
 
       pushd /io/repo/hail
 
@@ -4202,10 +4316,13 @@ steps:
       - default_ns
       - hailgenetics_hailtop_image
       - deploy_batch
+    after:
       - test_batch
+      - test_batch_job_private_machines
       - test_ci
       - test_hailtop_python
       - test_hail_python_service_backend_gcp
+      - test_hail_python_service_backend_gcp_fs
       - test_hail_services_java
       - test_batch_docs
       - test_hailctl_batch
@@ -4219,6 +4336,7 @@ steps:
       export DOCKER_PREFIX="{{ global.docker_prefix }}"
       export DOCKER_ROOT_IMAGE="{{ global.docker_root_image }}"
       python3 -m pytest \
+              --color=yes \
               -Werror:::hail -Werror:::hailtop -Werror::ResourceWarning \
               --log-cli-level=INFO \
               -s \
@@ -4249,10 +4367,6 @@ steps:
       - merge_code
       - hail_dev_image
       - deploy_batch
-      - test_batch
-      - test_ci
-      - test_hailtop_python
-      - test_hail_python_service_backend_gcp
       - cancel_all_running_test_batches
   - kind: runImage
     name: delete_gcp_batch_instances
@@ -4294,12 +4408,14 @@ steps:
     dependsOn:
       - default_ns
       - ci_utils_image
+      - cancel_all_running_test_batches
+    after:
       - test_batch_invariants
       - test_batch
       - test_ci
       - test_hailtop_python
       - test_hail_python_service_backend_gcp
-      - cancel_all_running_test_batches
+      - test_hail_python_service_backend_gcp_fs
   - kind: runImage
     name: setup_dev_namespace_autoscaledown
     resources:
@@ -4361,6 +4477,9 @@ steps:
       - default_ns
   - kind: runImage
     name: test_gcp_ar_cleanup_policies
+    scopes:
+      - test
+      - dev
     resources:
       memory: standard
       cpu: '0.25'
