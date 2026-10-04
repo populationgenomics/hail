@@ -538,6 +538,7 @@ WHERE job_groups.batch_id = %s AND
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs')
+@cors_allow_hail_services
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch_jobs_v1(request: web.Request, _, batch_id: int) -> web.Response:
@@ -1022,6 +1023,7 @@ async def _query_batches(request, user: str, q: str, version: int, last_batch_id
 
 
 @routes.get('/api/v1alpha/batches')
+@cors_allow_hail_services
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def get_batches_v1(request, userdata):  # pylint: disable=unused-argument
@@ -2408,6 +2410,7 @@ WHERE id = %s AND NOT deleted;
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}')
+@cors_allow_hail_services
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2572,6 +2575,12 @@ async def delete_batch(request: web.Request, _, batch_id: int) -> web.Response:
 async def ui_batch(request, userdata, batch_id):
     app = request.app
     db: Database = app['db']
+
+    # If the user has enabled the React UI, render the React page:
+    if request.cookies.get('hail_react_ui') == '1':
+        page_context = {'batch_id': batch_id}
+        return await render_template('batch', request, userdata, 'batch_react.html', page_context)
+
     batch = await _get_batch(app, batch_id)
 
     q = request.query.get('q', '')
