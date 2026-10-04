@@ -5,7 +5,7 @@ FROM $BASE_IMAGE
 # jdk not strictly necessary, but we want keytool
 ADD https://dl.k8s.io/release/v1.21.14/bin/linux/amd64/kubectl /usr/local/bin/kubectl
 RUN chmod 0755 /usr/local/bin/kubectl && \
-    hail-apt-get-install openssl openjdk-11-jdk-headless && \
+    hail-apt-get-install openssl openjdk-25-jdk-headless && \
     sed -i 's/^RANDFILE/#RANDFILE/' /etc/ssl/openssl.cnf && \
     hail-pip-install pyyaml
 

@@ -3,7 +3,6 @@ package is.hail.expr.ir.lowering
 import is.hail.annotations.RowSeq
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichArray
 import is.hail.expr.ir.{Memoized => M, _}
 import is.hail.expr.ir.Scope.EVAL
@@ -20,7 +19,7 @@ import is.hail.types.physical.{PCanonicalBinary, PCanonicalTuple}
 import is.hail.types.virtual._
 import is.hail.utils._
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 
 import org.apache.spark.sql.Row
 
@@ -1209,7 +1208,16 @@ object LowerTableIR extends Logging {
                     val (parts, rows) = nPartsAndRows(sizes, targetNumRows)((_, take) => take)
                     maketuple(parts, rows)
                   case None =>
-                    nPartsAndRows(loweredChild, contexts, nPartitions, targetNumRows)(minIR(_, _))
+                    // Each partition is read once, so rows past the target
+                    // cannot change the answer and need not be counted.
+                    def countUpToTarget(rows: Atom): IR =
+                      if (targetNumRows <= Int.MaxValue) rows.take(targetNumRows.toInt).len
+                      else rows.len
+
+                    nPartsAndRows(loweredChild, contexts, nPartitions, targetNumRows,
+                      countUpToTarget)(
+                      minIR(_, _)
+                    )
                 }
 
               nPartsToTake <- nPartsAndLastRowCount.get(0)
@@ -1253,7 +1261,7 @@ object LowerTableIR extends Logging {
                     maketuple(n, math.max(0, drop))
 
                   case None =>
-                    nPartsAndRows(loweredChild, reverse, nPartitions, targetNumRows) {
+                    nPartsAndRows(loweredChild, reverse, nPartitions, targetNumRows, _.len) {
                       (takeRight, remainder) => maxIR(0L, takeRight - remainder)
                     }
                 }
@@ -1932,6 +1940,7 @@ object LowerTableIR extends Logging {
     contexts: Atom,
     nPartitions: Atom,
     target: Long,
+    count: Atom => IR,
   )(
     f: (Atom, Atom) => IR
   ): IR = {
@@ -1949,7 +1958,7 @@ object LowerTableIR extends Logging {
                 .mapCollect(
                   "table_head_or_tail_recursive_count",
                   strConcat("iteration=", i, ",nParts=", n),
-                )(_.len)
+                )(count)
 
             n <- counts.len
             p <- m + n

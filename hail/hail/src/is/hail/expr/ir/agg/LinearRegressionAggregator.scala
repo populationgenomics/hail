@@ -3,8 +3,8 @@ package is.hail.expr.ir.agg
 import is.hail.annotations.{Region, RegionValueBuilder, UnsafeRow}
 import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailStateManager}
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{EmitClassBuilder, EmitCode, EmitCodeBuilder, IEmitCode}
+import is.hail.linalg.{DenseMatrix, MatrixSingularException, NotConvergedException}
 import is.hail.types.physical._
 import is.hail.types.physical.stypes.EmitType
 import is.hail.types.physical.stypes.concrete.{
@@ -13,7 +13,9 @@ import is.hail.types.physical.stypes.concrete.{
 import is.hail.types.physical.stypes.interfaces.SIndexableValue
 import is.hail.types.virtual.{TArray, TFloat64, TInt32, Type}
 
-import breeze.linalg.{diag, inv, DenseMatrix, DenseVector}
+import scala.collection.immutable.ArraySeq
+
+import breeze.linalg.DenseVector
 
 class LinearRegressionAggregatorState(val kb: EmitClassBuilder[_])
     extends AbstractTypedRegionBackedAggState(LinearRegressionAggregator.stateType)
@@ -38,7 +40,7 @@ object LinearRegressionAggregator {
     val xty = DenseVector(UnsafeRow.readArray(vector, null, xtyPtr)
       .asInstanceOf[IndexedSeq[Double]].toArray[Double])
     val k = xty.length
-    val xtx = DenseMatrix.create(
+    val xtx = DenseMatrix(
       k,
       k,
       UnsafeRow.readArray(vector, null, xtxPtr)
@@ -51,7 +53,7 @@ object LinearRegressionAggregator {
 
     try {
       val b = xtx \ xty
-      val diagInv = diag(inv(xtx))
+      val diagInv = xtx.inv.diag
 
       val xtx0 = xtx(0 until k0, 0 until k0)
       val xty0 = xty(0 until k0)
@@ -89,8 +91,7 @@ object LinearRegressionAggregator {
       }
       rvb.endArray()
     } catch {
-      case _: breeze.linalg.MatrixSingularException |
-          _: breeze.linalg.NotConvergedException =>
+      case _: MatrixSingularException | _: NotConvergedException =>
         rvb.setMissing()
         rvb.setMissing()
         rvb.setMissing()

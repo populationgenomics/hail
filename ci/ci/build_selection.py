@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set
+from typing import AbstractSet, Dict, List, Optional, Sequence, Set
 
 import yaml
 
@@ -69,22 +69,90 @@ def _expand_to_descendants(
     return result
 
 
+def _ancestors_closure(seeds: Set[str], deps_map: Dict[str, List[str]]) -> Set[str]:
+    """Return seeds plus all steps reachable by following dependsOn backwards."""
+    visited: Set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        visited.add(name)
+        for dep in deps_map.get(name, []):
+            visit(dep)
+
+    for name in seeds:
+        visit(name)
+    return visited
+
+
+def _descendants_closure(seeds: Set[str], ordered_steps: Sequence[Dict]) -> Set[str]:
+    """Return seeds plus any step whose ordering predecessors (dependsOn or after)
+    intersect the selected set.  ordered_steps must be in topological order so that
+    a single linear sweep suffices — no fixed-point loop needed."""
+    selected = set(seeds)
+    for step in ordered_steps:
+        name = step['name']
+        if step.get('runIfRequested') or name in selected:
+            continue
+        predecessors = step.get('dependsOn', []) + step.get('after', [])
+        if any(p in selected for p in predecessors):
+            selected.add(name)
+    return selected
+
+
+def select_steps(
+    seeds: Set[str],
+    ordered_steps: Sequence[Dict],
+    always_run_steps: AbstractSet[str] = frozenset(),
+    follow_forward: bool = True,
+) -> Set[str]:
+    """Return the full set of step names that should run, given a seed set.
+
+    Algorithm:
+      1. Forward pass (only if follow_forward) — expand seeds to include steps
+         whose ordering predecessors (`dependsOn` *or* `after`) are selected.
+         Appropriate when we want "X and everything that might be affected by
+         X".
+      2. Backward pass — for every selected step, pull in the `dependsOn`
+         dependencies. This makes sure we include everything necessary to run
+         the steps we want to run.
+    """
+    run_if_requested = {s['name'] for s in ordered_steps if s.get('runIfRequested')}
+    eligible = [s for s in ordered_steps if not s.get('runIfRequested')]
+    node_names = {s['name'] for s in ordered_steps}
+
+    # build the map of dependencies which are eligible to be included in the backward pass
+    deps_map: Dict[str, List[str]] = {
+        s['name']: [d for d in s.get('dependsOn', []) if d not in run_if_requested and d in node_names]
+        for s in ordered_steps
+    }
+
+    seeded_run_if_requested = seeds & run_if_requested
+    forward_seeds = seeds - run_if_requested
+
+    if follow_forward:
+        with_descendants = _descendants_closure(forward_seeds, eligible)
+    else:
+        with_descendants = set(forward_seeds)
+    with_descendants |= always_run_steps - run_if_requested
+    return _ancestors_closure(with_descendants | seeded_run_if_requested, deps_map)
+
+
 def compute_requested_steps(
     config_str: str,
     changed_files: List[str],
     scope: str,
     cloud: Optional[str] = None,
 ) -> Set[str]:
-    """Select which build steps should be requested, given the changed files in a PR.
+    """Select which build steps are potentially affected by files changed in a PR.
 
-    set((directly affected steps + their descendants) + alwaysRunSteps)
+    Includes directly affected steps AND their descendants, but NOT always-run steps.
     """
     config = yaml.safe_load(config_str)
     repo_prefix: str = config.get('repoPrefix', '/repo')
-    always_run_steps: Set[str] = set(config.get('alwaysRunSteps', []))
 
     if not changed_files:
-        return always_run_steps
+        return set()
 
     steps = [s for s in config.get('steps', []) if _valid_step(s, scope, cloud)]
 
@@ -94,7 +162,4 @@ def compute_requested_steps(
             descendants_map.setdefault(dep, []).append(step['name'])
 
     affected_steps = _find_affected_steps(steps, changed_files, repo_prefix)
-    affected_and_descendants = _expand_to_descendants(affected_steps, descendants_map)
-    requested_steps = affected_and_descendants | always_run_steps
-
-    return requested_steps
+    return _expand_to_descendants(affected_steps, descendants_map)

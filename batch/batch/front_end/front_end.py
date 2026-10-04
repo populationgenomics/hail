@@ -38,6 +38,7 @@ from gear import (
     Transaction,
     UserData,
     check_csrf_token,
+    cors_allow_hail_services,
     get_authenticator,
     json_request,
     json_response,
@@ -58,10 +59,13 @@ from hailtop.auth import hail_credentials
 from hailtop.batch_client.globals import MAX_JOB_GROUPS_DEPTH, ROOT_JOB_GROUP_ID
 from hailtop.batch_client.parse import parse_cpu_in_mcpu, parse_memory_in_bytes, parse_storage_in_bytes
 from hailtop.batch_client.types import (
+    GetBatchTimingResponseV1Alpha,
+    GetJobGraphResponseV1Alpha,
     GetJobGroupResponseV1Alpha,
     GetJobResponseV1Alpha,
     GetJobsResponseV1Alpha,
     JobListEntryV1Alpha,
+    JobOffsetPagination,
 )
 from hailtop.config import get_deploy_config
 from hailtop.hail_logging import AccessLogger
@@ -96,7 +100,7 @@ from ..cloud.resource_utils import (
     memory_to_worker_type,
     valid_machine_types,
 )
-from ..cloud.utils import ACCEPTABLE_QUERY_JAR_URL_PREFIX
+from ..cloud.utils import ACCEPTABLE_QUERY_JAR_URL_PREFIX, SPARK_ARCHIVE_URL_PREFIX
 from ..exceptions import (
     BatchOperationAlreadyCompletedError,
     BatchUserError,
@@ -110,6 +114,7 @@ from ..exceptions import (
 from ..file_store import FileStore
 from ..globals import (
     BATCH_FORMAT_VERSION,
+    DEFAULT_SPARK_VERSION,
     HTTP_CLIENT_MAX_SIZE,
     RESERVED_STORAGE_GB_PER_CORE,
     complete_states,
@@ -533,6 +538,7 @@ WHERE job_groups.batch_id = %s AND
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs')
+@cors_allow_hail_services
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch_jobs_v1(request: web.Request, _, batch_id: int) -> web.Response:
@@ -1017,6 +1023,7 @@ async def _query_batches(request, user: str, q: str, version: int, last_batch_id
 
 
 @routes.get('/api/v1alpha/batches')
+@cors_allow_hail_services
 @auth.authenticated_users_only()
 @add_metadata_to_request
 async def get_batches_v1(request, userdata):  # pylint: disable=unused-argument
@@ -1252,6 +1259,10 @@ WHERE batch_id = %s AND job_group_id = %s;
             query_name='insert_job_group_ancestors',
         )
 
+        # a parent contributes at least its self-row, so zero rows copied
+        # means the parent has not been created
+        if n_rows_inserted == 0:
+            raise web.HTTPBadRequest(reason=f'job group parent {parent_job_group_id} does not exist')
         if n_rows_inserted > MAX_JOB_GROUPS_DEPTH:
             raise web.HTTPBadRequest(reason='job group exceeded the maximum level of nesting')
 
@@ -1289,11 +1300,9 @@ async def _create_job_groups(db: Database, batch_id: int, update_id: int, user: 
 
     @transaction(db)
     async def insert(tx):
-        job_group_ids = [spec['job_group_id'] for spec in job_group_specs]
-        log.info(f'JobGroupOrdering: _create_job_groups {batch_id=} {update_id=} start {job_group_ids=}')
-        record = await tx.execute_and_fetchone(
+        update = await tx.execute_and_fetchone(
             """
-SELECT `state`, format_version, `committed`, start_job_group_id
+SELECT `state`, format_version, `committed`, start_job_group_id, batch_updates.n_job_groups
 FROM batch_updates
 INNER JOIN batches ON batch_updates.batch_id = batches.id
 WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND `user` = %s AND NOT deleted
@@ -1302,31 +1311,44 @@ LOCK IN SHARE MODE;
             (batch_id, update_id, user),
         )
 
-        if not record:
+        if not update:
             raise web.HTTPNotFound()
-        if record['committed']:
+        if update['committed']:
             raise web.HTTPBadRequest(reason=f'update {update_id} is already committed')
 
-        start_job_group_id = record['start_job_group_id']
-        log.info(f'JobGroupOrdering: select1 {batch_id=} {update_id=} -> {start_job_group_id=}')
+        n_allocated_job_groups = update['n_job_groups']
+        first_in_update_job_group_id = job_group_specs[0]['job_group_id']
+        last_in_update_job_group_id = job_group_specs[-1]['job_group_id']
+        if first_in_update_job_group_id < 1 or last_in_update_job_group_id > n_allocated_job_groups:
+            raise web.HTTPBadRequest(
+                reason=f'job group ids [{first_in_update_job_group_id}, {last_in_update_job_group_id}] are out of range '
+                f'[1, {n_allocated_job_groups}] allocated by update {update_id}'
+            )
 
-        last_inserted_job_group_id = await tx.execute_and_fetchone(
+        start_job_group_id = update['start_job_group_id']
+        first_new_job_group_id = start_job_group_id + first_in_update_job_group_id - 1
+        last_new_job_group_id = start_job_group_id + last_in_update_job_group_id - 1
+
+        # specs are validated to have contiguous ids, so a range count equal to
+        # len(job_group_specs) means every spec in this request was inserted
+        n_existing = await tx.execute_and_fetchone(
             """
-SELECT job_group_id
+SELECT COUNT(*) AS n
 FROM job_groups
-WHERE batch_id = %s
-ORDER BY job_group_id DESC
-LIMIT 1
-FOR UPDATE;
+WHERE batch_id = %s AND update_id = %s AND job_group_id BETWEEN %s AND %s;
 """,
-            (batch_id,),
+            (batch_id, update_id, first_new_job_group_id, last_new_job_group_id),
         )
 
-        next_job_group_id = start_job_group_id + job_group_specs[0]['job_group_id'] - 1
-        last_i_j_g_id = last_inserted_job_group_id['job_group_id']
-        log.info(f'JobGroupOrdering: select2 {batch_id=} {update_id=} -> {last_i_j_g_id=} ({next_job_group_id=})')
-        if next_job_group_id != last_inserted_job_group_id['job_group_id'] + 1:
-            raise web.HTTPBadRequest(reason='job group specs were not submitted in order')
+        if n_existing['n'] == len(job_group_specs):
+            # the bunch was already inserted (bunches insert atomically); the
+            # client retried after losing the response
+            return web.Response()
+        if n_existing['n'] != 0:
+            raise web.HTTPBadRequest(
+                reason=f'{n_existing["n"]} of {len(job_group_specs)} job groups '
+                f'in this request already exist in update {update_id}'
+            )
 
         now = time_msecs()
 
@@ -1340,7 +1362,6 @@ FOR UPDATE;
                 parent_job_group_id = start_job_group_id + spec['in_update_parent_id'] - 1
 
             try:
-                log.info(f'JobGroupOrdering: _create_job_group {batch_id=} {update_id=} {job_group_id=}')
                 await _create_job_group(
                     tx,
                     batch_id=batch_id,
@@ -1355,16 +1376,23 @@ FOR UPDATE;
                 )
             except asyncio.CancelledError:
                 raise
+            except (pymysql.err.IntegrityError, pymysql.err.OperationalError, pymysql.err.InternalError):
+                raise
             except Exception as e:
                 raise web.HTTPBadRequest(
                     reason=f'error while inserting job group {spec["job_group_id"]} into batch {batch_id}: {e}'
                 )
 
-        log.info(f'JobGroupOrdering: _create_job_groups {batch_id=} {update_id=} complete')
+        return web.Response()
 
-    await insert()
-
-    return web.Response()
+    try:
+        return await insert()
+    except pymysql.err.IntegrityError as err:
+        if err.args[0] != 1062:  # ER_DUP_ENTRY
+            raise
+        # lost a race with a concurrent retry of this bunch; re-enter to
+        # observe the winner's rows and no-op
+        return await insert()
 
 
 async def _create_jobs(
@@ -1385,7 +1413,7 @@ async def _create_jobs(
 
     record = await db.select_and_fetchone(
         """
-SELECT `state`, format_version, `committed`, start_job_id, start_job_group_id
+SELECT `state`, format_version, `committed`, start_job_id, start_job_group_id, batch_updates.n_jobs
 FROM batch_updates
 INNER JOIN batches ON batch_updates.batch_id = batches.id
 WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s AND NOT deleted;
@@ -1401,6 +1429,15 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
     batch_format_version = BatchFormatVersion(record['format_version'])
     update_start_job_id = int(record['start_job_id'])
     update_start_job_group_id = int(record['start_job_group_id'])
+
+    n_allocated_jobs = int(record['n_jobs'])
+    in_update_job_ids = [spec['job_id'] for spec in job_specs]
+    min_in_update_id, max_in_update_id = min(in_update_job_ids), max(in_update_job_ids)
+    if min_in_update_id < 1 or max_in_update_id > n_allocated_jobs:
+        raise web.HTTPBadRequest(
+            reason=f'job ids [{min_in_update_id}, {max_in_update_id}] are out of range '
+            f'[1, {n_allocated_jobs}] allocated by update {update_id}'
+        )
 
     spec_writer = SpecWriter(file_store, batch_id)
 
@@ -1505,6 +1542,10 @@ WHERE batch_updates.batch_id = %s AND batch_updates.update_id = %s AND user = %s
                 jar_url = spec['process']['jar_spec']['value']
                 if not jar_url.startswith(ACCEPTABLE_QUERY_JAR_URL_PREFIX):
                     raise web.HTTPBadRequest(reason=f'unacceptable JAR url: {jar_url}')
+
+            spark_version = spec['process'].setdefault('spark_version', DEFAULT_SPARK_VERSION)
+            if not await app[AppKeys.SPARK_ARCHIVE_EXISTENCE_CACHE].lookup(spark_version):
+                raise web.HTTPBadRequest(reason=f'no spark jars archive exists for spark version {spark_version}')
 
         req_memory_bytes: Optional[int]
         if machine_type is None:
@@ -2369,6 +2410,7 @@ WHERE id = %s AND NOT deleted;
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}')
+@cors_allow_hail_services
 @billing_project_users_only()
 @add_metadata_to_request
 async def get_batch(request: web.Request, _, batch_id: int) -> web.Response:
@@ -2482,6 +2524,20 @@ WHERE batches.user = %s AND batches.id = %s AND batch_updates.update_id = %s AND
 async def _commit_update(app: web.Application, batch_id: int, update_id: int, user: str, db: Database):
     client_session = app[CommonAiohttpAppKeys.CLIENT_SESSION]
 
+    record = await db.select_and_fetchone(
+        """
+SELECT n_job_groups,
+  (SELECT COUNT(*) FROM job_groups WHERE batch_id = %s AND update_id = %s) AS n_created
+FROM batch_updates
+WHERE batch_id = %s AND update_id = %s;
+""",
+        (batch_id, update_id, batch_id, update_id),
+    )
+    if record and record['n_created'] != record['n_job_groups']:
+        raise web.HTTPBadRequest(
+            reason=f'wrong number of job groups: expected {record["n_job_groups"]}, actual {record["n_created"]}'
+        )
+
     try:
         now = time_msecs()
         await db.check_call_procedure(
@@ -2519,6 +2575,12 @@ async def delete_batch(request: web.Request, _, batch_id: int) -> web.Response:
 async def ui_batch(request, userdata, batch_id):
     app = request.app
     db: Database = app['db']
+
+    # If the user has enabled the React UI, render the React page:
+    if request.cookies.get('hail_react_ui') == '1':
+        page_context = {'batch_id': batch_id}
+        return await render_template('batch', request, userdata, 'batch_react.html', page_context)
+
     batch = await _get_batch(app, batch_id)
 
     q = request.query.get('q', '')
@@ -2730,10 +2792,11 @@ async def _get_attempts(app, batch_id, job_id):
 
     attempts = db.select_and_fetchall(
         """
-SELECT attempts.*
+SELECT attempts.*, instances.location
 FROM jobs
 INNER JOIN batches ON jobs.batch_id = batches.id
 LEFT JOIN attempts ON jobs.batch_id = attempts.batch_id and jobs.job_id = attempts.job_id
+LEFT JOIN instances ON attempts.instance_name = instances.name
 WHERE jobs.batch_id = %s AND NOT deleted AND jobs.job_id = %s;
 """,
         (batch_id, job_id),
@@ -2782,6 +2845,122 @@ async def get_attempts(request: web.Request, _, batch_id: int) -> web.Response:
     job_id = int(request.match_info['job_id'])
     attempts = await _get_attempts(request.app, batch_id, job_id)
     return json_response(attempts)
+
+
+DEFAULT_JOB_OFFSET_PAGE_SIZE = 50
+MAX_JOB_OFFSET_PAGE_SIZE = 1000
+
+
+def _parse_job_offset_pagination_params(request: web.Request) -> Tuple[int, int]:
+    job_offset = cast_query_param_to_int(request.query.get('job_offset'))
+    job_offset = 0 if job_offset is None else job_offset
+    page_size = cast_query_param_to_int(request.query.get('page_size'))
+    page_size = DEFAULT_JOB_OFFSET_PAGE_SIZE if page_size is None else page_size
+    if job_offset < 0:
+        raise web.HTTPBadRequest(reason='job_offset must be >= 0')
+    if not 0 < page_size <= MAX_JOB_OFFSET_PAGE_SIZE:
+        raise web.HTTPBadRequest(reason=f'page_size must be between 1 and {MAX_JOB_OFFSET_PAGE_SIZE}')
+    return job_offset, page_size
+
+
+async def _get_total_jobs(db: Database, batch_id: int) -> int:
+    record = await db.select_and_fetchone('SELECT n_jobs FROM batches WHERE id = %s AND NOT deleted;', (batch_id,))
+    if not record:
+        raise web.HTTPNotFound()
+    return record['n_jobs']
+
+
+def _job_offset_pagination(job_offset: int, page_size: int, total_jobs: int) -> JobOffsetPagination:
+    next_offset = job_offset + page_size
+    return {
+        'current_job_offset': job_offset,
+        'next_page_job_offset': next_offset if next_offset < total_jobs else None,
+        'page_size': page_size,
+        'total_jobs': total_jobs,
+    }
+
+
+async def _get_batch_timing(app, batch_id: int, job_offset: int, page_size: int) -> GetBatchTimingResponseV1Alpha:
+    db: Database = app['db']
+
+    total_jobs = await _get_total_jobs(db, batch_id)
+
+    records = db.select_and_fetchall(
+        """
+SELECT jobs.job_id, attempts.attempt_id, attempts.start_time, attempts.end_time, attempts.reason
+FROM jobs
+INNER JOIN batches ON jobs.batch_id = batches.id
+INNER JOIN batch_updates ON jobs.batch_id = batch_updates.batch_id AND jobs.update_id = batch_updates.update_id
+LEFT JOIN attempts ON jobs.batch_id = attempts.batch_id AND jobs.job_id = attempts.job_id
+WHERE jobs.batch_id = %s AND NOT deleted AND batch_updates.committed AND jobs.job_id > %s AND jobs.job_id <= %s
+ORDER BY jobs.job_id, attempts.attempt_id;
+""",
+        (batch_id, job_offset, job_offset + page_size),
+        query_name='get_batch_timing',
+    )
+
+    jobs_by_id: Dict[int, Any] = {}
+    async for record in records:
+        job = jobs_by_id.setdefault(record['job_id'], {'job_id': record['job_id'], 'attempts': []})
+        if record['attempt_id'] is not None:
+            job['attempts'].append({
+                'attempt_id': record['attempt_id'],
+                'start_time': record['start_time'],
+                'end_time': record['end_time'],
+                'reason': record['reason'],
+            })
+
+    return {
+        'data': list(jobs_by_id.values()),
+        'pagination': _job_offset_pagination(job_offset, page_size, total_jobs),
+    }
+
+
+@routes.get('/api/v1alpha/batches/{batch_id}/timing')
+@billing_project_users_only()
+async def get_batch_timing(request: web.Request, _, batch_id: int) -> web.Response:
+    job_offset, page_size = _parse_job_offset_pagination_params(request)
+    timing = await _get_batch_timing(request.app, batch_id, job_offset, page_size)
+    return json_response(timing)
+
+
+async def _get_job_graph(app, batch_id: int, job_offset: int, page_size: int) -> GetJobGraphResponseV1Alpha:
+    db: Database = app['db']
+
+    total_jobs = await _get_total_jobs(db, batch_id)
+
+    records = db.select_and_fetchall(
+        """
+SELECT jobs.job_id, job_parents.parent_id
+FROM jobs
+INNER JOIN batches ON jobs.batch_id = batches.id
+INNER JOIN batch_updates ON jobs.batch_id = batch_updates.batch_id AND jobs.update_id = batch_updates.update_id
+LEFT JOIN job_parents ON jobs.batch_id = job_parents.batch_id AND jobs.job_id = job_parents.job_id
+WHERE jobs.batch_id = %s AND NOT deleted AND batch_updates.committed AND jobs.job_id > %s AND jobs.job_id <= %s
+ORDER BY jobs.job_id, job_parents.parent_id;
+""",
+        (batch_id, job_offset, job_offset + page_size),
+        query_name='get_job_graph',
+    )
+
+    jobs_by_id: Dict[int, Any] = {}
+    async for record in records:
+        job = jobs_by_id.setdefault(record['job_id'], {'job_id': record['job_id'], 'parent_ids': []})
+        if record['parent_id'] is not None:
+            job['parent_ids'].append(record['parent_id'])
+
+    return {
+        'data': list(jobs_by_id.values()),
+        'pagination': _job_offset_pagination(job_offset, page_size, total_jobs),
+    }
+
+
+@routes.get('/api/v1alpha/batches/{batch_id}/job_graph')
+@billing_project_users_only()
+async def get_job_graph(request: web.Request, _, batch_id: int) -> web.Response:
+    job_offset, page_size = _parse_job_offset_pagination_params(request)
+    job_graph = await _get_job_graph(request.app, batch_id, job_offset, page_size)
+    return json_response(job_graph)
 
 
 @routes.get('/api/v1alpha/batches/{batch_id}/jobs/{job_id}')
@@ -3063,7 +3242,11 @@ async def ui_get_jvm_profile(request: web.Request, _, batch_id: int) -> web.Resp
     profile = await _get_jvm_profile(app, batch_id, job_id)
     if profile is None:
         raise web.HTTPNotFound()
-    return web.Response(text=profile, content_type='text/html')
+    return web.Response(
+        text=profile,
+        content_type='text/html',
+        headers={'Content-Disposition': f'attachment; filename="{batch_id}_{job_id}_jvm_profile.html"'},
+    )
 
 
 @routes.get('/batches/{batch_id}/jobs/{job_id}')
@@ -3165,6 +3348,16 @@ async def ui_get_job(request, userdata, batch_id):
             non_io_storage_limit_bytes = int(non_io_storage_limit_gb * 1024**3 + 1)
             resources['actual_cpu'] = cores
             del resources['cores_mcpu']
+
+        spec_regions = job['spec'].get('regions') if job.get('spec') else None
+        if spec_regions:
+            resources['req_regions'] = ', '.join(spec_regions)
+
+        original_status = job.get('status')
+        if original_status:
+            actual_region = original_status.get('region')
+            if actual_region:
+                resources['actual_region'] = actual_region
 
     # Not all logs will be proper utf-8 but we attempt to show them as
     # str or else Jinja will present them surrounded by b''
@@ -3436,6 +3629,7 @@ async def api_get_billing(request, userdata):
 
 
 @routes.get('/api/v1alpha/billing_breakdown')
+@cors_allow_hail_services
 @auth.authenticated_users_only()
 async def api_get_billing_breakdown(request: web.Request, userdata) -> web.Response:
     db: Database = request.app['db']
@@ -4020,9 +4214,12 @@ class BatchFrontEndAccessLogger(AccessLogger):
 
 class AppKeys(CommonAiohttpAppKeys):
     QOB_JAR_RESOLUTION_CACHE = web.AppKey('qob_jar_resolution_cache', TimeLimitedMaxSizeCache[Tuple[str, str], str])
+    SPARK_ARCHIVE_EXISTENCE_CACHE = web.AppKey('spark_archive_existence_cache', TimeLimitedMaxSizeCache[str, bool])
 
 
 async def on_startup(app):
+    asyncio.get_running_loop().add_signal_handler(signal.SIGUSR1, dump_all_stacktraces)
+
     exit_stack = AsyncExitStack()
     app['exit_stack'] = exit_stack
 
@@ -4106,6 +4303,13 @@ SELECT instance_id, n_tokens, frozen FROM globals;
         resolve_qob_jar_url, int(1e10), 100, AppKeys.QOB_JAR_RESOLUTION_CACHE._name
     )
 
+    async def spark_archive_exists(spark_version: str) -> bool:
+        return await fs.exists(SPARK_ARCHIVE_URL_PREFIX + '/spark-' + spark_version + '.tar.gz')
+
+    app[AppKeys.SPARK_ARCHIVE_EXISTENCE_CACHE] = TimeLimitedMaxSizeCache(
+        spark_archive_exists, int(1e10), 100, AppKeys.SPARK_ARCHIVE_EXISTENCE_CACHE._name
+    )
+
     app['task_manager'].ensure_future(periodically_call(5, _refresh, app))
 
 
@@ -4134,8 +4338,6 @@ def run():
 
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
-
-    asyncio.get_event_loop().add_signal_handler(signal.SIGUSR1, dump_all_stacktraces)
 
     web.run_app(
         deploy_config.prefix_application(app, 'batch', client_max_size=HTTP_CLIENT_MAX_SIZE),

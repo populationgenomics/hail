@@ -1,4 +1,5 @@
 import os
+import re
 
 import aiohttp_jinja2
 import jinja2
@@ -8,7 +9,13 @@ from hailtop.auth import hail_credentials
 from hailtop.aiocloud.common import Session
 from gear import new_csrf_token, SystemPermission
 
-from web_common import base_context, setup_common_static_routes, web_security_headers, web_security_headers_swagger
+from web_common import (
+    base_context,
+    setup_common_static_routes,
+    web_security_headers,
+    web_security_headers_inline_styles,
+    web_security_headers_swagger,
+)
 from web_common.web_common import WEB_COMMON_ROOT, TAILWIND_SERVICES
 
 from aiohttp import web
@@ -38,6 +45,7 @@ _ALL_STATIC_DIRS: list[tuple[str, str]] = [
     ('/batch/batch/static/compiled-js', 'batch/batch/front_end/static/compiled-js'),
     ('/batch/batch/static/js', 'batch/batch/front_end/static/js'),
     ('/batch-driver/batch/static/compiled-js', 'batch/batch/driver/static/compiled-js'),
+    ('/batch-driver/batch-driver/static/compiled-js', 'batch/batch/driver/static/compiled-js'),
     ('/batch-driver/batch_driver/static/js', 'batch/batch/driver/static/js'),
     ('/ci/ci/static/compiled-js', 'ci/ci/static/compiled-js'),
     ('/monitoring/monitoring/static/compiled-js', 'monitoring/monitoring/static/compiled-js'),
@@ -52,6 +60,7 @@ _SWAGGER_JS = 'services/ui/dist/shared/swagger.js'
 _SWAGGER_CSS = 'services/ui/dist/shared/swagger.css'
 _SWAGGER_SVCPATHS = [
     ('batch', 'batch'),
+    ('batch-driver', 'batch-driver'),
     ('ci', 'ci'),
     ('monitoring', 'monitoring'),
     ('auth', 'auth'),
@@ -67,6 +76,7 @@ for _svc, _svc_path in _SWAGGER_SVCPATHS:
     routes.get(f'/{_svc}/{_svc_path}/static/compiled-js/swagger.js')(_swagger_js_handler)
     routes.get(f'/{_svc}/{_svc_path}/static/compiled-js/swagger.css')(_swagger_css_handler)
 
+
 # common_static must also be service-prefixed
 _WEB_COMMON_STATIC = f'{WEB_COMMON_ROOT}/static'
 for _svc in ALL_SERVICES:
@@ -78,6 +88,14 @@ IS_DEVELOPER: bool | None = None if _IS_DEVELOPER_ENV is None else _IS_DEVELOPER
 _FAKE_DEV_USERDATA = {'username': 'dev', 'system_permissions': {p.value: True for p in SystemPermission}}
 
 BC = web.AppKey('backend_client', Session)
+
+# ci's PR retry endpoint is not idempotent (each call invalidates the PR's current batch and
+# kicks off a new one) and can legitimately take far longer than the client's default timeout,
+# since it blocks on the whole build-submission pipeline. The default Session retries any
+# transient error (including a client-side timeout) for every method, so without this override a
+# slow-but-successful retry gets silently resubmitted once the default timeout elapses, and the
+# resubmission fails because the first call already cleared the PR's batch.
+_NON_IDEMPOTENT_LONG_TIMEOUT_ROUTES = ((re.compile(r'^/ci/api/v1alpha/watched_branches/[^/]+/prs/\d+/retry$'), 'POST'),)
 
 
 def _service_from_path(path: str) -> str | None:
@@ -95,26 +113,42 @@ def _backend_url(service: str, raw_path: str) -> str:
 
 
 # Pages served from local templates (React shell with client-side data fetching).
-# Paths include the service prefix that matches the new URL model.
-_LOCAL_REACT_ROUTES: list[tuple[str, str, str, str]] = [
-    ('monitoring',   'GET', '/monitoring/helloreact', 'hello_react.html'),
-    ('auth',         'GET', '/auth/helloreact', 'hello_react.html'),
-    ('batch-driver', 'GET', '/batch-driver/helloreact', 'hello_react.html'),
-    ('ci',           'GET', '/ci/flaky_tests', 'flaky_tests.html'),
-    ('batch',        'GET', '/batch/swagger', 'swagger/index.html'),
-    ('ci',           'GET', '/ci/swagger', 'swagger/index.html'),
-    ('monitoring',   'GET', '/monitoring/swagger', 'swagger/index.html'),
-    ('auth',         'GET', '/auth/swagger', 'swagger/index.html'),
+# Paths include the service prefix that matches the new URL model. Any {placeholder}
+# in the path is pulled from the URL via match_info and merged into extra_page_context.
+# Tuple: (service, verb, path, template, extra_page_context)
+_LOCAL_REACT_ROUTES: list[tuple[str, str, str, str, dict]] = [
+    ('monitoring',   'GET', '/monitoring/cost-analysis', 'cost_analysis.html', {}),
+    ('auth',         'GET', '/auth/helloreact', 'hello_react.html', {}),
+    # classic page_context holds `jpim`/`pools`/`instances` (manager/model objects, not dicts) — not JSON-serializable
+    ('batch-driver', 'GET', '/batch-driver/', 'index_react.html', {}),
+    ('batch-driver', 'GET', '/batch-driver', 'index_react.html', {}),
+    ('batch-driver', 'GET', '/batch-driver/swagger', 'swagger/index.html', {}),
+    ('ci',           'GET', '/ci/flaky_tests', 'flaky_tests.html', {}),
+    # classic page_context holds `pr`/`wb` directly (a PR/WatchedBranch instance, not a dict) — not JSON-serializable
+    ('ci',           'GET', '/ci/watched_branches/{watched_branch_index}/pr/{pr_number}', 'pr_react.html', {}),
+    ('batch',        'GET', '/batch/swagger', 'swagger/index.html', {}),
+    ('ci',           'GET', '/ci/swagger', 'swagger/index.html', {}),
+    ('monitoring',   'GET', '/monitoring/swagger', 'swagger/index.html', {}),
+    ('auth',         'GET', '/auth/swagger', 'swagger/index.html', {}),
+    ('batch',        'GET', '/batch/batches/{batch_id}', 'batch_react.html', {}),
+    ('batch',        'GET', '/batch/batches/{batch_id}/jobs/{job_id}', 'job_react.html', {}),
 ]
 
-for _service, _verb, _path, _template in _LOCAL_REACT_ROUTES:
+for _service, _verb, _path, _template, _extra_ctx in _LOCAL_REACT_ROUTES:
     async def _local_handler(
         request: web.Request,
         _s: str = _service,
         _t: str = _template,
+        _ctx: dict = _extra_ctx,
     ) -> web.Response:
-        return await _render_html(request, _s, _FAKE_DEV_USERDATA, _t, {'use_tailwind': True})
-    _decorator = web_security_headers_swagger if _template.startswith('swagger/') else web_security_headers
+        page_context = {'use_tailwind': True, **_ctx, **request.match_info}
+        return await _render_html(request, _s, _FAKE_DEV_USERDATA, _t, page_context)
+    if _template.startswith('swagger/'):
+        _decorator = web_security_headers_swagger
+    elif _template in ('index_react.html', 'cost_analysis.html', 'pr_react.html', 'job_react.html'):
+        _decorator = web_security_headers_inline_styles
+    else:
+        _decorator = web_security_headers
     routes.route(_verb, _path)(_decorator(_local_handler))
 
 
@@ -126,8 +160,13 @@ async def default_proxied_api_route(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
     backend_client = request.app[BC]
     backend_route = _backend_url(service, request.raw_path)
+    request_kwargs = {}
+    for pattern, method in _NON_IDEMPOTENT_LONG_TIMEOUT_ROUTES:
+        if request.method == method and pattern.match(request.path):
+            request_kwargs = {'retry': False, 'timeout': 120}
+            break
     try:
-        async with await backend_client.request(request.method, backend_route) as resp:
+        async with await backend_client.request(request.method, backend_route, **request_kwargs) as resp:
             body = await resp.read()
             content_type = resp.content_type
     except httpx.ClientResponseError as e:
@@ -155,6 +194,27 @@ async def openapi_yaml_route(request: web.Request) -> web.Response:
     return web.Response(body=body, content_type='text/yaml')
 
 
+@routes.get('/{service:[^/]+}/batches/{batch_id}/jobs/{job_id}/jvm_profile')
+async def jvm_profile_passthrough(request: web.Request) -> web.Response:
+    service = request.match_info['service']
+    if service not in ALL_SERVICES:
+        raise web.HTTPNotFound()
+    backend_client = request.app[BC]
+    backend_route = _backend_url(service, request.raw_path)
+    headers = {}
+    if request.cookies:
+        headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in request.cookies.items())
+    try:
+        async with await backend_client.request(request.method, backend_route, headers=headers) as resp:
+            body = await resp.read()
+            content_disposition = resp.headers.get('Content-Disposition', '')
+    except httpx.ClientResponseError as e:
+        if e.status == 404:
+            raise web.HTTPNotFound()
+        raise
+    return web.Response(body=body, content_type='text/html', headers={'Content-Disposition': content_disposition})
+
+
 @routes.view('/{route:.*}')
 @web_security_headers
 async def default_proxied_web_route(request: web.Request) -> web.Response:
@@ -168,6 +228,8 @@ async def _proxy(request: web.Request, service: str) -> dict:
     backend_client = request.app[BC]
     backend_route = _backend_url(service, request.raw_path)
     headers = {'x-hail-return-jinja-context': '1'}
+    if request.cookies:
+        headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in request.cookies.items())
     try:
         async with await backend_client.request(request.method, backend_route, headers=headers) as resp:
             return await resp.json()
@@ -234,7 +296,7 @@ async def dev_csp_middleware(request: web.Request, handler):
     csp = response.headers.get('Content-Security-Policy', '')
     if csp:
         csp = csp.replace('script-src ', 'script-src http://localhost:8001 ')
-        csp += ' connect-src \'self\' ws://localhost:8001;'
+        csp = csp.replace('connect-src ', 'connect-src ws://localhost:8001 ')
         response.headers['Content-Security-Policy'] = csp
     return response
 

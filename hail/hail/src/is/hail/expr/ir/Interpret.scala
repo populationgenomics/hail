@@ -5,7 +5,6 @@ import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.backend.spark.SparkTaskContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits._
 import is.hail.expr.ir.analyses.PartitionCounts
 import is.hail.expr.ir.defs._
@@ -20,7 +19,7 @@ import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.utils._
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 import scala.util.control.ControlThrowable
 
 import org.apache.spark.sql.Row
@@ -953,10 +952,10 @@ object Interpret extends Logging {
         function.execute(ctx, child.execute(ctx))
       case BlockMatrixCollect(child) =>
         val bm = child.execute(ctx)
-        // transpose because breeze toArray is column major
-        val breezeMat = bm.transpose().toBreezeMatrix()
+        // transpose because DenseMatrix.toArray is column major
+        val lm = bm.transpose().toDenseMatrix()
         val shape = IndexedSeq(bm.nRows, bm.nCols)
-        SafeNDArray(shape, ArraySeq.unsafeWrapArray(breezeMat.toArray))
+        SafeNDArray(shape, ArraySeq.unsafeWrapArray(lm.toArray))
       case x @ TableAggregate(child, query) =>
         val value = ExecuteRelational(ctx, child).asTableValue(ctx)
         val fsBc = ctx.fsBc
