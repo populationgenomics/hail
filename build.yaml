@@ -3175,6 +3175,60 @@ steps:
       - hail_ubuntu_image
       - gpu_image
   - kind: runImage
+    name: test_batch_db
+    numSplits: 1
+    image:
+      valueFrom: batch_image.image
+    script: |
+      set -ex
+
+      hail-pip-install -r /io/dev-requirements.txt
+
+      # Install and start MySQL ad-hoc — not baked into the batch image.
+      hail-apt-get-install mysql-server
+      mysqld --user=root --daemonize --log-error=/tmp/mysqld.log
+      until mysqladmin --user=root ping --silent; do sleep 1; done
+      # Ubuntu's root uses auth_socket, which refuses the fixture's TCP login. IDENTIFIED BY alone keeps the plugin.
+      mysql --user=root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY 'pw'; FLUSH PRIVILEGES;"
+
+      # The db fixture applies the batch migrations listed in build.yaml, relative to this root.
+      export HAIL_TEST_REPO_ROOT=/io/repo
+
+      cd /io
+      # Migrating takes ~2-3 min, so the per-test timeout excludes fixtures; the step timeout bounds setup.
+      python3 -m pytest \
+              --log-cli-level=INFO \
+              -s \
+              -r A \
+              -vv \
+              --instafail \
+              --durations=50 \
+              --timeout=120 \
+              -o timeout_func_only=true \
+              /io/test/test_db_framework.py
+    inputs:
+      - from: /repo/batch/test
+        to: /io/test
+      - from: /repo/hail/python/dev/pinned-requirements.txt
+        to: /io/dev-requirements.txt
+      - from: /repo/build.yaml
+        to: /io/repo/build.yaml
+      - from: /repo/ci/create_local_database.py
+        to: /io/repo/ci/create_local_database.py
+      - from: /repo/ci/create_database.py
+        to: /io/repo/ci/create_database.py
+      - from: /repo/batch/sql
+        to: /io/repo/batch/sql
+    timeout: 900
+    scopes:
+      - test
+      - dev
+    clouds:
+      - gcp
+    dependsOn:
+      - merge_code
+      - batch_image
+  - kind: runImage
     name: test_batch_job_private_machines
     scopes:
       - test
@@ -3404,16 +3458,21 @@ steps:
         -H "Authorization: token ${TOKEN}" \
         -d "{ \"name\" : \"$REPO_NAME\" }"
 
+      # Authenticate via header rather than a token in the URL: GitHub sometimes
+      # redirects freshly-created repos, and git drops URL credentials on redirect
+      set +x
+      git config --global http.https://github.com/.extraHeader \
+        "Authorization: Basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+      set -x
+
       # checkout new ci repo
       # Repeated clones should happen in fresh directories so we mv to the final
       # destination on successful clone
-      set +x
       clone() {
-        tmp_dir=$(mktemp -d) && git clone https://$1@github.com/hail-ci-test/$2.git $tmp_dir && mv $tmp_dir $2
+        tmp_dir=$(mktemp -d) && git clone https://github.com/hail-ci-test/$1.git $tmp_dir && mv $tmp_dir $1
       }
       typeset -fx clone
-      retry clone $TOKEN $REPO_NAME
-      set -x
+      retry clone $REPO_NAME
       cd $REPO_NAME
 
       mkdir -p ./ci/test ./hail/
