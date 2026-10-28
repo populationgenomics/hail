@@ -114,13 +114,13 @@ object MatrixNativeWriter {
 
     val lowered =
       if (partitions != null) {
-        val partitionsType = IRParser.parseType(partitionsTypeStr)
+        val partitionsType = IRParser.parseType(partitionsTypeStr, ctx.references)
         val jv = JsonMethods.parse(partitions)
         val rangeBounds = JSONAnnotationImpex.importAnnotation(jv, partitionsType)
           .asInstanceOf[IndexedSeq[Interval]]
         tablestage.repartitionNoShuffle(
           ctx,
-          new RVDPartitioner(ctx.stateManager, tm.rowKey.toArray, tm.rowKeyStruct, rangeBounds),
+          new RVDPartitioner(tm.rowKey.toArray, tm.rowKeyStruct, rangeBounds),
         )
       } else tablestage
 
@@ -242,7 +242,7 @@ object MatrixNativeWriter {
               MakeArray(GetField(writeEmpty, "filePath")),
               RVDSpecWriter(
                 s"$path/globals/globals",
-                RVDSpecMaker(emptySpec, RVDPartitioner.unkeyed(ctx.stateManager, 1)),
+                RVDSpecMaker(emptySpec, RVDPartitioner.unkeyed(1)),
               ),
             )
 
@@ -250,7 +250,7 @@ object MatrixNativeWriter {
               MakeArray(GetField(writeGlobals, "filePath")),
               RVDSpecWriter(
                 s"$path/globals/rows",
-                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(ctx.stateManager, 1)),
+                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(1)),
               ),
             )
 
@@ -275,7 +275,7 @@ object MatrixNativeWriter {
               MakeArray(GetField(colInfo, "filePath")),
               RVDSpecWriter(
                 s"$path/cols/rows",
-                RVDSpecMaker(colSpec, RVDPartitioner.unkeyed(ctx.stateManager, 1)),
+                RVDSpecMaker(colSpec, RVDPartitioner.unkeyed(1)),
               ),
             )
 
@@ -313,7 +313,7 @@ object MatrixNativeWriter {
                 s"$path/entries/rows",
                 RVDSpecMaker(
                   entrySpec,
-                  RVDPartitioner.unkeyed(ctx.stateManager, lowered.numPartitions),
+                  RVDPartitioner.unkeyed(lowered.numPartitions),
                   entriesIndexSpec,
                 ),
               ),
@@ -644,7 +644,7 @@ case class VCFPartitionWriter(
           "makeHeader",
           mb.getType[TStruct](typ.rowType),
           mb.getType[TStruct](typ.entryType),
-          mb.getReferenceGenome(typ.referenceGenomeName),
+          mb.getReferenceGenome(typ.referenceGenome),
           mb.getObject(append),
           mb.getObject(metadata),
           stringSampleIds,
@@ -1010,7 +1010,7 @@ case class VCFExportFinalizer(
       "makeHeader",
       mb.getType[TStruct](typ.rowType),
       mb.getType[TStruct](typ.entryType),
-      mb.getReferenceGenome(typ.referenceGenomeName),
+      mb.getReferenceGenome(typ.referenceGenome),
       mb.getObject(append),
       mb.getObject(metadata),
       stringSampleIds,
@@ -2133,7 +2133,7 @@ case class MatrixBlockMatrixWriter(
       }
 
     val rowIdxPartitioner =
-      new RVDPartitioner(ctx.stateManager, TStruct("__per_row_idx" -> TInt32), inputRowIntervals)
+      new RVDPartitioner(TStruct("__per_row_idx" -> TInt32), inputRowIntervals)
     val keyedByRowIdx = partsZippedWithIdx.changePartitionerNoRepartition(rowIdxPartitioner)
 
     // Now create a partitioner that makes appropriately sized blocks
@@ -2148,7 +2148,6 @@ case class MatrixBlockMatrixWriter(
 
     val blockSizeGroupsPartitioner =
       RVDPartitioner.generate(
-        ctx.stateManager,
         TStruct("__per_row_idx" -> TInt32),
         desiredRowIntervals,
       )

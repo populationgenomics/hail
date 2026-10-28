@@ -3,7 +3,7 @@ package is.hail.io.index
 import is.hail.annotations.{Annotation, Region, RegionPool}
 import is.hail.asm4s._
 import is.hail.asm4s.implicits.valueToRichCodeOutputBuffer
-import is.hail.backend.{ExecuteContext, HailStateManager, HailTaskContext}
+import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.collection.{FastSeq, IntArrayBuilder, LongArrayBuilder}
 import is.hail.expr.ir.{
   CodeParam, EmitClassBuilder, EmitCodeBuilder, EmitFunctionBuilder, EmitMethodBuilder, IEmitCode,
@@ -25,6 +25,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import java.io.OutputStream
 
+import org.json4s.Formats
 import org.json4s.jackson.Serialization
 
 trait AbstractIndexMetadata {
@@ -92,11 +93,9 @@ object IndexWriter {
     branchingFactor: Int = DEFAULT_BRANCHING_FACTOR,
     attributes: Map[String, Any] = Map.empty[String, Any],
   ): (String, HailClassLoader, HailTaskContext, RegionPool) => IndexWriter = {
-    val sm = ctx.stateManager;
     val f = StagedIndexWriter.build(ctx, keyType, annotationType, branchingFactor);
     { (path: String, hcl: HailClassLoader, htc: HailTaskContext, pool: RegionPool) =>
       new IndexWriter(
-        sm,
         keyType,
         annotationType,
         f(path, hcl, htc, pool, attributes),
@@ -108,7 +107,6 @@ object IndexWriter {
 }
 
 class IndexWriter(
-  sm: HailStateManager,
   keyType: PType,
   valueType: PType,
   comp: CompiledIndexWriter,
@@ -118,8 +116,8 @@ class IndexWriter(
   private val region = Region(pool = pool)
 
   def appendRow(x: Annotation, offset: Long, annotation: Annotation): Unit = {
-    val koff = keyType.unstagedStoreJavaObject(sm, x, region)
-    val voff = valueType.unstagedStoreJavaObject(sm, annotation, region)
+    val koff = keyType.unstagedStoreJavaObject(x, region)
+    val voff = valueType.unstagedStoreJavaObject(annotation, region)
     comp.apply(koff, offset, voff)
   }
 
@@ -245,7 +243,7 @@ case class StagedIndexMetadata(
   attributes: Map[String, Any],
 ) {
   def serialize(out: OutputStream, height: Int, rootOffset: Long, nKeys: Long): Unit = {
-    import AbstractRVDSpec.formats
+    implicit val formats: Formats = AbstractRVDSpec.formats
     val metadata = IndexMetadata(
       IndexWriter.version.rep,
       branchingFactor,

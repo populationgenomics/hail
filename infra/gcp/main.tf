@@ -45,11 +45,6 @@ variable "gcp_location" {}
 variable "domain" {}
 variable "organization_domain" {}
 variable "github_organization" {}
-variable "use_artifact_registry" {
-  type = bool
-  description = "pull the ubuntu image from Artifact Registry. Otherwise, GCR"
-}
-
 variable "enable_master_authorized_networks" {
   type = bool
   description = "Enable master authorized networks configuration for GKE cluster"
@@ -72,11 +67,7 @@ variable "support_email" {
 }
 
 locals {
-  docker_prefix = (
-    var.use_artifact_registry ?
-    "${var.gcp_region}-docker.pkg.dev/${var.gcp_project}/hail" :
-    "gcr.io/${var.gcp_project}"
-  )
+  docker_prefix     = "${var.gcp_region}-docker.pkg.dev/${var.gcp_project}/hail"
   docker_root_image = "${local.docker_prefix}/ubuntu:24.04"
   dockerhub_prefix  = "${var.gcp_location}-docker.pkg.dev/${var.gcp_project}/dockerhubproxy"
 }

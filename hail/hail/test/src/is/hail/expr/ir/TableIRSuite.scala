@@ -18,6 +18,7 @@ import is.hail.methods.{ForceCountTable, NPartitionsTable}
 import is.hail.rvd.RVDPartitioner
 import is.hail.types.virtual._
 import is.hail.utils._
+import is.hail.variant.BuiltinLoci.tlocus
 import is.hail.variant.Locus
 
 import scala.collection.immutable.ArraySeq
@@ -57,8 +58,8 @@ class TableIRSuite {
     val path = ctx.createTmpPath("test-range-read", "ht")
     val write = TableWrite(original, TableNativeWriter(path, overwrite = true))
     assertEvalsTo(write, ())
-    val read = TableIR.read(ctx.fs, path, false, None)
-    val droppedRows = TableIR.read(ctx.fs, path, true, None)
+    val read = TableIR.read(ctx.fs, ctx.references, path, false, None)
+    val droppedRows = TableIR.read(ctx.fs, ctx.references, path, true, None)
 
     val uids = for {
       (partSize, partIndex) <- partition(10, 3).zipWithIndex
@@ -73,7 +74,8 @@ class TableIRSuite {
 
   @Test def testCountRead(implicit ctx: ExecuteContext): Unit = {
     implicit val execStrats = ExecStrategy.lowering
-    val tir: TableIR = TableRead.native(ctx.fs, getTestResource("three_key.ht"))
+    val tir: TableIR =
+      TableRead.native(ctx.fs, ctx.references, getTestResource("three_key.ht"))
     assertEvalsTo(TableCount(tir), 120L)
   }
 
@@ -680,7 +682,7 @@ class TableIRSuite {
 
   // Catches a bug in the partitioner created by the importer.
   @Test def testTableJoinOfImport(implicit ctx: ExecuteContext): Unit = {
-    val mnr = MatrixNativeReader(ctx.fs, getTestResource("sample.vcf.mt"))
+    val mnr = MatrixNativeReader(ctx.fs, ctx.references, getTestResource("sample.vcf.mt"))
     val mt2 = MatrixRead(mnr.fullMatrixType, false, false, mnr)
     val t2 = MatrixRowsTable(mt2)
     val mt = importVCF(getTestResource("sample.vcf"))
@@ -699,8 +701,12 @@ class TableIRSuite {
     val i1 = Interval(RowSeq(Locus("20", 10200000)), RowSeq(Locus("20", 10500000)), true, true)
 
     def test(filterIntervals: Boolean, expectedNParts: Int): Unit = {
-      val opts = NativeReaderOptions(FastSeq(i1), TLocus("GRCh37"), filterIntervals)
-      val tr = TableNativeReader(ctx.fs, TableNativeReaderParameters(path, Some(opts)))
+      val opts = NativeReaderOptions(FastSeq(i1), tlocus("GRCh37"), filterIntervals)
+      val tr = TableNativeReader(
+        ctx.fs,
+        ctx.references,
+        TableNativeReaderParameters(path, Some(opts)),
+      )
       val tir = TableRead(tr.fullTypeWithoutUIDs, false, tr)
       val nParts = TableToValueApply(tir, NPartitionsTable())
       val count = TableToValueApply(tir, ForceCountTable())
@@ -958,7 +964,7 @@ class TableIRSuite {
     val path = ctx.createTmpPath("test-table-write", "ht")
     Interpret[Unit](ctx, TableWrite(table, TableNativeWriter(path)))
     val before = ExecuteRelational(ctx, table).asTableValue(ctx)
-    val read = TableIR.read(ctx.fs, path, requestedType = Some(table.typ))
+    val read = TableIR.read(ctx.fs, ctx.references, path, requestedType = Some(table.typ))
     assert(read.isDistinctlyKeyed)
     val after = unoptimized(Interpret(read, _))
     assert(before.globals.javaValue == after.globals.javaValue)
@@ -981,37 +987,37 @@ class TableIRSuite {
     val keyedByConst = TableKeyBy(at, IndexedSeq("const"))
     val pathConst = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByConst, TableNativeWriter(pathConst)))
-    val readConst = TableIR.read(ctx.fs, pathConst)
+    val readConst = TableIR.read(ctx.fs, ctx.references, pathConst)
     assert(!readConst.isDistinctlyKeyed)
 
     val keyedByHalf = TableKeyBy(at, IndexedSeq("half"))
     val pathHalf = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByHalf, TableNativeWriter(pathHalf)))
-    val readHalf = TableIR.read(ctx.fs, pathHalf)
+    val readHalf = TableIR.read(ctx.fs, ctx.references, pathHalf)
     assert(!readHalf.isDistinctlyKeyed)
 
     val keyedByIdxAndHalf = TableKeyBy(at, IndexedSeq("idx", "half"))
     val pathIdxAndHalf = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByIdxAndHalf, TableNativeWriter(pathIdxAndHalf)))
-    val readIdxAndHalf = TableIR.read(ctx.fs, pathIdxAndHalf)
+    val readIdxAndHalf = TableIR.read(ctx.fs, ctx.references, pathIdxAndHalf)
     assert(readIdxAndHalf.isDistinctlyKeyed)
 
     val keyedByOneRepeat = TableKeyBy(at, IndexedSeq("oneRepeat"))
     val pathOneRepeat = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByOneRepeat, TableNativeWriter(pathOneRepeat)))
-    val readOneRepeat = TableIR.read(ctx.fs, pathOneRepeat)
+    val readOneRepeat = TableIR.read(ctx.fs, ctx.references, pathOneRepeat)
     assert(!readOneRepeat.isDistinctlyKeyed)
 
     val keyedByOneMissing = TableKeyBy(at, IndexedSeq("oneMissing"))
     val pathOneMissing = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByOneMissing, TableNativeWriter(pathOneMissing)))
-    val readOneMissing = TableIR.read(ctx.fs, pathOneMissing)
+    val readOneMissing = TableIR.read(ctx.fs, ctx.references, pathOneMissing)
     assert(readOneMissing.isDistinctlyKeyed)
 
     val keyedByTwoMissing = TableKeyBy(at, IndexedSeq("twoMissing"))
     val pathTwoMissing = ctx.createTmpPath("test-table-write-distinctness", "ht")
     Interpret[Unit](ctx, TableWrite(keyedByTwoMissing, TableNativeWriter(pathTwoMissing)))
-    val readTwoMissing = TableIR.read(ctx.fs, pathTwoMissing)
+    val readTwoMissing = TableIR.read(ctx.fs, ctx.references, pathTwoMissing)
     assert(!readTwoMissing.isDistinctlyKeyed)
   }
 
@@ -1106,7 +1112,8 @@ class TableIRSuite {
 
   @Test def testTableAggregateByKey(implicit ctx: ExecuteContext): Unit = {
     implicit val execStrats = ExecStrategy.allRelational
-    var tir: TableIR = TableRead.native(ctx.fs, getTestResource("three_key.ht"))
+    var tir: TableIR =
+      TableRead.native(ctx.fs, ctx.references, getTestResource("three_key.ht"))
     tir = TableKeyBy(tir, FastSeq("x", "y"), true)
     tir = TableAggregateByKey(
       tir,
@@ -1128,7 +1135,8 @@ class TableIRSuite {
   }
 
   @Test def testTableDistinct(implicit ctx: ExecuteContext): Unit = {
-    val tir: TableIR = TableRead.native(ctx.fs, getTestResource("three_key.ht"))
+    val tir: TableIR =
+      TableRead.native(ctx.fs, ctx.references, getTestResource("three_key.ht"))
     val keyedByX = TableKeyBy(tir, FastSeq("x"), true)
     val distinctByX = TableDistinct(keyedByX)
     assertEvalsTo(TableCount(distinctByX), 8L)
@@ -1314,7 +1322,8 @@ class TableIRSuite {
   }
 
   @Test def testTableKeyByAndAggregate(implicit ctx: ExecuteContext): Unit = {
-    val tir: TableIR = TableRead.native(ctx.fs, getTestResource("three_key.ht"))
+    val tir: TableIR =
+      TableRead.native(ctx.fs, ctx.references, getTestResource("three_key.ht"))
     val unkeyed = TableKeyBy(tir, IndexedSeq[String]())
     val rowRef = Ref(TableIR.rowName, unkeyed.typ.rowType)
     val aggExpression = MakeStruct(FastSeq(
@@ -1473,6 +1482,84 @@ class TableIRSuite {
     )
   }
 
+  // The transitive bindings, directly and inside a scan filter's body.
+  def testTableScanTransitiveInitArg() = {
+    def take = takeWithTransitiveInitArg(
+      ApplyScanOp(Take(), _)(Ref(TableIR.rowName, TStruct("idx" -> TInt32)).get("idx"))
+    )
+    FastSeq(take, AggFilter(True(), take, isScan = true))
+  }
+
+  @ParameterizedTest
+  def testTableScanTransitiveInitArg(v: IR)(implicit ctx: ExecuteContext): Unit = {
+    val t = TableRange(5, 2)
+    val row = Ref(TableIR.rowName, t.typ.rowType)
+    val mapped = TableMapRows(t, InsertFields(row, FastSeq("v" -> v)))
+    assertEvalsTo(
+      GetField(collectNoKey(TableKeyBy(mapped, FastSeq())), "rows"),
+      (0 until 5).map(i => RowSeq(i, RowSeq(0 until math.min(i, 1), 2))),
+    )
+  }
+
+  /* One Block with the transitive bindings, the same bindings in nested Blocks, and the Block
+   * inside an agg filter's body. */
+  def testTableAggregateTransitiveInitArg() = {
+    def idx = Ref(TableIR.rowName, TStruct("idx" -> TInt32)).get("idx")
+    FastSeq(
+      takeWithTransitiveInitArg(ApplyAggOp(Take(), _)(idx)),
+      AggFilter(True(), takeWithTransitiveInitArg(ApplyAggOp(Take(), _)(idx)), isScan = false),
+      bindIR(I32(3) - I32(1)) { n =>
+        bindIR(n - I32(1))(m => maketuple(ApplyAggOp(Take(), m)(idx), n))
+      },
+    )
+  }
+
+  @ParameterizedTest
+  def testTableAggregateTransitiveInitArg(v: IR)(implicit ctx: ExecuteContext): Unit =
+    assertEvalsTo(TableAggregate(TableRange(5, 2), v), RowSeq(FastSeq(0), 2))
+
+  // Init args that read a loop variable or an APE index.
+  def testTableAggregateInitArgReadsVarying() = {
+    def idx = Ref(TableIR.rowName, TStruct("idx" -> TInt32)).get("idx")
+    FastSeq(
+      ToArray(mapIR(rangeIR(3))(i => ApplyAggOp(Take(), i)(idx))),
+      aggArrayPerElement(MakeArray(idx, idx))((elt, i) => ApplyAggOp(Take(), i)(elt)),
+    )
+  }
+
+  @ParameterizedTest
+  def testTableAggregateInitArgReadsVarying(v: IR)(implicit ctx: ExecuteContext): Unit = {
+    // Without the optimiser, which can forward a binding into an init arg and change the error.
+    implicit val execStrats: Set[ExecStrategy] = ExecStrategy.unoptimizedRelational
+    assertFatal(
+      TableAggregate(TableRange(5, 2), v),
+      "init argument refers to .*, which varies per element",
+    )
+  }
+
+  def testTableAggregateInitArgReadsAggResult() =
+    initArgsReadingResult(isScan = false)(Ref(TableIR.rowName, TStruct("idx" -> TInt32)).get("idx"))
+
+  @ParameterizedTest
+  def testTableAggregateInitArgReadsAggResult(v: IR)(implicit ctx: ExecuteContext): Unit = {
+    // Without the optimiser, which can forward a binding into an init arg and change the error.
+    implicit val execStrats: Set[ExecStrategy] = ExecStrategy.unoptimizedRelational
+    assertFatal(TableAggregate(TableRange(5, 2), v), "depends on an aggregation result")
+  }
+
+  def testTableScanInitArgReadsScanResult() =
+    initArgsReadingResult(isScan = true)(Ref(TableIR.rowName, TStruct("idx" -> TInt32)).get("idx"))
+
+  @ParameterizedTest
+  def testTableScanInitArgReadsScanResult(v: IR)(implicit ctx: ExecuteContext): Unit = {
+    // Without the optimiser, which can forward a binding into an init arg and change the error.
+    implicit val execStrats: Set[ExecStrategy] = ExecStrategy.unoptimizedRelational
+    val t = TableRange(5, 2)
+    val row = Ref(TableIR.rowName, t.typ.rowType)
+    val mapped = TableMapRows(t, InsertFields(row, FastSeq("v" -> v)))
+    assertFatal(collectNoKey(TableKeyBy(mapped, FastSeq())), "depends on a scan result")
+  }
+
   @Test def testIssue9016(implicit ctx: ExecuteContext): Unit = {
     val rows =
       mapIR(ToStream(MakeArray(makestruct("a" -> MakeTuple.ordered(FastSeq(I32(0), I32(1))))))) {
@@ -1501,7 +1588,7 @@ class TableIRSuite {
     val rowsPath = getTestResource("sample.vcf.mt/rows")
     val entriesPath = getTestResource("sample.vcf.mt/entries")
 
-    val mnr = MatrixNativeReader(ctx.fs, getTestResource("sample.vcf.mt"))
+    val mnr = MatrixNativeReader(ctx.fs, ctx.references, getTestResource("sample.vcf.mt"))
     val mnrSpec = mnr.spec
 
     val reader =
@@ -1588,9 +1675,9 @@ class TableIRSuite {
     }
   }
 
-  @Test def testRepartitionCostEstimate(implicit ctx: ExecuteContext): Unit = {
-    val empty = RVDPartitioner.empty(ctx.stateManager, TStruct.empty)
-    val some = RVDPartitioner.unkeyed(ctx.stateManager, _)
+  @Test def testRepartitionCostEstimate(): Unit = {
+    val empty = RVDPartitioner.empty(TStruct.empty)
+    val some = RVDPartitioner.unkeyed(_)
 
     val data = IndexedSeq(
       (empty, empty, Succeeded, Failed("Repartitioning from an empty partitioner should be free")),
