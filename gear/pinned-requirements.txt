@@ -127,7 +127,7 @@ protobuf==7.35.1
     #   google-cloud-profiler
     #   googleapis-common-protos
     #   proto-plus
-pyasn1==0.6.4
+pyasn1==0.6.5
     # via
     #   -c gear/../hail/python/hailtop/pinned-requirements.txt
     #   -c gear/../hail/python/pinned-requirements.txt
