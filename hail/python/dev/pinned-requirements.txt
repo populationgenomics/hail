@@ -115,7 +115,7 @@ executing==2.2.1
     #   stack-data
 fastjsonschema==2.22.1
     # via nbformat
-filelock==3.32.2
+filelock==4.2.1
     # via
     #   python-discovery
     #   virtualenv
