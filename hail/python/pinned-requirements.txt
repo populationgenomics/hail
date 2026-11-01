@@ -211,7 +211,7 @@ propcache==0.5.2
     #   yarl
 py4j==0.10.9.7
     # via pyspark
-pyasn1==0.6.4
+pyasn1==0.6.5
     # via
     #   -c hail/python/hailtop/pinned-requirements.txt
     #   pyasn1-modules
