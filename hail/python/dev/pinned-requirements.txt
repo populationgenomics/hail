@@ -532,7 +532,7 @@ toml==0.10.2
     # via curlylint
 tomlkit==0.15.1
     # via pylint
-tornado==6.5.7
+tornado==6.6
     # via
     #   -c hail/python/dev/../pinned-requirements.txt
     #   ipykernel
