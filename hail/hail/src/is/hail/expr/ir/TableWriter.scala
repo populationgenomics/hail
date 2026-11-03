@@ -5,7 +5,6 @@ import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.TableAnnotationImpex
 import is.hail.expr.ir.defs._
@@ -23,6 +22,8 @@ import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.variant.ReferenceGenome
+
+import scala.collection.immutable.ArraySeq
 
 import java.io.{BufferedOutputStream, OutputStream, OutputStreamWriter}
 import java.text.SimpleDateFormat
@@ -199,7 +200,7 @@ object TableNativeWriter {
               MakeArray(GetField(writeGlobals, "filePath")),
               RVDSpecWriter(
                 s"$path/globals",
-                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(ctx.stateManager, 1)),
+                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(1)),
               ),
             ),
             WriteMetadata(
@@ -485,7 +486,7 @@ case class RelationalCommit(path: String) extends MetadataWriter {
 case class RelationalWriter(
   path: String,
   overwrite: Boolean,
-  maybeRefs: Option[(String, Set[String])],
+  maybeRefs: Option[(String, Set[ReferenceGenome])],
 ) extends MetadataWriter {
   override def annotationType: Type = TVoid
 
@@ -874,7 +875,7 @@ case class TableNativeFanoutWriter(
               MakeArray(GetField(writeGlobals, "filePath")),
               RVDSpecWriter(
                 s"${target.path}/globals",
-                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(ctx.stateManager, 1)),
+                RVDSpecMaker(globalSpec, RVDPartitioner.unkeyed(1)),
               ),
             ),
             WriteMetadata(

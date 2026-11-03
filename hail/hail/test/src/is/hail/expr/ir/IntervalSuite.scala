@@ -6,13 +6,14 @@ import is.hail.TestUtils._
 import is.hail.annotations.RowSeq
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.defs.{
   ErrorIDs, False, GetTupleElement, I32, If, Literal, MakeTuple, NA, True,
 }
 import is.hail.rvd.RVDPartitioner
 import is.hail.types.virtual._
 import is.hail.utils._
+
+import scala.collection.immutable.ArraySeq
 
 import org.junit.jupiter.api.{BeforeEach, Test}
 
@@ -137,7 +138,7 @@ class IntervalSuite {
     Interval(start, end, includesStart, includesEnd)
 
   @Test def testIntervalSortAndReduce(implicit ctx: ExecuteContext): Unit = {
-    val ord = TInt32.ordering(ctx.stateManager).intervalEndpointOrdering
+    val ord = TInt32.ordering.intervalEndpointOrdering
 
     assertEq(Interval.union(ArraySeq(), ord), ArraySeq())
     assertEq(Interval.union(ArraySeq(intInterval(0, 10)), ord), ArraySeq(intInterval(0, 10)))
@@ -157,7 +158,7 @@ class IntervalSuite {
   }
 
   @Test def testIntervalIntersection(implicit ctx: ExecuteContext): Unit = {
-    val ord = TInt32.ordering(ctx.stateManager).intervalEndpointOrdering
+    val ord = TInt32.ordering.intervalEndpointOrdering
 
     val x1 = ArraySeq(
       intInterval(5, 10),
@@ -242,9 +243,8 @@ class IntervalSuite {
   var partitioner: Literal = _
 
   @BeforeEach
-  def setupRVDPartitioner(implicit ctx: ExecuteContext): Unit = {
+  def setupRVDPartitioner(): Unit = {
     partitioner = new RVDPartitioner(
-      ctx.stateManager,
       partitionerKType,
       ArraySeq(
         Interval(RowSeq(1, 0), RowSeq(4, 3), true, false),

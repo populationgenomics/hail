@@ -8,24 +8,26 @@ import is.hail.asm4s.{
 import is.hail.backend.ExecuteContext
 import is.hail.backend.spark.SparkBackend
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.lowering.{Compilable, LowererUnsupportedOperation}
 import is.hail.expr.ir.lowering.Optimize.Flags.Optimize
 import is.hail.io.vcf.MatrixVCFReader
+import is.hail.linalg.DenseMatrix
+import is.hail.types.encoded.EType.Flags.UseUnstableEncodings
 import is.hail.types.physical.{PBaseStruct, PCanonicalArray, PType}
 import is.hail.types.physical.stypes.PTypeReferenceSingleCodeType
 import is.hail.types.virtual._
 import is.hail.utils._
-import is.hail.variant.{BoxedCall, Call2, ReferenceGenome}
+import is.hail.variant.ReferenceGenome
 
+import scala.collection.immutable.ArraySeq
 import scala.reflect.ClassTag
 
 import java.io.PrintWriter
 
-import breeze.linalg.{DenseMatrix, Matrix, Vector}
+import breeze.linalg.{Matrix, Vector}
 import org.apache.spark.SparkException
 import org.apache.spark.sql.Row
 import org.junit.jupiter.api.{Assertions => JAssertions}
@@ -73,6 +75,9 @@ object TestUtils extends Logging {
     * silent argument inversions that would swap the "expected" and "actual" labels on failure.
     */
   // scalafix:off ForbiddenSymbol
+  def assertEq(actual: Array[Int], expected: Array[Int]): Unit =
+    JAssertions.assertArrayEquals(expected, actual)
+
   def assertEq[A](actual: A, expected: A): Unit =
     JAssertions.assertEquals(expected, actual)
 
@@ -112,6 +117,13 @@ object TestUtils extends Logging {
 
   def unoptimized[A](f: ExecuteContext => A)(implicit ctx: ExecuteContext): A =
     ctx.local(flags = ctx.flags - Optimize)(f)
+
+  def withUnstableEncodings[A](f: ExecuteContext => A)(implicit ctx: ExecuteContext): A =
+    ctx.local(flags = ctx.flags + (UseUnstableEncodings -> "1"))(f)
+
+  // Tests may run with unstable encodings on for the whole run, so stable baselines must say so.
+  def withStableEncodings[A](f: ExecuteContext => A)(implicit ctx: ExecuteContext): A =
+    ctx.local(flags = ctx.flags + (UseUnstableEncodings -> null))(f)
 
   def loweredExecute(
     x: IR,
@@ -199,7 +211,7 @@ object TestUtils extends Logging {
 
         ctx.r.pool.scopedRegion { region =>
           ctx.local(r = region) { ctx =>
-            val rvb = new RegionValueBuilder(ctx.stateManager, ctx.r)
+            val rvb = new RegionValueBuilder(ctx.r)
             rvb.start(argsPType)
             rvb.startTuple()
             var i = 0
@@ -240,7 +252,7 @@ object TestUtils extends Logging {
 
         ctx.r.pool.scopedRegion { region =>
           ctx.local(r = region) { ctx =>
-            val rvb = new RegionValueBuilder(ctx.stateManager, ctx.r)
+            val rvb = new RegionValueBuilder(ctx.r)
             rvb.start(argsPType)
             rvb.startTuple()
             var i = 0
@@ -394,23 +406,22 @@ object TestUtils extends Logging {
       RowSeq.fromSeq(xs.map(_._2)),
     )
 
-  def assertThrows[E <: Throwable: ClassTag](x: IR, regex: String)(implicit ctx: ExecuteContext)
-    : Unit =
-    ctx.local() { ctx =>
-      val emptyEnv: Env[(Any, Type)] = Env.empty[(Any, Type)]
-      val emptyArgs: IndexedSeq[(Any, Type)] = FastSeq.empty[(Any, Type)]
-      ctx.flags.set(Optimize, "1")
-      interceptException[E](regex)(Interpret[Any](ctx, x, emptyEnv, emptyArgs))
-      ctx.flags.set(Optimize, null)
-      interceptException[E](regex)(Interpret[Any](ctx, x, emptyEnv, emptyArgs))
-      ctx.flags.set(Optimize, "1")
-      interceptException[E](regex) {
-        implicit val innerCtx: ExecuteContext = ctx
-        eval(x)
-      }
-    }
+  def assertThrows[E <: Throwable: ClassTag](
+    x: IR,
+    regex: String,
+  )(implicit
+    ctx: ExecuteContext,
+    execStrats: Set[ExecStrategy],
+  ): Unit =
+    assertThrows[E](x, Env.empty[(Any, Type)], FastSeq.empty[(Any, Type)], regex)
 
-  def assertFatal(x: IR, regex: String)(implicit ctx: ExecuteContext): Unit =
+  def assertFatal(
+    x: IR,
+    regex: String,
+  )(implicit
+    ctx: ExecuteContext,
+    execStrats: Set[ExecStrategy],
+  ): Unit =
     assertThrows[HailException](x, regex)
 
   def assertThrows[E <: Throwable: ClassTag](
@@ -418,18 +429,12 @@ object TestUtils extends Logging {
     env: Env[(Any, Type)],
     args: IndexedSeq[(Any, Type)],
     regex: String,
-  )(implicit ctx: ExecuteContext
+  )(implicit
+    ctx: ExecuteContext,
+    execStrats: Set[ExecStrategy],
   ): Unit =
-    ctx.local() { ctx =>
-      ctx.flags.set(Optimize, "1")
-      interceptException[E](regex)(Interpret[Any](ctx, x, env, args))
-      ctx.flags.set(Optimize, null)
-      interceptException[E](regex)(Interpret[Any](ctx, x, env, args))
-      ctx.flags.set(Optimize, "1")
-      interceptException[E](regex) {
-        implicit val innerCtx: ExecuteContext = ctx
-        eval(x, env, args)
-      }
+    execStrats.foreach { implicit strat =>
+      interceptException[E](regex)(evaluate(x.deepCopy, args, env, None))
     }
 
   def assertFatal(
@@ -437,7 +442,8 @@ object TestUtils extends Logging {
     args: IndexedSeq[(Any, Type)],
     regex: String,
   )(implicit
-    ctx: ExecuteContext
+    ctx: ExecuteContext,
+    execStrats: Set[ExecStrategy],
   ): Unit =
     assertThrows[HailException](x, Env.empty[(Any, Type)], args, regex)
 
@@ -446,7 +452,9 @@ object TestUtils extends Logging {
     env: Env[(Any, Type)],
     args: IndexedSeq[(Any, Type)],
     regex: String,
-  )(implicit ctx: ExecuteContext
+  )(implicit
+    ctx: ExecuteContext,
+    execStrats: Set[ExecStrategy],
   ): Unit =
     assertThrows[HailException](x, env, args, regex)
 
@@ -581,23 +589,23 @@ object TestUtils extends Logging {
     )
   }
 
+  def assertMatrixEqualityDouble(A: DenseMatrix, B: DenseMatrix): Unit =
+    assertMatrixEqualityDouble(A, B, defaultTolerance)
+
+  def assertMatrixEqualityDouble(A: DenseMatrix, B: DenseMatrix, tolerance: Double): Unit = {
+    assertTrue(A.rows == B.rows && A.cols == B.cols, s"matrix dimensions differ")
+    assertTrue(
+      (0 until A.rows).forall(i =>
+        (0 until A.cols).forall(j => D_==(A(i, j), B(i, j), tolerance))
+      ),
+      s"matrices differ beyond tolerance $tolerance",
+    )
+  }
+
   def isConstant(A: Vector[Int]): Boolean = {
     (0 until A.length - 1).foreach(i => if (A(i) != A(i + 1)) return false)
     true
   }
-
-  def removeConstantCols(A: DenseMatrix[Int]): DenseMatrix[Int] = {
-    val data = (0 until A.cols).flatMap { j =>
-      val col = A(::, j)
-      if (isConstant(col)) Array[Int]()
-      else col.toArray
-    }.toArray
-    val newCols = data.length / A.rows
-    new DenseMatrix(A.rows, newCols, data)
-  }
-
-  def unphasedDiploidGtIndicesToBoxedCall(m: DenseMatrix[Int]): DenseMatrix[BoxedCall] =
-    m.map(g => if (g == -1) null: BoxedCall else Call2.fromUnphasedDiploidGtIndex(g): BoxedCall)
 
   def assertNDEvals(
     nd: IR,
@@ -686,7 +694,7 @@ object TestUtils extends Logging {
 
   def assertBMEvalsTo(
     bm0: BlockMatrixIR,
-    expected: DenseMatrix[Double],
+    expected: DenseMatrix,
   )(implicit
     ctx: ExecuteContext,
     execStrats: Set[ExecStrategy],
@@ -707,7 +715,7 @@ object TestUtils extends Logging {
             case ExecStrategy.InterpretUnoptimized => Interpret(bm, ctx)
           }
         }
-        assertTrue(res.toBreezeMatrix() == expected, s"block matrix result differed from expected")
+        assertTrue(res.toDenseMatrix() == expected, s"block matrix result differed from expected")
       } catch {
         case e: Exception =>
           logger.error(s"error from strategy $strat", e)

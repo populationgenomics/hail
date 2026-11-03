@@ -3,9 +3,7 @@ package is.hail.types.physical
 import is.hail.annotations.{Annotation, NDArray, Region, RowSeq, UnsafeOrdering}
 import is.hail.asm4s.{Code, _}
 import is.hail.asm4s.implicits.valueToRichCodeRegion
-import is.hail.backend.HailStateManager
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{
   CodeParam, CodeParamType, EmitCode, EmitCodeBuilder, Param, ParamType, SCodeParam,
 }
@@ -13,6 +11,8 @@ import is.hail.types.physical.stypes.SValue
 import is.hail.types.physical.stypes.concrete._
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual.{TNDArray, Type}
+
+import scala.collection.immutable.ArraySeq
 
 final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boolean = false)
     extends PNDArray {
@@ -88,8 +88,8 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
 
   override lazy val alignment: Long = representation.alignment
 
-  override def unsafeOrdering(sm: HailStateManager): UnsafeOrdering =
-    representation.unsafeOrdering(sm)
+  override def unsafeOrdering: UnsafeOrdering =
+    representation.unsafeOrdering
 
   override def numElements(shape: IndexedSeq[Value[Long]]): Code[Long] =
     shape.foldLeft(1L: Code[Long])(_ * _)
@@ -377,7 +377,6 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
   }
 
   override def _copyFromAddress(
-    sm: HailStateManager,
     region: Region,
     srcPType: PType,
     srcAddress: Long,
@@ -391,7 +390,7 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     }
 
     val newAddress = this.representation.allocate(region)
-    unstagedStoreAtAddress(sm, newAddress, region, srcPType, srcAddress, deepCopy)
+    unstagedStoreAtAddress(newAddress, region, srcPType, srcAddress, deepCopy)
     newAddress
   }
 
@@ -404,7 +403,6 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     if (required == this.required) this else PCanonicalNDArray(elementType, nDims, required)
 
   override def unstagedStoreAtAddress(
-    sm: HailStateManager,
     destAddress: Long,
     region: Region,
     srcPType: PType,
@@ -438,9 +436,8 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
       val srcShape = srcPType.asInstanceOf[PNDArray].unstagedLoadShapes(srcAddress)
       val srcStrides = srcPType.asInstanceOf[PNDArray].unstagedLoadStrides(srcAddress)
 
-      shapeType.unstagedStoreJavaObjectAtAddress(sm, destAddress, RowSeq(srcShape: _*), region)
+      shapeType.unstagedStoreJavaObjectAtAddress(destAddress, RowSeq(srcShape: _*), region)
       strideType.unstagedStoreJavaObjectAtAddress(
-        sm,
         destAddress + shapeType.byteSize,
         RowSeq(srcStrides: _*),
         region,
@@ -456,7 +453,6 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
       SNDArray.unstagedForEachIndex(srcShape) { indices =>
         val srcElementAddress = srcNDPType.getElementAddress(indices, srcAddress)
         this.elementType.unstagedStoreAtAddress(
-          sm,
           currentAddressToWrite,
           region,
           srcNDPType.elementType,
@@ -557,15 +553,13 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
 
   override def unstagedLoadFromNested(addr: Long): Long = addr
 
-  override def unstagedStoreJavaObject(sm: HailStateManager, annotation: Annotation, region: Region)
-    : Long = {
+  override def unstagedStoreJavaObject(annotation: Annotation, region: Region): Long = {
     val addr = this.representation.allocate(region)
-    this.unstagedStoreJavaObjectAtAddress(sm, addr, annotation, region)
+    this.unstagedStoreJavaObjectAtAddress(addr, annotation, region)
     addr
   }
 
   override def unstagedStoreJavaObjectAtAddress(
-    sm: HailStateManager,
     addr: Long,
     annotation: Annotation,
     region: Region,
@@ -581,13 +575,12 @@ final case class PCanonicalNDArray(elementType: PType, nDims: Int, required: Boo
     val dataFirstElementAddress = this.allocateData(aNDArray.shape, region)
     var curElementAddress = dataFirstElementAddress
     aNDArray.getRowMajorElements().foreach { element =>
-      elementType.unstagedStoreJavaObjectAtAddress(sm, curElementAddress, element, region)
+      elementType.unstagedStoreJavaObjectAtAddress(curElementAddress, element, region)
       curElementAddress += elementType.byteSize
     }
     val shapeRow = RowSeq(aNDArray.shape: _*)
     val stridesRow = RowSeq(ArraySeq.unsafeWrapArray(stridesArray): _*)
     this.representation.unstagedStoreJavaObjectAtAddress(
-      sm,
       addr,
       RowSeq(shapeRow, stridesRow, dataFirstElementAddress),
       region,

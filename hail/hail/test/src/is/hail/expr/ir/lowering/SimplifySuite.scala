@@ -6,7 +6,6 @@ import is.hail.TestUtils._
 import is.hail.annotations.RowSeq
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.TestUtils._
 import is.hail.expr.ir.defs._
@@ -16,12 +15,14 @@ import is.hail.types.virtual._
 import is.hail.utils.Interval
 import is.hail.variant.Locus
 
+import scala.collection.immutable.ArraySeq
+
 import org.junit.jupiter.api.{Disabled, Test}
 import org.scalactic.{Equivalence, Prettifier}
 import org.scalatest.matchers.{MatchResult, Matcher}
 import org.scalatest.matchers.dsl.MatcherFactory1
 import org.scalatest.matchers.must.Matchers.not
-import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
+import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper, matchPattern}
 
 class SimplifySuite {
 
@@ -370,6 +371,15 @@ class SimplifySuite {
     val tir = MatrixColsTable(mir)
 
     tir should simplifyTo(tir)
+  }
+
+  @Test def testTableAggregateKeepsOrderUnderAggFold(implicit ctx: ExecuteContext): Unit = {
+    val ordered = TableOrderBy(TableRange(10, 3), FastSeq(SortField("idx", Descending)))
+    val idx = GetField(Ref(TableIR.rowName, ordered.typ.rowType), "idx")
+    val query = aggFoldIR(I32(0))(acc => acc * I32(2) + idx)((l, r) => l * I32(2) + r)
+    Simplify(ctx, TableAggregate(ordered, query)) should matchPattern {
+      case TableAggregate(_: TableOrderBy, _) =>
+    }
   }
 
   @Test def testFilterColsPushesThroughMapEntries(implicit ctx: ExecuteContext): Unit = {
@@ -756,10 +766,11 @@ class SimplifySuite {
   @Test def testSimplifyReadFilterIntervals(fs: FS)(implicit ctx: ExecuteContext): Unit = {
     val src = getTestResource("sample-indexed-0.2.52.mt")
 
-    val mnr = MatrixNativeReader(fs, src, None)
+    val mnr = MatrixNativeReader(fs, ctx.references, src, None)
     val mr = MatrixRead(mnr.fullMatrixType, false, false, mnr)
 
-    val tnr = TableNativeReader(fs, TableNativeReaderParameters(src + "/rows", None))
+    val tnr =
+      TableNativeReader(fs, ctx.references, TableNativeReaderParameters(src + "/rows", None))
     val tr = TableRead(tnr.fullType, false, tnr)
 
     val tzr = mr.lower(ctx).asInstanceOf[TableMapGlobals].child.asInstanceOf[TableRead]
@@ -784,6 +795,7 @@ class SimplifySuite {
         false,
         TableNativeReader(
           fs,
+          ctx.references,
           TableNativeReaderParameters(
             src + "/rows",
             Some(NativeReaderOptions(intervals1, tnr.fullType.keyType, true)),
@@ -799,6 +811,7 @@ class SimplifySuite {
         false,
         TableNativeReader(
           fs,
+          ctx.references,
           TableNativeReaderParameters(
             src + "/rows",
             Some(NativeReaderOptions(intersection, tnr.fullType.keyType, true)),

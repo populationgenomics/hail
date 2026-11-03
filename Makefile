@@ -7,7 +7,7 @@ SERVICES_PLUS_ADMIN_POD := $(SERVICES) admin-pod
 SERVICES_IMAGES := $(patsubst %, %-image, $(SERVICES_PLUS_ADMIN_POD))
 SERVICES_DATABASES := $(patsubst %, %-db, $(SERVICES))
 SERVICES_MODULES := $(SERVICES) gear web_common
-CHECK_SERVICES_MODULES := $(patsubst %, check-%, $(SERVICES_MODULES))
+CHECK_SERVICES_MODULES := $(patsubst %, check-%, $(SERVICES_MODULES) devbin)
 SPECIAL_IMAGES := hail-ubuntu batch-worker letsencrypt
 
 HAILGENETICS_IMAGES = $(foreach img,hail vep-grch37-85 vep-grch38-95,hailgenetics-$(img))
@@ -42,6 +42,10 @@ default:
 .PHONY: check-all
 check-all: check-hail check-services
 
+# Force color output from ruff even though CI captures stdout to a non-tty log,
+# so colored linter output renders correctly in the batch log viewer.
+check-hail-fast check-%-fast: export FORCE_COLOR := 1
+
 .PHONY: check-hail-fast
 check-hail-fast:
 	ruff check hail
@@ -54,7 +58,7 @@ check-hail-fast:
 .PHONY: pylint-hailtop
 pylint-hailtop:
 	# pylint on hail is still a work in progress
-	$(PYTHON) -m pylint --rcfile pylintrc hail/python/hailtop --score=n
+	$(PYTHON) -m pylint --rcfile pylintrc --output-format=colorized hail/python/hailtop --score=n
 
 .PHONY: check-hail
 check-hail: check-hail-fast pylint-hailtop
@@ -62,14 +66,14 @@ check-hail: check-hail-fast pylint-hailtop
 
 .PHONY: check-batch
 check-batch: check-batch-fast pylint-batch
-	cd batch/jvm-entryway && $(MILL) $(MILLOPTS) checkFormat + fix --check
+	cd batch/jvm-entryway && $(MILL) $(MILLOPTS) palantirformat --check
 
 .PHONY: check-services
 check-services: $(CHECK_SERVICES_MODULES)
 
 .PHONY: pylint-%
 pylint-%:
-	$(PYTHON) -m pylint --rcfile pylintrc --recursive=y $* --score=n
+	$(PYTHON) -m pylint --rcfile pylintrc --output-format=colorized --recursive=y $* --score=n
 
 .PHONY: check-%-fast
 check-%-fast:
@@ -96,7 +100,9 @@ check-pip-requirements:
 		gear \
 		web_common \
 		batch \
-		ci
+		ci \
+		ci/ci-utils \
+		docker/hailgenetics/hail
 
 .PHONY: install-dev-requirements
 install-dev-requirements:
@@ -111,12 +117,13 @@ install-dev-requirements:
 .PHONY: update-hail-ubuntu
 update-hail-ubuntu:
 	@command -v skopeo >/dev/null 2>&1 || { echo 'ERROR: skopeo is required. Install with: brew install skopeo'; exit 1; }
-	python3 update-hail-ubuntu.py
+	python3 devbin/update-hail-ubuntu.py
 	NAMESPACE=default $(MAKE) -C docker/third-party copy
 
 .PHONY: update-gateways-envoy
 update-gateways-envoy:
-	python3 update-envoy.py
+	python3 devbin/update-envoy.py
+	NAMESPACE=default $(MAKE) -C docker/third-party copy
 	$(MAKE) -C gateway deploy
 	$(MAKE) -C internal-gateway deploy
 	kubectl rollout status deployment gateway-deployment
@@ -127,16 +134,21 @@ update-gateways-envoy:
 	@echo 'If traffic to hail.is services seems degraded, roll back with:'
 	@echo '  kubectl rollout undo deployment gateway-deployment && kubectl rollout undo deployment internal-gateway'
 
+# Packages to exempt from the 7-day release cooldown, e.g. COOLDOWN_EXEMPT="uv aiohttp"
+COOLDOWN_EXEMPT ?=
+COOLDOWN_EXEMPT_ARGS := $(foreach p,$(COOLDOWN_EXEMPT),--exclude-newer-package $(p)=false)
+
 .PHONY: generate-pip-lockfiles
 generate-pip-lockfiles:
-	./generate-pip-lockfile.sh hail/python/hailtop
-	./generate-pip-lockfile.sh hail/python
-	uv pip compile --python-version 3.10 --python-platform linux --upgrade hail/python/requirements.txt --output-file=hail/python/pinned-requirements-py310.txt
-	./generate-pip-lockfile.sh hail/python/dev
-	./generate-pip-lockfile.sh gear
-	./generate-pip-lockfile.sh web_common
-	./generate-pip-lockfile.sh batch
-	./generate-pip-lockfile.sh ci
+	./generate-pip-lockfile.sh hail/python/hailtop $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh hail/python $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh hail/python/dev $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh gear $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh web_common $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh batch $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh ci $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh ci/ci-utils $(COOLDOWN_EXEMPT_ARGS)
+	./generate-pip-lockfile.sh docker/hailgenetics/hail $(COOLDOWN_EXEMPT_ARGS)
 
 $(HAILTOP_VERSION):
 	$(MAKE) -C hail python-version-info
@@ -158,7 +170,7 @@ hail-run-image: base-image hail/Dockerfile.hail-run hail/python/pinned-requireme
 	./docker-build.sh . hail/Dockerfile.hail-run $(IMAGE_NAME) --build-arg BASE_IMAGE=$(shell cat base-image)
 	echo $(IMAGE_NAME) > $@
 
-hailgenetics-hail-image: hail-ubuntu-image docker/hailgenetics/hail/Dockerfile $(shell git ls-files hail/src/main hail/python)
+hailgenetics-hail-image: hail-ubuntu-image docker/hailgenetics/hail/Dockerfile docker/hailgenetics/hail/pinned-requirements.txt $(shell git ls-files hail/src/main hail/python)
 	$(MAKE) HAIL_BUILD_MODE=Release -C hail wheel
 	./docker-build.sh . docker/hailgenetics/hail/Dockerfile $(IMAGE_NAME) \
 		--build-arg BASE_IMAGE=$(shell cat hail-ubuntu-image)
@@ -194,7 +206,8 @@ $(SERVICES_IMAGES): %-image: $(SERVICES_IMAGE_DEPS) $$(shell git ls-files $$* ':
 	echo $(IMAGE_NAME) > $@
 
 ci-utils-image: base-image $(SERVICES_IMAGE_DEPS) $(shell git ls-files ci)
-	./docker-build.sh . ci/Dockerfile.ci-utils $(IMAGE_NAME) --build-arg BASE_IMAGE=$(shell cat base-image)
+	python3 ci/jinja2_render.py '{"base_image":{"image":"'$$(cat base-image)'"},"global":{"dockerhub_prefix":""}}' ci/Dockerfile.ci-utils ci/Dockerfile.ci-utils.out
+	./docker-build.sh . ci/Dockerfile.ci-utils.out $(IMAGE_NAME) --build-arg BASE_IMAGE=$(shell cat base-image)
 	echo $(IMAGE_NAME) > $@
 
 hail-buildkit-image: ci/buildkit/Dockerfile
@@ -211,11 +224,23 @@ ci/ci/static/compiled-js/flaky_tests.js: services/ui/dist/.built
 
 ci-image: ci/ci/static/compiled-js/flaky_tests.js
 
+ci/ci/static/compiled-js/pr.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/ci/pr.js $@
+
+ci-image: ci/ci/static/compiled-js/pr.js
+
 batch/batch/front_end/static/compiled-js/job.js: services/ui/dist/.built
 	mkdir -p $(@D)
 	cp services/ui/dist/batch/job.js $@
 
 batch-image: batch/batch/front_end/static/compiled-js/job.js
+
+batch/batch/front_end/static/compiled-js/batch.js: services/ui/dist/.built
+	mkdir -p $(@D)
+	cp services/ui/dist/batch/batch.js $@
+
+batch-image: batch/batch/front_end/static/compiled-js/batch.js
 
 batch/batch/driver/static/compiled-js/index.js: services/ui/dist/.built
 	mkdir -p $(@D)
@@ -324,7 +349,9 @@ tailwind-compile-watch:
 	cd web_common && npx tailwindcss --watch -i input.css -o web_common/static/css/output.css
 
 run-dev-proxy: ci/ci/static/compiled-js/flaky_tests.js \
+    ci/ci/static/compiled-js/pr.js \
     batch/batch/front_end/static/compiled-js/job.js \
+    batch/batch/front_end/static/compiled-js/batch.js \
     batch/batch/driver/static/compiled-js/index.js \
     monitoring/monitoring/static/compiled-js/index.js \
     auth/auth/static/compiled-js/index.js \
@@ -332,7 +359,7 @@ run-dev-proxy: ci/ci/static/compiled-js/flaky_tests.js \
     ci/ci/static/compiled-js/swagger.js \
     monitoring/monitoring/static/compiled-js/swagger.js \
     auth/auth/static/compiled-js/swagger.js
-DEVSERVER_TARGETS = tailwind-compile-watch run-dev-proxy ui-js-watch ui-js-watch-batch ui-js-watch-batch-driver ui-js-watch-monitoring ui-js-watch-auth ui-js-watch-swagger
+DEVSERVER_TARGETS = tailwind-compile-watch run-dev-proxy ui-js-watch ui-js-watch-pr ui-js-watch-batch ui-js-watch-batch-driver ui-js-watch-monitoring ui-js-watch-auth ui-js-watch-swagger
 
 .PHONY: run-dev-proxy
 run-dev-proxy:
@@ -345,9 +372,13 @@ services/ui/node_modules/.package-lock.json: services/ui/package.json services/u
 ui-js-watch: services/ui/node_modules/.package-lock.json
 	cd services/ui && npx esbuild src/ci/flaky_tests.tsx --bundle --jsx=automatic --format=esm --outfile=../../ci/ci/static/compiled-js/flaky_tests.js --minify --watch=forever
 
+.PHONY: ui-js-watch-pr
+ui-js-watch-pr: services/ui/node_modules/.package-lock.json
+	cd services/ui && npx esbuild src/ci/pr.tsx --bundle --jsx=automatic --format=esm --outfile=../../ci/ci/static/compiled-js/pr.js --minify --watch=forever
+
 .PHONY: ui-js-watch-batch
 ui-js-watch-batch: services/ui/node_modules/.package-lock.json
-	cd services/ui && npx esbuild src/batch/job.tsx --bundle --jsx=automatic --format=esm --outfile=../../batch/batch/front_end/static/compiled-js/job.js --minify --watch=forever
+	cd services/ui && npx esbuild src/batch/job.tsx src/batch/batch.tsx --bundle --jsx=automatic --format=esm --outdir=../../batch/batch/front_end/static/compiled-js --minify --watch=forever
 
 .PHONY: ui-js-watch-batch-driver
 ui-js-watch-batch-driver: services/ui/node_modules/.package-lock.json

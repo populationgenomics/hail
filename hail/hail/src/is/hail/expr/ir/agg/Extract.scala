@@ -5,8 +5,6 @@ import is.hail.asm4s._
 import is.hail.backend.{ExecuteContext, HailTaskContext}
 import is.hail.backend.spark.{unsafeHailClassLoaderForSparkWorkers, SparkTaskContext}
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
-import is.hail.collection.compat.mutable.Growable
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir
 import is.hail.expr.ir._
@@ -16,7 +14,9 @@ import is.hail.io.index.IndexType
 import is.hail.types.{tcoerce, TypeWithRequiredness, VirtualTypeWithReq}
 import is.hail.types.physical.stypes.EmitType
 import is.hail.types.virtual._
+import is.hail.utils.fatal
 
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -491,7 +491,7 @@ object Extract {
 
     val postAggIR = extract(
       ir,
-      BindingEnv.empty,
+      BindingEnv.empty.bindEval(resultName, BindingState.result(isScan)),
       initBindings,
       initBuilder,
       seqBuilder,
@@ -510,69 +510,111 @@ object Extract {
       ctx,
       initBindings.result(),
       Begin(initOps),
-      Let.void(seqBuilder.result()),
+      Let(seqBuilder.result(), Void()),
       Let(FastSeq(resultName -> sigs.resultsOp), postAggIR),
       new AggSignatures(pAggSigs),
     )
   }
 
-  private class BindingState {
+  // illegal:
+  //      None => may move this binding into initBindings;
+  // Some(msg) => error to raise when an init arg reads it.
+  private class BindingState(val illegal: Option[String]) {
     var usedInInitOp: Boolean = false
+  }
+
+  private object BindingState {
+    // A Block EVAL binding.
+    def movable = new BindingState(None)
+
+    // Bound by a stream, loop, fold, sort, APE index...: changes per element.
+    def varying(name: Name): BindingState =
+      new BindingState(Some(s"init argument refers to $name, which varies per element"))
+
+    // The tuple of agg (scan) results; doesn't exist when initBindings run.
+    def result(isScan: Boolean): BindingState =
+      new BindingState(Some(
+        if (isScan) "scan init argument depends on a scan result"
+        else "init argument depends on an aggregation result"
+      ))
   }
 
   private def extract(
     ir: IR,
     env: BindingEnv[BindingState],
     // Bindings in scope for init op arguments. Will also be in scope in post-agg IR.
-    initBindings: Growable[(Name, IR)],
+    initBindings: mutable.Growable[(Name, IR)],
     // set of contained aggs, and the init op for each
     initBuilder: mutable.Buffer[InitOp],
     /* Set of updates for contained aggs, with intermediate let-bound values. Will be wrapped in a
      * Block. */
-    seqBuilder: Growable[(Name, IR)],
+    seqBuilder: mutable.Growable[(Name, IR)],
     /* Map each contained ApplyAggOp, ApplyScanOp, or AggFold, to the index of the corresponding agg
      * state, used to perform CSE on agg ops */
     memo: mutable.Map[IR, Int],
-    // the name of the tuple of results of contained aggs whose type is not yet known
+    // the name of the tuple of results of contained aggs, whose full type `adjust` sets later
     result: Name,
     r: RequirednessAnalysis,
     isScan: Boolean,
   ): IR = {
     def newMemo: mutable.Map[IR, Int] = mutable.Map.empty[IR, Int]
 
+    // A Ref to `result` whose type has only field `idx`, so types inferred above it are correct.
+    def resultRef(idx: Int, t: Type): Ref =
+      Ref(result, TTuple(FastSeq(TupleField(idx, t))))
+
     // For each free variable in each init op arg, add the binding site to bindingNodesReferenced
-    def bindInitArgRefs(initArgs: IndexedSeq[IR]): Unit = {
+    def bindInitArgRefs(initArgs: IndexedSeq[IR], scope: BindingEnv[BindingState] = env): Unit =
       initArgs.foreach { arg =>
         val fv = FreeVariables(arg, supportsAgg = false, supportsScan = false).eval
-        fv.m.keys
-          .flatMap(k => env.eval.lookupOption(k))
-          .foreach(_.usedInInitOp = true)
+        fv.m.keys.flatMap(scope.eval.lookupOption).foreach { s =>
+          // The InitOp dependencies are hoisted as initBindings, which run before
+          // any agg has a result. `name`, therefore, must not read `result`.
+          // Consider the following that currently passes TypeCheck:
+          //
+          //   n := ApplyAggOp(Count())()
+          //   ApplyAggOp(Take(), Ref(n))(x)
+          //
+          // After Extract:
+          //
+          //   n := GetTupleElement(Ref(result), 0)  -- BAD: n reads result
+          //   InitOp(1, [Ref(n)], take)             -- init arg reads n
+          //
+          // `result` is bound as illegal (see BindingState.result), so bindInitArgRefs
+          // fails here. TypeCheck doesn't track which values are the result of
+          // aggregations, so nothing else catches this.
+          s.illegal.foreach(fatal)
+          s.usedInInitOp = true
+        }
       }
-    }
 
     ir match {
       case Block(bindings, body) =>
         var newEnv = env
+        val nested = ArraySeq.newBuilder[(Name, IR)]
         val bindingsTemp = ArraySeq.newBuilder[(Name, IR)]
         bindingsTemp.sizeHint(bindings)
         bindings.foreach {
           case Binding(name, value, Scope.EVAL) =>
             val newValue =
-              this.extract(value, newEnv, initBindings, initBuilder, seqBuilder, memo, result, r,
-                isScan)
+              this.extract(value, newEnv, nested, initBuilder, seqBuilder, memo, result, r, isScan)
             bindingsTemp += name -> newValue
-            newEnv = newEnv.bindEval(name, new BindingState)
+            newEnv = newEnv.bindEval(name, BindingState.movable)
           case Binding(name, value, _) =>
             seqBuilder += name -> value
         }
-        val newBody = this.extract(body, newEnv, initBindings, initBuilder, seqBuilder,
-          memo, result, r, isScan)
+        val newBody =
+          this.extract(body, newEnv, nested, initBuilder, seqBuilder, memo, result, r, isScan)
         val newBindings = bindingsTemp.result()
         bindingsTemp.clear()
+        newBindings.reverseIterator.foreach { case (name, f) =>
+          if (newEnv.eval(name).usedInInitOp) bindInitArgRefs(FastSeq(f), newEnv)
+        }
         newBindings.foreach { case b @ (name, f) =>
           if (newEnv.eval(name).usedInInitOp) initBindings += ((name, f))
           else bindingsTemp += b
         }
+        initBindings ++= nested.result()
 
         Let(bindingsTemp.result(), newBody)
 
@@ -589,7 +631,7 @@ object Extract {
           },
         )
 
-        GetTupleElement(Ref(result, null), idx)
+        GetTupleElement(resultRef(idx, x.typ), idx)
 
       case x: ApplyScanOp if isScan =>
         val idx = memo.getOrElseUpdate(
@@ -604,7 +646,7 @@ object Extract {
           },
         )
 
-        GetTupleElement(Ref(result, null), idx)
+        GetTupleElement(resultRef(idx, x.typ), idx)
 
       case x @ AggFold(zero, seqOp, combOp, accumName, otherAccumName, _) =>
         val idx = memo.getOrElseUpdate(
@@ -624,7 +666,7 @@ object Extract {
           },
         )
 
-        GetTupleElement(Ref(result, null), idx)
+        GetTupleElement(resultRef(idx, x.typ), idx)
 
       case AggFilter(cond, aggIR, _) =>
         val newSeq = ArraySeq.newBuilder[(Name, IR)]
@@ -652,7 +694,7 @@ object Extract {
         val valueName = freshName()
         val transformed = this.extract(
           aggIR,
-          env,
+          env.bindEval(valueName, BindingState.result(isScan)),
           initBindings,
           newInit,
           newSeq,
@@ -679,7 +721,7 @@ object Extract {
         adjust(transformed, Env(valueName -> rt.valueType))
 
         ToDict(StreamMap(
-          ToStream(GetTupleElement(Ref(result, null), i)),
+          ToStream(GetTupleElement(resultRef(i, groupSig.resultType), i)),
           elem.name,
           Let(
             ArraySeq(valueName -> GetField(elem, "value")),
@@ -695,7 +737,9 @@ object Extract {
 
         val transformed = this.extract(
           aggBody,
-          env,
+          env
+            .bindEval(localResult, BindingState.result(isScan))
+            .bindEval(indexName, BindingState.varying(indexName)),
           initBindings,
           newAggs,
           newSeq,
@@ -747,7 +791,7 @@ object Extract {
         val rUID = Ref(freshName(), rt)
 
         Let(
-          FastSeq(rUID.name -> GetTupleElement(Ref(result, null), i)),
+          FastSeq(rUID.name -> GetTupleElement(resultRef(i, rt), i)),
           ToArray(StreamMap(
             StreamRange(0, ArrayLen(rUID), 1),
             indexName,
@@ -758,15 +802,20 @@ object Extract {
           )),
         )
 
-      case x: StreamAgg =>
-        assert(!ContainsScan(x))
-        x
-      case x: StreamAggScan =>
-        assert(!ContainsAgg(x))
-        x
+      // the stream is evaluated in the parent's scopes; the query's aggs are its own
+      case StreamAgg(a, name, query) =>
+        assert(!ContainsScan(query))
+        val newA =
+          this.extract(a, env, initBindings, initBuilder, seqBuilder, memo, result, r, isScan)
+        StreamAgg(newA, name, query)
+      case StreamAggScan(a, name, query) =>
+        assert(!ContainsAgg(query))
+        val newA =
+          this.extract(a, env, initBindings, initBuilder, seqBuilder, memo, result, r, isScan)
+        StreamAggScan(newA, name, query)
       case x =>
         x.mapChildrenWithIndex { case (child: IR, i) =>
-          val newEnv = env.extend(Bindings.get(x, i).map((_, _) => new BindingState))
+          val newEnv = env.extend(Bindings.get(x, i).map((n, _) => BindingState.varying(n)))
 
           this.extract(child, newEnv, initBindings, initBuilder, seqBuilder, memo,
             result, r, isScan)

@@ -4,12 +4,13 @@ import is.hail.ParameterizedTest
 import is.hail.TestUtils._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Nat
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.implicits.forTesting._
 import is.hail.types.virtual._
+
+import scala.collection.immutable.ArraySeq
 
 import org.junit.jupiter.api.{BeforeEach, Test}
 
@@ -33,6 +34,8 @@ class ForwardLetsSuite {
       maketuple(x + 1, x.ir + 2),
       x + x.ir + 1,
       streamAggIR(ToStream(a))(y => ApplyAggOp(Sum())(x + y)),
+      ToArray(streamAggScanIR(ToStream(a))(y => x + y)),
+      sortIR(ToStream(a))((l, r) => l < r + x),
     ).map(ir => Let(FastSeq(x.name -> (In(0, TInt32) + In(0, TInt32))), ir))
   }
 

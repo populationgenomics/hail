@@ -23,8 +23,7 @@ import is.hail.types.physical.stypes.concrete.SJavaString
 import is.hail.types.physical.stypes.interfaces._
 import is.hail.types.virtual._
 import is.hail.utils._
-
-import scala.collection.compat._
+import is.hail.variant.{ReferenceGenomeEnv, ReferenceGenomeNameSerializer}
 
 import java.io.OutputStream
 
@@ -47,10 +46,9 @@ abstract class IR extends BaseIR {
   override def mapChildrenWithIndex(f: (BaseIR, Int) => BaseIR): IR =
     super.mapChildrenWithIndex(f).asInstanceOf[IR]
 
-  override def deepCopy: this.type = {
-    val cp = super.deepCopy
-    if (_typ != null)
-      cp._typ = _typ
+  override def deepCopy: IR = {
+    val cp = super.deepCopy.asInstanceOf[IR]
+    if (_typ != null) cp._typ = _typ
     cp
   }
 
@@ -145,6 +143,9 @@ class IROps(val ir: IR) extends AnyVal {
   def enumerate(f: (Atom, Atom) => IR): IR =
     zip(iota(0, 1), ArrayZipBehavior.TakeMinLength)(f)
 
+  def streamFold(zero: IR)(f: (Atom, Atom) => IR): IR =
+    foldIR(ir, zero)(f)
+
   def streamFor(f: Atom => IR): IR =
     forIR(ir)(f)
 
@@ -207,7 +208,7 @@ package defs {
 
   // Refs and Constants as IRs that are safe to duplicate
   trait Atom { this: IR =>
-    def ir: IR with Atom = deepCopy
+    def ir: IR with Atom = deepCopy.asInstanceOf[IR with Atom]
   }
 
   object Atom {
@@ -367,7 +368,16 @@ package defs {
   }
 
   object PartitionReader {
-    implicit val formats: Formats =
+
+    /** Formats that read types, parsing them against `rgs`. */
+    def formats(rgs: ReferenceGenomeEnv): Formats = typeFormats(Some(rgs))
+
+    /** Formats that write types but cannot read them. */
+    def formats: Formats = writeOnlyFormats
+
+    private[this] lazy val writeOnlyFormats: Formats = typeFormats(None)
+
+    private def typeFormats(rgs: Option[ReferenceGenomeEnv]): Formats =
       new DefaultFormats() {
         override val typeHints = ShortTypeHints(
           List(
@@ -389,39 +399,41 @@ package defs {
           typeHintFieldName = "name",
         ) + BufferSpec.shortTypeHints
       } +
-        new TStructSerializer +
-        new TypeSerializer +
-        new PTypeSerializer +
+        new TStructSerializer(rgs) +
+        new TypeSerializer(rgs) +
+        new PTypeSerializer(rgs) +
         new ETypeSerializer +
-        new AvroSchemaSerializer
+        new AvroSchemaSerializer +
+        new ReferenceGenomeNameSerializer(rgs)
 
     def extract(ctx: ExecuteContext, jv: JValue): PartitionReader = {
+      implicit val formats: Formats = PartitionReader.formats(ctx.references)
       (jv \ "name").extract[String] match {
         case "PartitionNativeIntervalReader" =>
           val path = (jv \ "path").extract[String]
-          val spec = TableNativeReader.read(ctx.fs, path, None).spec
+          val spec = TableNativeReader.read(ctx.fs, ctx.references, path, None).spec
           PartitionNativeIntervalReader(
-            ctx.stateManager,
             path,
             spec,
             (jv \ "uidFieldName").extract[String],
           )
         case "PartitionZippedNativeIntervalReader" =>
           val path = (jv \ "path").extract[String]
-          val spec = RelationalSpec.read(ctx.fs, path).asInstanceOf[AbstractMatrixTableSpec]
+          val spec = RelationalSpec.read(ctx.fs, ctx.references, path)
+            .asInstanceOf[AbstractMatrixTableSpec]
           PartitionZippedNativeIntervalReader(
-            ctx.stateManager,
             path,
             spec,
             (jv \ "uidFieldName").extract[String],
           )
         case "GVCFPartitionReader" =>
-          val header = VCFHeaderInfo.fromJSON((jv \ "header"))
+          val header = VCFHeaderInfo.fromJSON(jv \ "header", ctx.references)
           val callFields = (jv \ "callFields").extract[Set[String]]
-          val entryFloatType = IRParser.parseType((jv \ "entryFloatType").extract[String])
+          val entryFloatType =
+            IRParser.parseType((jv \ "entryFloatType").extract[String], ctx.references)
           val arrayElementsRequired = (jv \ "arrayElementsRequired").extract[Boolean]
           val rg = (jv \ "rg") match {
-            case JString(s) => Some(s)
+            case JString(s) => Some(ctx.references.resolve(s))
             case JNothing => None
           }
           val contigRecoding = (jv \ "contigRecoding").extract[Map[String, String]]
@@ -440,7 +452,16 @@ package defs {
   }
 
   object PartitionWriter {
-    implicit val formats: Formats =
+
+    /** Formats that read types, parsing them against `rgs`. */
+    def formats(rgs: ReferenceGenomeEnv): Formats = typeFormats(Some(rgs))
+
+    /** Formats that write types but cannot read them. */
+    def formats: Formats = writeOnlyFormats
+
+    private[this] lazy val writeOnlyFormats: Formats = typeFormats(None)
+
+    private def typeFormats(rgs: Option[ReferenceGenomeEnv]): Formats =
       new DefaultFormats() {
         override val typeHints = ShortTypeHints(
           List(
@@ -454,15 +475,25 @@ package defs {
           typeHintFieldName = "name",
         ) + BufferSpec.shortTypeHints
       } +
-        new TStructSerializer +
-        new TypeSerializer +
-        new PTypeSerializer +
-        new PStructSerializer +
-        new ETypeSerializer
+        new TStructSerializer(rgs) +
+        new TypeSerializer(rgs) +
+        new PTypeSerializer(rgs) +
+        new PStructSerializer(rgs) +
+        new ETypeSerializer +
+        new ReferenceGenomeNameSerializer(rgs)
   }
 
   object MetadataWriter {
-    implicit val formats: Formats =
+
+    /** Formats that read types, parsing them against `rgs`. */
+    def formats(rgs: ReferenceGenomeEnv): Formats = typeFormats(Some(rgs))
+
+    /** Formats that write types but cannot read them. */
+    def formats: Formats = writeOnlyFormats
+
+    private[this] lazy val writeOnlyFormats: Formats = typeFormats(None)
+
+    private def typeFormats(rgs: Option[ReferenceGenomeEnv]): Formats =
       new DefaultFormats() {
         override val typeHints = ShortTypeHints(
           List(
@@ -479,10 +510,11 @@ package defs {
           typeHintFieldName = "name",
         ) + BufferSpec.shortTypeHints
       } +
-        new TStructSerializer +
-        new TypeSerializer +
-        new PTypeSerializer +
-        new ETypeSerializer
+        new TStructSerializer(rgs) +
+        new TypeSerializer(rgs) +
+        new PTypeSerializer(rgs) +
+        new ETypeSerializer +
+        new ReferenceGenomeNameSerializer(rgs)
   }
 
   abstract class PartitionReader {

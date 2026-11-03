@@ -2,8 +2,6 @@ package is.hail.expr.ir
 
 import is.hail.expr.ir.defs.Ref
 
-import scala.collection.compat._
-
 object Env {
   type K = Name
 
@@ -42,8 +40,6 @@ trait GenericBindingEnv[Self, V] {
   def noAgg: Self
 
   def noScan: Self
-
-  def onlyRelational(keepAggCapabilities: Boolean = false): Self
 
   def bindRelational(bindings: (Name, V)*): Self
 }
@@ -152,28 +148,13 @@ case class BindingEnv[V](
 
   override def promoteScan: BindingEnv[V] = copy(eval = scan.get, scan = None)
 
-  def promoteScope(scope: Scope): BindingEnv[V] = scope match {
-    case Scope.EVAL => this
-    case Scope.AGG => promoteAgg
-    case Scope.SCAN => promoteScan
-  }
-
   override def noAgg: BindingEnv[V] = copy(agg = None)
 
   override def noScan: BindingEnv[V] = copy(scan = None)
 
-  override def createAgg: BindingEnv[V] =
-    copy(agg = Some(eval), scan = scan.map(_ => Env.empty))
+  override def createAgg: BindingEnv[V] = copy(agg = Some(eval))
 
-  override def createScan: BindingEnv[V] =
-    copy(scan = Some(eval), agg = agg.map(_ => Env.empty))
-
-  override def onlyRelational(keepAggCapabilities: Boolean = false): BindingEnv[V] =
-    BindingEnv(
-      agg = if (keepAggCapabilities) agg.map(_ => Env.empty) else None,
-      scan = if (keepAggCapabilities) scan.map(_ => Env.empty) else None,
-      relational = relational,
-    )
+  override def createScan: BindingEnv[V] = copy(scan = Some(eval))
 
   def bindEval(name: Name, v: V): BindingEnv[V] =
     copy(eval = eval.bind(name, v))
@@ -232,13 +213,6 @@ case class BindingEnv[V](
       scan = scan.map(_.mapValuesWithKey(f)),
       relational = relational.mapValuesWithKey(f),
     )
-
-  def dropBindings[T]: BindingEnv[T] = copy(
-    eval = Env.empty,
-    agg = agg.map(_ => Env.empty),
-    scan = scan.map(_ => Env.empty),
-    relational = Env.empty,
-  )
 }
 
 final class Env[V] private (val m: Map[Env.K, V]) {

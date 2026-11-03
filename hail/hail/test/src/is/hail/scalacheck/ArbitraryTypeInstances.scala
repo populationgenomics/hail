@@ -1,11 +1,10 @@
 package is.hail.scalacheck
 
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Nat
 import is.hail.types.virtual._
-import is.hail.variant.ReferenceGenome.hailReferences
+import is.hail.variant.ReferenceGenome
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalacheck.Arbitrary.arbitrary
@@ -29,7 +28,7 @@ private[scalacheck] trait ArbitraryTypeInstances {
     )
 
   implicit lazy val arbTLocus: Arbitrary[TLocus] =
-    oneOf(hailReferences).map(TLocus(_))
+    oneOf(ReferenceGenome.builtinReferences().values).map(TLocus(_))
 
   lazy val genScalarType: Gen[Type] =
     frequency(

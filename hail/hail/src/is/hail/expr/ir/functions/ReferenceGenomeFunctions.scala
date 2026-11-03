@@ -1,7 +1,6 @@
 package is.hail.expr.ir.functions
 
 import is.hail.asm4s._
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir._
 import is.hail.expr.ir.defs.{If, NA}
 import is.hail.types.physical.stypes.SType
@@ -11,8 +10,10 @@ import is.hail.types.physical.stypes.primitives.{SBoolean, SInt32}
 import is.hail.types.virtual._
 import is.hail.variant.ReferenceGenome
 
+import scala.collection.immutable.ArraySeq
+
 object ReferenceGenomeFunctions extends RegistryFunctions {
-  def rgCode(mb: EmitMethodBuilder[_], rg: String): Code[ReferenceGenome] =
+  def rgCode(mb: EmitMethodBuilder[_], rg: ReferenceGenome): Code[ReferenceGenome] =
     mb.getReferenceGenome(rg)
 
   override def registerAll(): Unit = {
@@ -64,8 +65,8 @@ object ReferenceGenomeFunctions extends RegistryFunctions {
           cb,
           r,
           st,
-          rgCode(cb.emb, typeParam.rg).invoke[String, Int, Int, Int, String](
-            "getSequence",
+          cb.emb.getReferenceSequence(typeParam.rg).invoke[String, Int, Int, Int, String](
+            "lookup",
             scontig,
             pos.asInt.value,
             before.asInt.value,

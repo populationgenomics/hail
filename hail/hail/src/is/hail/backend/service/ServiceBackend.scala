@@ -1,13 +1,12 @@
 package is.hail.backend.service
 
-import is.hail.Revision
+import is.hail.{Revision, SparkVersion}
 import is.hail.backend._
 import is.hail.backend.Backend.PartitionFn
 import is.hail.backend.ExecutionCache.Flags.UseFastRestarts
 import is.hail.backend.local.LocalTaskContext
 import is.hail.backend.service.ServiceBackend.Flags._
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Validate
 import is.hail.expr.ir.{
   CompileAndEvaluate, IR, IRSize, NormalizeNames, SortField, TableIR, TableReader, TypeCheck,
@@ -21,6 +20,7 @@ import is.hail.types._
 import is.hail.types.physical._
 import is.hail.utils._
 
+import scala.collection.immutable.ArraySeq
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.math.Ordered.orderingToOrdered
@@ -149,6 +149,7 @@ class ServiceBackend(
             command = null,
             spec = jarSpec,
             profile = ctx.flags.get(UseAsyncProfiler) != null,
+            sparkVersion = SparkVersion,
           )
 
         val defaultJob =
@@ -197,7 +198,10 @@ class ServiceBackend(
 
       private[this] def readPartitionResult(root: String, partition: Int) = {
         val filename = s"$root/result.$partition"
-        try using(ctx.fs.openNoCompression(filename))(WireProtocol.read)
+        /* Results are read once, front to back, and up to DefaultMaxReadParallelism of these
+         * streams are open at a time, so a read buffer would only cost memory. Only GCS honours
+         * bufferSize = 0; Azure streams still allocate their own buffer. */
+        try using(ctx.fs.openNoCompression(filename, bufferSize = 0))(WireProtocol.read)
         catch {
           case t: Throwable =>
             throw new HailException(

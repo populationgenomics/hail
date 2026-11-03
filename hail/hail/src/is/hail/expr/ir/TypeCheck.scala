@@ -10,7 +10,6 @@ import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.utils.StackSafe._
 
-import scala.collection.compat._
 import scala.reflect.ClassTag
 
 object TypeCheck extends Logging {
@@ -503,8 +502,10 @@ object TypeCheck extends Logging {
       case _: SerializeAggs =>
       case _: DeserializeAggs =>
       case x @ ApplyAggOp(_, seqOpArgs, op) =>
+        assert(env.agg.isDefined, "ApplyAggOp outside an agg scope")
         assert(x.typ == AggOp.getReturnType(op, seqOpArgs.map(_.typ)))
       case x @ ApplyScanOp(_, seqOpArgs, op) =>
+        assert(env.scan.isDefined, "ApplyScanOp outside a scan scope")
         assert(x.typ == AggOp.getReturnType(op, seqOpArgs.map(_.typ)))
       case AggFold(zero, seqOp, combOp, _, _, _) =>
         assert(zero.typ == seqOp.typ)

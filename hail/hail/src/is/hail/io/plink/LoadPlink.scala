@@ -4,8 +4,6 @@ import is.hail.annotations.{Region, RegionValueBuilder, RowSeq}
 import is.hail.asm4s.HailClassLoader
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat._
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichArray
 import is.hail.expr.JSONAnnotationImpex
 import is.hail.expr.ir._
@@ -21,6 +19,8 @@ import is.hail.utils._
 import is.hail.utils.StringEscapeUtils._
 import is.hail.utils.implicits.{toRichContextIterator, toRichInputStream}
 import is.hail.variant._
+
+import scala.collection.immutable.ArraySeq
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
 
@@ -77,8 +77,8 @@ object LoadPlink extends Logging {
         n += 1
       }
     }
-    implicit val ord = locusAllelesType.ordering(ctx.stateManager).toOrdering
-    val variants = vs.result().sortInPlaceBy(_.locusAlleles).array
+    implicit val ord = locusAllelesType.ordering.toOrdering
+    val variants = vs.result().sortedInPlaceBy(_.locusAlleles)
     (n, variants)
   }
 
@@ -194,10 +194,10 @@ object MatrixPLINKReader extends Logging {
     implicit val formats: Formats = DefaultFormats
     val params = jv.extract[MatrixPLINKReaderParameters]
 
-    val referenceGenome = params.rg.map(ctx.references)
+    val referenceGenome = params.rg.map(ctx.references.resolve)
     referenceGenome.foreach(_.validateContigRemap(params.contigRecoding))
 
-    val locusType = TLocus.schemaFromRG(params.rg)
+    val locusType = TLocus.schemaFromRG(referenceGenome)
     val locusAllelesType = TStruct(
       "locus" -> locusType,
       "alleles" -> TArray(TString),
@@ -275,7 +275,7 @@ object MatrixPLINKReader extends Logging {
 
     var p = 0
     var prevEnd = 0
-    val lOrd = locusType.ordering(ctx.stateManager)
+    val lOrd = locusType.ordering
     while (p < nPartitions && prevEnd < nVariants) {
       val start = prevEnd
 
@@ -307,7 +307,7 @@ object MatrixPLINKReader extends Logging {
     assert(prevEnd == nVariants)
 
     val contexts = cb.result()
-    val partitioner = new RVDPartitioner(ctx.stateManager, locusAllelesType, ib.result(), 0)
+    val partitioner = new RVDPartitioner(locusAllelesType, ib.result(), 0)
 
     val fullMatrixType: MatrixType = MatrixType(
       globalType = TStruct.empty,
@@ -403,9 +403,8 @@ class MatrixPLINKReader(
   def executeGeneric(ctx: ExecuteContext): GenericTableValue = {
     val localA2Reference = params.a2Reference
     val localNSamples = nSamples
-    val sm = ctx.stateManager
 
-    val localLocusType = TLocus.schemaFromRG(referenceGenome.map(_.name))
+    val localLocusType = TLocus.schemaFromRG(referenceGenome)
 
     val contextType = TStruct(
       "bed" -> TString,
@@ -423,7 +422,7 @@ class MatrixPLINKReader(
 
     val fullRowPType = PCanonicalStruct(
       true,
-      "locus" -> PCanonicalLocus.schemaFromRG(referenceGenome.map(_.name), true),
+      "locus" -> PCanonicalLocus.schemaFromRG(referenceGenome, true),
       "alleles" -> PCanonicalArray(PCanonicalString(true), true),
       "rsid" -> PCanonicalString(true),
       "cm_position" -> PFloat64(true),
@@ -460,7 +459,7 @@ class MatrixPLINKReader(
 
         val blockLength = (localNSamples + 3) / 4
 
-        val rvb = new RegionValueBuilder(sm, region)
+        val rvb = new RegionValueBuilder(region)
 
         val variants =
           using(new ObjectInputStream(fs.open(varFile)))(_.readObject()).asInstanceOf[Array[

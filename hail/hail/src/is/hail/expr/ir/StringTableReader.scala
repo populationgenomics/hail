@@ -4,7 +4,6 @@ import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.defs.{Literal, MakeStruct, PartitionReader, ReadPartition, ToStream}
 import is.hail.expr.ir.functions.StringFunctions
 import is.hail.expr.ir.lowering.{LowererUnsupportedOperation, TableStage, TableStageDependency}
@@ -19,6 +18,9 @@ import is.hail.types.physical.stypes.concrete.{SJavaString, SStackStruct, SStack
 import is.hail.types.physical.stypes.interfaces.{SBaseStructValue, SStreamValue}
 import is.hail.types.physical.stypes.primitives.{SInt64, SInt64Value}
 import is.hail.types.virtual._
+import is.hail.variant.ReferenceGenomeEnv
+
+import scala.collection.immutable.ArraySeq
 
 import org.json4s.{Extraction, Formats, JValue}
 
@@ -42,8 +44,8 @@ object StringTableReader {
     new StringTableReader(params, fileListEntries)
   }
 
-  def fromJValue(fs: FS, jv: JValue): StringTableReader = {
-    implicit val formats: Formats = TableReader.formats
+  def fromJValue(fs: FS, rgs: ReferenceGenomeEnv, jv: JValue): StringTableReader = {
+    implicit val formats: Formats = TableReader.formats(rgs)
     val params = jv.extract[StringTableReaderParameters]
     StringTableReader(fs, params)
   }
@@ -195,7 +197,7 @@ case class StringTableReader(
     )
     TableStage(
       globals = MakeStruct(FastSeq()),
-      partitioner = RVDPartitioner.unkeyed(ctx.stateManager, lines.nPartitions),
+      partitioner = RVDPartitioner.unkeyed(lines.nPartitions),
       dependency = TableStageDependency.none,
       contexts = ToStream(Literal.coerce(TArray(lines.contextType), lines.contexts)),
       body = partitionContext =>
