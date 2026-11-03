@@ -190,11 +190,18 @@ final class ReferenceGenome(
     Locus(contig, (idx - globalPosContigStarts(contig) + 1).toInt)
   }
 
-  def getContigIndex(contig: String): Int = contigsIndex.get(contig)
+  def getContigIndex(contig: String): Int = {
+    val idx = contigsIndex.get(contig)
+    if (idx == null)
+      fatal(s"Contig '$contig' is not in the reference genome '$name'.")
+    idx.intValue()
+  }
 
   /** The index of `contig`, or `None` if it is null or not in this reference genome. */
   def contigIndexOption(contig: String): Option[Int] =
     Option(contigsIndex.get(contig)).map(_.intValue())
+
+  def getContig(contigIdx: Int): String = contigs(contigIdx)
 
   def contigLength(contig: String): Int = {
     val r = jLengths.get(contig)
