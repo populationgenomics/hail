@@ -186,7 +186,7 @@ numpy==2.2.6
     #   contourpy
     #   pandas
     #   scipy
-oauthlib==3.3.1
+oauthlib==4.0.1
     # via
     #   -c hail/python/hailtop/pinned-requirements.txt
     #   requests-oauthlib
