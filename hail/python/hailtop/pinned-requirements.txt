@@ -101,7 +101,7 @@ multidict==6.7.1
     #   yarl
 nest-asyncio==1.6.0
     # via -r hail/python/hailtop/requirements.txt
-oauthlib==3.3.1
+oauthlib==4.0.1
     # via requests-oauthlib
 orjson==3.11.9
     # via -r hail/python/hailtop/requirements.txt
