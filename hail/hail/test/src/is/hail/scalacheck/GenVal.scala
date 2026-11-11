@@ -2,14 +2,13 @@ package is.hail.scalacheck
 
 import is.hail.annotations.{Annotation => An, RowSeq, SafeNDArray}
 import is.hail.backend.ExecuteContext
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichArray
 import is.hail.scalacheck
 import is.hail.types.physical._
 import is.hail.types.virtual._
 import is.hail.utils.Interval
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 
 import org.apache.spark.sql.Row
 import org.scalacheck.{Arbitrary, Gen}
@@ -61,7 +60,7 @@ private[scalacheck] trait GenVal {
           arbitrary[Long]
         case t: PInterval =>
           distribute(2, genVal(ctx, t.pointType)) flatMap { case Seq(a, b) =>
-            t.pointType.virtualType.mkOrdering(ctx.stateManager).compare(a, b) match {
+            t.pointType.virtualType.mkOrdering().compare(a, b) match {
               case 0 => const(Interval(a, b, true, true))
               case n =>
                 val (start, end) = if (n < 0) (a, b) else (b, a)
@@ -69,7 +68,7 @@ private[scalacheck] trait GenVal {
             }
           }
         case p: PLocus =>
-          genLocus(ctx.references(p.rg))
+          genLocus(p.rg)
         case t: PNDArray =>
           for {
             shape <- partition(t.nDims)

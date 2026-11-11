@@ -3,7 +3,6 @@ package is.hail.expr.ir.lowering
 import is.hail.annotations.RowSeq
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichArray
 import is.hail.expr.ir.{Memoized => M, _}
 import is.hail.expr.ir.Scope.EVAL
@@ -20,7 +19,7 @@ import is.hail.types.physical.{PCanonicalBinary, PCanonicalTuple}
 import is.hail.types.virtual._
 import is.hail.utils._
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 
 import org.apache.spark.sql.Row
 
@@ -70,7 +69,7 @@ object TableStage {
     )
   }
 
-  def concatenate(ctx: ExecuteContext, children: IndexedSeq[TableStage]): TableStage = {
+  def concatenate(children: IndexedSeq[TableStage]): TableStage = {
     val keyType = children.head.kType
     assert(keyType.size == 0)
     assert(children.forall(_.kType == keyType))
@@ -86,7 +85,7 @@ object TableStage {
     val newGlobals = children.head.globals
     val globalsRef = Ref(freshName(), newGlobals.typ)
     val newPartitioner =
-      new RVDPartitioner(ctx.stateManager, keyType, children.flatMap(_.partitioner.rangeBounds))
+      new RVDPartitioner(keyType, children.flatMap(_.partitioner.rangeBounds))
 
     TableStage(
       children.flatMap(_.letBindings) :+ globalsRef.name -> newGlobals.ir,
@@ -473,6 +472,7 @@ class TableStage(
       val newTableType = TableType(rowType, newPartitioner.kType.fieldNames, globalType)
       val reader = TableNativeReader.read(
         ec.fs,
+        ec.references,
         location,
         Some(NativeReaderOptions(
           intervals = newPartitioner.rangeBounds,
@@ -498,7 +498,7 @@ class TableStage(
     require(newKey.forall(rowType.fieldNames.contains))
 
     val newKeyType = rowType.typeAfterSelectNames(newKey)
-    if (RVDPartitioner.isValid(partitioner.sm, newKeyType, partitioner.rangeBounds)) {
+    if (RVDPartitioner.isValid(newKeyType, partitioner.rangeBounds)) {
       changePartitionerNoRepartition(partitioner.copy(kType = newKeyType))
     } else {
       val adjustedPartitioner = partitioner.strictify()
@@ -526,7 +526,6 @@ class TableStage(
         case "right" => rightPart
         case "inner" => leftPart.intersect(rightPart)
         case "outer" => RVDPartitioner.generate(
-            partitioner.sm,
             this.kType.fieldNames.take(joinKey),
             this.kType,
             leftPart.rangeBounds ++ rightPart.rangeBounds,
@@ -641,7 +640,6 @@ class TableStage(
     val sorted = sortedReader.lower(ctx, sortedReader.fullType)
     assert(sorted.kType.fieldNames == "__partNum" +: right.key)
     val newRightPartitioner = new RVDPartitioner(
-      ctx.stateManager,
       Some(1),
       TStruct.concat(TStruct("__partNum" -> TInt32), right.kType),
       ArraySeq.tabulate(partitioner.numPartitions)(i =>
@@ -652,7 +650,7 @@ class TableStage(
       sorted
         .repartitionNoShuffle(ctx, newRightPartitioner)
         .changePartitionerNoRepartition(
-          RVDPartitioner.unkeyed(ctx.stateManager, newRightPartitioner.numPartitions)
+          RVDPartitioner.unkeyed(newRightPartitioner.numPartitions)
         )
         .mapPartition(None)(_.streamMap(_.select(right.rowType.fieldNames)))
 
@@ -934,7 +932,7 @@ object LowerTableIR extends Logging {
           ),
           FastSeq(global.name -> global.ir),
           global.ir,
-          RVDPartitioner.unkeyed(ctx.stateManager, nPartitionsAdj),
+          RVDPartitioner.unkeyed(nPartitionsAdj),
           TableStageDependency.none,
           M.eval {
             for {
@@ -1037,7 +1035,6 @@ object LowerTableIR extends Logging {
         TableStage(
           makestruct(),
           new RVDPartitioner(
-            ctx.stateManager,
             Array("idx"),
             tir.typ.rowType,
             ranges.map { case (start, end) =>
@@ -1106,11 +1103,10 @@ object LowerTableIR extends Logging {
         val loweredChild = lower(child)
         val part = loweredChild.partitioner
         val kt = child.typ.keyType
-        val ord = PartitionBoundOrdering(ctx.stateManager, kt)
+        val ord = PartitionBoundOrdering(kt)
         val iord = ord.intervalEndpointOrdering
 
         val filterPartitioner = new RVDPartitioner(
-          ctx.stateManager,
           kt,
           Interval.union(intervals, ord.intervalEndpointOrdering),
         )
@@ -1157,7 +1153,7 @@ object LowerTableIR extends Logging {
                 !invoke("partitionerContains", TBoolean, intervals, key),
             )
 
-        val newPart = new RVDPartitioner(ctx.stateManager, kt, newRangeBounds)
+        val newPart = new RVDPartitioner(kt, newRangeBounds)
 
         TableStage(
           letBindings = loweredChild.letBindings,
@@ -1209,7 +1205,16 @@ object LowerTableIR extends Logging {
                     val (parts, rows) = nPartsAndRows(sizes, targetNumRows)((_, take) => take)
                     maketuple(parts, rows)
                   case None =>
-                    nPartsAndRows(loweredChild, contexts, nPartitions, targetNumRows)(minIR(_, _))
+                    // Each partition is read once, so rows past the target
+                    // cannot change the answer and need not be counted.
+                    def countUpToTarget(rows: Atom): IR =
+                      if (targetNumRows <= Int.MaxValue) rows.take(targetNumRows.toInt).len
+                      else rows.len
+
+                    nPartsAndRows(loweredChild, contexts, nPartitions, targetNumRows,
+                      countUpToTarget)(
+                      minIR(_, _)
+                    )
                 }
 
               nPartsToTake <- nPartsAndLastRowCount.get(0)
@@ -1253,7 +1258,7 @@ object LowerTableIR extends Logging {
                     maketuple(n, math.max(0, drop))
 
                   case None =>
-                    nPartsAndRows(loweredChild, reverse, nPartitions, targetNumRows) {
+                    nPartsAndRows(loweredChild, reverse, nPartitions, targetNumRows, _.len) {
                       (takeRight, remainder) => maxIR(0L, takeRight - remainder)
                     }
                 }
@@ -1620,10 +1625,9 @@ object LowerTableIR extends Logging {
         val keyType = x.typ.keyType
 
         if (keyType.size == 0) {
-          TableStage.concatenate(ctx, lowered)
+          TableStage.concatenate(lowered)
         } else {
           val newPartitioner = RVDPartitioner.generate(
-            ctx.stateManager,
             keyType,
             lowered.flatMap(_.partitioner.rangeBounds),
           )
@@ -1652,7 +1656,6 @@ object LowerTableIR extends Logging {
         val lowered = children.map(lower)
         val keyType = x.typ.keyType
         val newPartitioner = RVDPartitioner.generate(
-          ctx.stateManager,
           keyType,
           lowered.flatMap(_.partitioner.rangeBounds),
         )
@@ -1695,8 +1698,7 @@ object LowerTableIR extends Logging {
         require(t.definitelyDoesNotShuffle)
         val loweredChild = lower(child)
         loweredChild.changePartitionerNoRepartition(RVDPartitioner.unkeyed(
-          ctx.stateManager,
-          loweredChild.partitioner.numPartitions,
+          loweredChild.partitioner.numPartitions
         ))
 
       case TableExplode(child, path) =>
@@ -1932,6 +1934,7 @@ object LowerTableIR extends Logging {
     contexts: Atom,
     nPartitions: Atom,
     target: Long,
+    count: Atom => IR,
   )(
     f: (Atom, Atom) => IR
   ): IR = {
@@ -1949,7 +1952,7 @@ object LowerTableIR extends Logging {
                 .mapCollect(
                   "table_head_or_tail_recursive_count",
                   strConcat("iteration=", i, ",nParts=", n),
-                )(_.len)
+                )(count)
 
             n <- counts.len
             p <- m + n

@@ -1,9 +1,9 @@
 package is.hail.io.fs
 
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits._
 import is.hail.utils._
 
+import scala.collection.immutable.ArraySeq
 import scala.collection.parallel.CollectionConverters._
 import scala.util.Try
 
@@ -107,7 +107,8 @@ class HadoopFS(private[this] var conf: SerializableHadoopConfiguration) extends 
     )
   }
 
-  override def openNoCompression(url: URL): SeekableDataInputStream = {
+  // Hadoop's streams buffer on their own, so bufferSize is ignored.
+  override def openNoCompression(url: URL, bufferSize: Int): SeekableDataInputStream = {
     val is =
       try
         url.hadoopFs.open(url.hadoopPath)

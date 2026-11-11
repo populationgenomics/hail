@@ -5,7 +5,6 @@ import is.hail.TestUtils._
 import is.hail.annotations.RowSeq
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.Nat
 import is.hail.expr.ir.agg.CallStatsState
 import is.hail.expr.ir.defs._
@@ -19,6 +18,7 @@ import is.hail.types.physical.stypes.interfaces.SStream
 import is.hail.types.physical.stypes.primitives.SInt32
 import is.hail.types.virtual._
 
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable.ArrayBuffer
 
 import org.junit.jupiter.api.Test
@@ -294,6 +294,27 @@ class RequirednessSuite {
     nodes += ((
       sortIR(stream(optional, required))((_, _) => True()),
       parray(optional, required),
+    ))
+    // ArrayMaximalIndependentSet, with a tie-breaker that ignores its arguments
+    nodes += ((
+      ArrayMaximalIndependentSet(
+        MakeArray(MakeTuple.ordered(FastSeq(int(optional), int(required)))),
+        Some((freshName(), freshName(), F64(0))),
+      ),
+      parray(required, optional),
+    ))
+    // StreamLeftIntervalJoin, with a body that ignores the right elements
+    nodes += ((
+      {
+        val left = mapIR(rangeIR(2))(x => MakeStruct(FastSeq("x" -> x)))
+        val right = ToStream(MakeArray(MakeStruct(FastSeq("a" -> interval(I32(0), required)))))
+        val l = Ref(freshName(), TIterable.elementType(left.typ))
+        StreamLeftIntervalJoin(left, right, "x", "a", l.name, freshName(), l)
+      },
+      EmitType(
+        SStream(EmitType(PCanonicalStruct(required, "x" -> pint(required)).sType, required)),
+        required,
+      ),
     ))
     // CollectDistributedArray
     nodes += ((
@@ -729,7 +750,8 @@ class RequirednessSuite {
       )
     }
 
-    val reader = TableNativeReader(ctx.fs, TableNativeReaderParameters(path, None))
+    val reader =
+      TableNativeReader(ctx.fs, ctx.references, TableNativeReaderParameters(path, None))
     Array(
       table.typ,
       TableType(TStruct("a" -> tnestedarray), FastSeq(), TStruct("z" -> tstruct)),

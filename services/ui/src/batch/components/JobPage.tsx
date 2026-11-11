@@ -7,6 +7,7 @@ import { JobSpecPanel } from './JobSpecPanel';
 import { AttemptPanel } from './AttemptPanel';
 import { CodeBlock } from './CodeBlock';
 import { useJobDetails } from '../hooks/useJobDetails';
+import { disableReactUi } from '../../shared/reactUiCookie';
 
 type TopTab = string; // 'job_spec' | 'raw_status' | 'current_attempt' | <attempt_id>
 
@@ -130,10 +131,10 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
 
   const [topTab, setTopTabState] = useState<TopTab>(getInitialTab);
 
-  const [specSubTab, setSpecSubTab] = useState<'input' | 'main' | 'output'>(() => {
+  const [specSubTab, setSpecSubTab] = useState<'details' | 'input' | 'main' | 'output'>(() => {
     const params = new URLSearchParams(window.location.search);
     const sub = params.get('subtab');
-    return sub === 'input' || sub === 'output' ? sub : 'main';
+    return sub === 'input' || sub === 'main' || sub === 'output' ? sub : 'details';
   });
 
   const [attemptSubTabs, setAttemptSubTabs] = useState<Record<string, 'details' | 'charts' | 'input' | 'main' | 'output'>>(() => {
@@ -141,8 +142,9 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
     const attemptId = params.get('attempt_id');
     const sub = params.get('subtab');
     const validSub = sub === 'details' || sub === 'charts' || sub === 'input' || sub === 'main' || sub === 'output' ? sub : null;
-    if (attemptId && validSub) return { [attemptId]: validSub };
-    return {};
+    if (!validSub) return {};
+    // Without an attempt_id the URL refers to the default (latest) attempt
+    return { [attemptId ?? 'current_attempt']: validSub };
   });
 
   const setTopTab = useCallback((tab: TopTab) => {
@@ -158,7 +160,7 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
     window.history.replaceState(null, '', `?${params.toString()}`);
   }, []);
 
-  const updateSpecSubTab = useCallback((sub: 'input' | 'main' | 'output') => {
+  const updateSpecSubTab = useCallback((sub: 'details' | 'input' | 'main' | 'output') => {
     setSpecSubTab(sub);
     const params = new URLSearchParams(window.location.search);
     params.set('subtab', sub);
@@ -215,7 +217,7 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
       </nav>
       <div className="mt-1 text-sm">
         <button
-          onClick={() => { document.cookie = 'hail_react_ui=; max-age=0; path=/; SameSite=Lax'; location.reload(); }}
+          onClick={disableReactUi}
           className="text-sky-600 hover:underline cursor-pointer"
         >
           Back to classic layout
@@ -227,10 +229,12 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
         <JobStatusPanel
           batchId={batchId}
           jobId={jobId}
+          basePath={basePath}
           job={job}
           latestAttempt={latestAttempt}
           autoRefresh={autoRefresh}
           isTerminal={isTerminal}
+          hasJvmProfile={job.spec?.process?.type === 'jvm' && job.spec.process.profile === true}
           onAutoRefreshToggle={handleAutoRefreshToggle}
           countdownKey={countdownKey}
           refreshIntervalMs={refreshIntervalMs}
@@ -312,7 +316,11 @@ export function JobPage({ basePath, batchId, jobId }: Props): JSX.Element {
               hasInput={(job.spec?.input_files ?? []).length > 0}
               hasOutput={(job.spec?.output_files ?? []).length > 0}
               resources={job.spec?.resources}
-              activeSubTab={attemptSubTabs[activeAttempt.attempt_id] ?? 'main'}
+              activeSubTab={
+                attemptSubTabs[activeAttempt.attempt_id]
+                ?? (activeAttempt.attempt_id === latestAttempt?.attempt_id ? attemptSubTabs.current_attempt : undefined)
+                ?? 'main'
+              }
               setActiveSubTab={(sub) => { updateAttemptSubTab(activeAttempt.attempt_id, sub); }}
               attemptData={getAttemptData(activeAttempt.attempt_id)}
               onEnsureLoaded={() => { ensureAttemptLoaded(activeAttempt.attempt_id); }}

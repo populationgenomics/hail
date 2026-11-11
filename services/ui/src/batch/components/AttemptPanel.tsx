@@ -3,6 +3,7 @@ import { LogViewer } from './LogViewer';
 import { ResourceCharts } from './ResourceCharts';
 import { AttemptCache } from '../hooks/useJobDetails';
 import { Attempt } from './jobModels';
+import { formatTimestamp } from '../../shared/timeUtils';
 
 type SubTab = 'details' | 'charts' | 'input' | 'main' | 'output';
 
@@ -91,16 +92,22 @@ export function AttemptPanel({
                 <td className="py-2 font-mono">{attempt.instance_name}</td>
               </tr>
             )}
+            {attempt.location && (
+              <tr className="border-t">
+                <td className="py-2 pr-4 text-zinc-500">Location</td>
+                <td className="py-2">{attempt.location}</td>
+              </tr>
+            )}
             {attempt.start_time_ms != null && (
               <tr className="border-t">
                 <td className="py-2 pr-4 text-zinc-500">Started</td>
-                <td className="py-2">{new Date(attempt.start_time_ms).toLocaleString()}</td>
+                <td className="py-2">{formatTimestamp(attempt.start_time_ms)}</td>
               </tr>
             )}
             {attempt.end_time_ms != null && (
               <tr className="border-t">
                 <td className="py-2 pr-4 text-zinc-500">Ended</td>
-                <td className="py-2">{new Date(attempt.end_time_ms).toLocaleString()}</td>
+                <td className="py-2">{formatTimestamp(attempt.end_time_ms)}</td>
               </tr>
             )}
             {attempt.duration && (

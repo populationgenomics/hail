@@ -1,11 +1,10 @@
 package is.hail.scalacheck
 
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.scalacheck.ArbitraryPTypeInstances.DefaultRequiredGenRatio
 import is.hail.types.physical._
 import is.hail.variant.ReferenceGenome
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalacheck.Arbitrary.arbitrary
@@ -35,10 +34,14 @@ private[scalacheck] trait ArbitraryPTypeInstances {
       6 -> genPrimitivePType,
       1 -> (genIsRequired map { PCanonicalString(_) }),
       1 -> arbitrary[PCanonicalLocus],
+      1 -> arbitrary[PPackedLocus],
     )
 
   implicit lazy val arbPCanonicalLocus: Arbitrary[PCanonicalLocus] =
-    liftA2(PCanonicalLocus(_, _), oneOf(ReferenceGenome.hailReferences), genIsRequired)
+    liftA2(PCanonicalLocus(_, _), oneOf(ReferenceGenome.builtinReferences().values), genIsRequired)
+
+  implicit lazy val arbPPackedLocus: Arbitrary[PPackedLocus] =
+    liftA2(PPackedLocus(_, _), oneOf(ReferenceGenome.builtinReferences().values), genIsRequired)
 
   implicit lazy val arbPCanonicalStruct: Arbitrary[PCanonicalStruct] =
     for {
@@ -93,6 +96,7 @@ private[scalacheck] trait ArbitraryPTypeInstances {
         n -> arbitrary[PCanonicalDict],
         n -> arbitrary[PCanonicalInterval],
         n -> arbitrary[PCanonicalLocus],
+        n -> arbitrary[PPackedLocus],
         n -> arbitrary[PCanonicalSet],
         n -> arbitrary[PCanonicalStruct],
         n -> arbitrary[PCanonicalTuple],

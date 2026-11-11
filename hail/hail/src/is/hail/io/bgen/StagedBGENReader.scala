@@ -4,7 +4,6 @@ import is.hail.annotations.Region
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.expr.ir.{
   uuid4, ArraySorter, EmitCode, EmitCodeBuilder, EmitFunctionBuilder, EmitSettable, IEmitCode,
   ParamType, StagedArrayBuilder,
@@ -14,7 +13,7 @@ import is.hail.expr.ir.lowering.LowerMatrixIR
 import is.hail.expr.ir.streams.StreamUtils
 import is.hail.io._
 import is.hail.io.fs.SeekableDataInputStream
-import is.hail.io.index.{StagedIndexReader, StagedIndexWriter}
+import is.hail.io.index.{IndexWriter, StagedIndexReader, StagedIndexWriter}
 import is.hail.lir
 import is.hail.rvd.AbstractIndexSpec
 import is.hail.types.{RStruct, TypeWithRequiredness}
@@ -25,7 +24,9 @@ import is.hail.types.physical.stypes.interfaces.{primitive, NoBoxLongIterator, S
 import is.hail.types.physical.stypes.primitives.SInt64
 import is.hail.types.virtual._
 import is.hail.utils.CompressionUtils
-import is.hail.variant.Call2
+import is.hail.variant.{Call2, ReferenceGenome}
+
+import scala.collection.immutable.ArraySeq
 
 import org.objectweb.asm.Opcodes._
 
@@ -74,7 +75,7 @@ object StagedBGENReader {
     skipInvalidLoci: Value[Boolean],
     contigRecoding: Value[Map[String, String]],
     requestedType: TStruct,
-    rg: Option[String],
+    rg: Option[ReferenceGenome],
   ): EmitCode = {
     var out: EmitSettable = null // defined and assigned inside method
     val emb = cb.emb.ecb.genEmitMethod(
@@ -887,10 +888,14 @@ object BGENFunctions extends RegistryFunctions {
           rowPType,
         )
 
+        // BGEN index metadata does not record encodings; readers rebuild them from the version.
+        val indexSpec = BgenSettings.getIndexSpec(IndexWriter.version, rg)
         val iw = StagedIndexWriter.withDefaults(
           settings.indexKeyType,
           mb.ecb,
           annotationType = +PCanonicalStruct(),
+          nodeETypes =
+            Some((indexSpec.leafCodec.encodedType, indexSpec.internalNodeCodec.encodedType)),
         )
         iw.init(
           cb,
@@ -901,7 +906,7 @@ object BGENFunctions extends RegistryFunctions {
           ]](
             BGENFunctions.getClass,
             "wrapAttrs",
-            mb.getObject(rg.orNull),
+            mb.getObject(rg.map(_.name).orNull),
             recoding,
             skipInvalidLoci,
           )),

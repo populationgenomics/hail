@@ -3,7 +3,6 @@ package is.hail.methods
 import is.hail.annotations._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichOption
 import is.hail.expr.ir._
 import is.hail.expr.ir.functions.MatrixToTableFunction
@@ -13,6 +12,8 @@ import is.hail.types.physical.{PCanonicalString, PCanonicalStruct, PFloat64, PIn
 import is.hail.types.virtual.{MatrixType, TFloat64, TStruct, TableType}
 import is.hail.utils._
 import is.hail.variant.{AllelePair, Call, Genotype, HardCallView}
+
+import scala.collection.immutable.ArraySeq
 
 import org.apache.spark.sql.Row
 
@@ -236,7 +237,6 @@ object IBD {
   final val chunkSize = 1024
 
   def computeIBDMatrix(
-    ctx: ExecuteContext,
     input: MatrixValue,
     computeMaf: Option[(RegionValue) => Double],
     min: Option[Double],
@@ -246,7 +246,6 @@ object IBD {
   ): ContextRDD[Long] = {
 
     val nSamples = input.nCols
-    val sm = ctx.stateManager
 
     val rowPType = input.rvRowPType
     val unnormalizedIbse = input.rvd.mapPartitions { (_, ctx, it) =>
@@ -312,7 +311,7 @@ object IBD {
 
     joined
       .cmapPartitions { (_, ctx, it) =>
-        val rvb = new RegionValueBuilder(sm, ctx.region)
+        val rvb = new RegionValueBuilder(ctx.region)
         for {
           ((iChunk, jChunk), ibses) <- it
           si <- (0 until chunkSize).iterator
@@ -401,7 +400,7 @@ case class IBD(
     input.requireUniqueSamples("ibd")
     val computeMaf = mafFieldName.map(IBD.generateComputeMaf(input, _))
     val crdd =
-      IBD.computeIBDMatrix(ctx, input, computeMaf, min, max, input.stringSampleIds, bounded)
+      IBD.computeIBDMatrix(input, computeMaf, min, max, input.stringSampleIds, bounded)
     TableValue(ctx, IBD.ibdPType, IBD.ibdKey, crdd)
   }
 }

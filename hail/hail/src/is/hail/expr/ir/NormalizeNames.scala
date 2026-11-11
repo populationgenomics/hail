@@ -9,6 +9,7 @@ import is.hail.utils.StackSafe._
 import is.hail.utils.TimedBlock
 
 import scala.annotation.tailrec
+import scala.collection.mutable
 
 object NormalizeNames {
   def apply[T <: BaseIR](allowFreeVariables: Boolean = false)(ctx: ExecuteContext, ir: T): T =
@@ -66,7 +67,12 @@ class NormalizeNames(freeVariables: Set[Name]) {
       var newEnv = env
       for {
         newBindings <- bindings.mapRecur { case Binding(name, value, scope) =>
-          for (newValue <- normalizeIR(value, newEnv.promoteScope(scope))) yield {
+          val valueEnv = scope match {
+            case Scope.EVAL => newEnv
+            case Scope.AGG => newEnv.promoteAgg.noScan
+            case Scope.SCAN => newEnv.promoteScan.noAgg
+          }
+          for (newValue <- normalizeIR(value, valueEnv)) yield {
             val newName = gen()
             newEnv = newEnv.bindInScope(name, newName, scope)
             Binding(newName, newValue.asInstanceOf[IR], scope)
@@ -101,7 +107,7 @@ class NormalizeNames(freeVariables: Set[Name]) {
       }
       Recur(newName, args, typ).mapChildrenStackSafe(normalizeIR(_, env))
     case ir =>
-      val bindingsMap = is.hail.collection.compat.mutable.AnyRefMap.empty[Name, Name]
+      val bindingsMap = mutable.HashMap.empty[Name, Name]
       val updateEnv: (BindingEnv[Name], Bindings[Type]) => BindingEnv[Name] =
         if (needsRenaming(ir)) { (env, bindings) =>
           val bindingsNames = bindings.map((name, _) => bindingsMap.getOrElseUpdate(name, gen()))

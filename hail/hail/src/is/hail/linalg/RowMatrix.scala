@@ -1,9 +1,8 @@
 package is.hail.linalg
 
 import is.hail.annotations.RowSeq
-import is.hail.backend.{BroadcastValue, ExecuteContext, HailStateManager}
+import is.hail.backend.{BroadcastValue, ExecuteContext}
 import is.hail.backend.spark.SparkBackend
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.io.InputBuffer
 import is.hail.io.fs.FS
 import is.hail.rvd.RVDPartitioner
@@ -11,7 +10,8 @@ import is.hail.sparkextras.implicits._
 import is.hail.types.virtual.{TInt64, TStruct}
 import is.hail.utils._
 
-import breeze.linalg.DenseMatrix
+import scala.collection.immutable.ArraySeq
+
 import org.apache.spark.{Partition, Partitioner, TaskContext}
 import org.apache.spark.rdd.RDD
 
@@ -91,7 +91,6 @@ class RowMatrix(
     val partStarts = partitionStarts()
 
     new RVDPartitioner(
-      HailStateManager(Map.empty),
       partitionKey,
       kType,
       ArraySeq.tabulate(partStarts.length - 1) { i =>
@@ -102,7 +101,7 @@ class RowMatrix(
     )
   }
 
-  def toBreezeMatrix(): DenseMatrix[Double] = {
+  def toDenseMatrix(): DenseMatrix = {
     require(
       _nRows.forall(_ <= Int.MaxValue),
       "The number of rows of this matrix should be less than or equal to " +
@@ -118,7 +117,7 @@ class RowMatrix(
         s"less than or equal to Int.MaxValue. Currently rows * cols: ${nRowsInt * nCols.toLong}",
     )
 
-    new DenseMatrix[Double](nRowsInt, nCols, a.flatten, 0, nCols, isTranspose = true)
+    DenseMatrix(nRowsInt, nCols, a.flatten, isTranspose = true)
   }
 
   def `export`(

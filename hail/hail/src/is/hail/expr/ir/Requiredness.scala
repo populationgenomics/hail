@@ -2,7 +2,6 @@ package is.hail.expr.ir
 
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.defs._
 import is.hail.expr.ir.functions.GetElement
@@ -13,7 +12,7 @@ import is.hail.types.physical.stypes.{EmitType, PTypeReferenceSingleCodeType, St
 import is.hail.types.virtual._
 import is.hail.utils._
 
-import scala.collection.compat._
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 
 object Requiredness {
@@ -202,8 +201,8 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
             tcoerce[TypeWithRequiredness](tcoerce[RIterable](lookup(a)).elementType.children.head)
           val req = RTuple.fromNamesAndTypes(FastSeq("0" -> eltReq))
           req.union(true)
-          refMap(left).foreach(u => defs.bind(u, ArraySeq(req)))
-          refMap(right).foreach(u => defs.bind(u, ArraySeq(req)))
+          refMap.get(left).foreach(_.foreach(u => defs.bind(u, ArraySeq(req))))
+          refMap.get(right).foreach(_.foreach(u => defs.bind(u, ArraySeq(req))))
         }
       case StreamMap(a, name, _) =>
         addElementBinding(name, a)
@@ -302,9 +301,10 @@ class Requiredness(val usesAndDefs: UsesAndDefs, ctx: ExecuteContext) {
         addElementBinding(r, right, makeOptional = (joinType == "outer" || joinType == "left"))
       case StreamLeftIntervalJoin(left, right, _, _, lname, rname, _) =>
         addElementBinding(lname, left)
-        val uses = refMap(rname)
-        uses.foreach(u => defs.bind(u, ArraySeq(lookup(right))))
-        dependents.getOrElseUpdate(right, mutable.Set[RefEquality[BaseIR]]()) ++= uses
+        refMap.get(rname).foreach { uses =>
+          uses.foreach(u => defs.bind(u, ArraySeq(lookup(right))))
+          dependents.getOrElseUpdate(right, mutable.Set[RefEquality[BaseIR]]()) ++= uses
+        }
       case StreamAgg(a, name, _) =>
         addElementBinding(name, a)
       case StreamAggScan(a, name, _) =>

@@ -17,7 +17,7 @@ from hailtop.aiocloud.common import Session
 from hailtop.aiocloud.common.credentials import CloudCredentials
 from hailtop.auth import hail_credentials
 from hailtop.config import DeployConfig, get_deploy_config
-from hailtop.utils import async_to_blocking, bounded_gather, sleep_before_try
+from hailtop.utils import bounded_gather, sleep_before_try
 from hailtop.utils.rich_progress_bar import BatchProgressBar, BatchProgressBarTask
 
 from .globals import ROOT_JOB_GROUP_ID, complete_states, tasks
@@ -473,10 +473,24 @@ class JobGroup:
     def create_job(self, image: str, command: List[str], **kwargs) -> Job:
         return self._batch._create_job(self, {'command': command, 'image': image, 'type': 'docker'}, **kwargs)
 
-    def create_jvm_job(self, jar_spec: Dict[str, str], argv: List[str], *, profile: bool = False, **kwargs):
-        return self._batch._create_job(
-            self, {'type': 'jvm', 'jar_spec': jar_spec, 'command': argv, 'profile': profile}, **kwargs
-        )
+    def create_jvm_job(
+        self,
+        jar_spec: dict[str, str],
+        argv: list[str],
+        *,
+        spark_version: str,
+        profile: bool = False,
+        **kwargs,
+    ):
+        assert spark_version is not None, 'missing spark_version'
+        process: dict[str, Any] = {
+            'type': 'jvm',
+            'jar_spec': jar_spec,
+            'command': argv,
+            'profile': profile,
+            'spark_version': spark_version,
+        }
+        return self._batch._create_job(self, process, **kwargs)
 
     def create_job_group(
         self,
@@ -560,8 +574,8 @@ class JobGroup:
         return {'status': jg_status, 'job_groups': job_groups, 'jobs': jobs}
 
     def __str__(self):
-        debug_info = async_to_blocking(self.debug_info())
-        return str(orjson.dumps(debug_info).decode('utf-8'))
+        # No I/O here: this may be called from async code, where blocking on the Hail event loop would deadlock.
+        return f'JobGroup(batch_id={self._batch._id}, job_group_id={self._job_group_id})'
 
 
 class BatchSubmissionInfo:
@@ -785,13 +799,27 @@ class Batch:
     def create_job(self, image: str, command: List[str], **kwargs) -> Job:
         return self._create_job(self._root_job_group, {'command': command, 'image': image, 'type': 'docker'}, **kwargs)
 
-    def create_jvm_job(self, jar_spec: Dict[str, str], argv: List[str], *, profile: bool = False, **kwargs):
+    def create_jvm_job(
+        self,
+        jar_spec: dict[str, str],
+        argv: List[str],
+        *,
+        spark_version: str,
+        profile: bool = False,
+        **kwargs,
+    ):
         if 'always_copy_output' in kwargs:
             raise ValueError("the 'always_copy_output' option is not allowed for JVM jobs")
         job_group = kwargs.pop('job_group', self._root_job_group)
-        return self._create_job(
-            job_group, {'type': 'jvm', 'jar_spec': jar_spec, 'command': argv, 'profile': profile}, **kwargs
-        )
+        assert spark_version is not None, 'missing spark_version'
+        process: dict[str, Any] = {
+            'type': 'jvm',
+            'jar_spec': jar_spec,
+            'command': argv,
+            'profile': profile,
+            'spark_version': spark_version,
+        }
+        return self._create_job(job_group, process, **kwargs)
 
     def create_job_group(
         self,

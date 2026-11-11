@@ -2,7 +2,6 @@ package is.hail.expr.ir.lowering
 
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.{toRichIndexedSeq, toRichMap}
 import is.hail.expr.ir.{Memoized => M, _}
 import is.hail.expr.ir.Scope.EVAL
@@ -14,7 +13,7 @@ import is.hail.types.tcoerce
 import is.hail.types.virtual._
 import is.hail.utils._
 
-import scala.collection.immutable.HashSet
+import scala.collection.immutable.{ArraySeq, HashSet}
 import scala.collection.mutable
 
 object Simplify {
@@ -1124,10 +1123,7 @@ object Simplify {
                 bindings.view.drop(i).foreach {
                   case Binding(name, ir: Block, scope) =>
                     if (scope == EVAL) newBindings ++= ir.bindings
-                    else ir.bindings.foreach { case Binding(name, value, s) =>
-                      if (s != EVAL) fatal(s"Simplify: found nested $s binding in $scope")
-                      newBindings += Binding(name, value, scope)
-                    }
+                    else newBindings ++= ir.bindings.map(_.copy(scope = scope))
                     newBindings += Binding(name, ir.body, scope)
                   case binding =>
                     newBindings += binding
@@ -2044,10 +2040,7 @@ object Simplify {
               ))
 
             case TableFilterIntervals(c, _i1, keep1) if keep1 == keep =>
-              val ord = PartitionBoundOrdering(
-                ctx,
-                c.typ.keyType,
-              ).intervalEndpointOrdering
+              val ord = PartitionBoundOrdering(c.typ.keyType).intervalEndpointOrdering
               val i1 = Interval.union(_i1, ord)
               val i2 = Interval.union(intervals, ord)
               val merged =
@@ -2083,13 +2076,13 @@ object Simplify {
                   NativeReaderOptions(
                     Interval.union(
                       intervals,
-                      PartitionBoundOrdering(ctx, pt).intervalEndpointOrdering,
+                      PartitionBoundOrdering(pt).intervalEndpointOrdering,
                     ),
                     pt,
                     true,
                   )
                 case Some(NativeReaderOptions(preIntervals, intervalPointType, _)) =>
-                  val iord = PartitionBoundOrdering(ctx, intervalPointType).intervalEndpointOrdering
+                  val iord = PartitionBoundOrdering(intervalPointType).intervalEndpointOrdering
                   NativeReaderOptions(
                     Interval.intersection(
                       Interval.union(preIntervals, iord),
@@ -2121,7 +2114,7 @@ object Simplify {
                   NativeReaderOptions(
                     Interval.union(
                       intervals,
-                      PartitionBoundOrdering(ctx, pt).intervalEndpointOrdering,
+                      PartitionBoundOrdering(pt).intervalEndpointOrdering,
                     ),
                     pt,
                     true,
@@ -2131,7 +2124,7 @@ object Simplify {
                       intervalPointType,
                       _,
                     )) =>
-                  val iord = PartitionBoundOrdering(ctx, intervalPointType).intervalEndpointOrdering
+                  val iord = PartitionBoundOrdering(intervalPointType).intervalEndpointOrdering
                   NativeReaderOptions(
                     Interval.intersection(
                       Interval.union(preIntervals, iord),

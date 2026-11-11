@@ -20,6 +20,7 @@ from hailtop.test_utils import skip_in_azure
 from hailtop.utils import grouped
 
 from .utils import (
+    DOCKER_ROOT_IMAGE,
     HAIL_GENETICS_HAIL_IMAGE,
     REQUESTER_PAYS_PROJECT,
     batch,
@@ -681,6 +682,28 @@ def test_update_batch_from_batch_id(service_backend: ServiceBackend):
     assert res_status['state'] == 'success', str((res_status, res.debug_info()))
 
 
+def test_update_batch_from_batch_id_with_the_configured_backend(service_backend: ServiceBackend, monkeypatch):
+    b = batch(service_backend)
+    j = b.new_job()
+    j.command('true')
+    res = b.run()
+    assert res
+
+    # from_batch_id creates the ServiceBackend itself, which must happen off the Hail event loop.
+    monkeypatch.setenv('HAIL_BATCH_BACKEND', 'service')
+    b2 = Batch.from_batch_id(res.id, default_image=DOCKER_ROOT_IMAGE)
+    try:
+        assert isinstance(b2._backend, ServiceBackend)
+        j2 = b2.new_job()
+        j2.command('true')
+        res = b2.run()
+        assert res
+        res_status = res.status()
+        assert res_status['state'] == 'success', str((res_status, res.debug_info()))
+    finally:
+        b2._backend.close()
+
+
 def test_wait_on_empty_batch_update(service_backend: ServiceBackend):
     b = batch(service_backend)
     b.run(wait=True)
@@ -867,7 +890,6 @@ def test_submit_sequential_qob_pipelines(request, service_backend: ServiceBacken
     assert status['state'] == 'success', str((status, r.debug_info()))
 
 
-@pytest.mark.xfail(reason='Concurrent QoB pipelines are not supported', strict=False)
 def test_race_qob_pipelines(request, service_backend: ServiceBackend):
     b = Batch(request.node.nodeid, service_backend, default_image=HAIL_GENETICS_HAIL_IMAGE)
 

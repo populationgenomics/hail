@@ -7,7 +7,6 @@ import is.hail.annotations.{Region, RowSeq, SafeRow, ScalaToRegionValue}
 import is.hail.asm4s._
 import is.hail.backend.ExecuteContext
 import is.hail.collection.FastSeq
-import is.hail.collection.compat.immutable.ArraySeq
 import is.hail.collection.implicits.toRichIterable
 import is.hail.expr.ir.{Memoized => M}
 import is.hail.expr.ir.agg.{CollectStateSig, PhysicalAggSig, TypedStateSig}
@@ -23,6 +22,8 @@ import is.hail.types.physical.stypes.interfaces.{NoBoxLongIterator, SStreamValue
 import is.hail.types.virtual._
 import is.hail.utils._
 import is.hail.variant.Call2
+
+import scala.collection.immutable.ArraySeq
 
 import org.junit.jupiter.api.Test
 
@@ -100,7 +101,7 @@ class EmitStreamSuite {
       if (arg == null)
         f(r, 0L, true)
       else
-        f(r, ScalaToRegionValue(ctx.stateManager, r, inputType, arg), false)
+        f(r, ScalaToRegionValue(r, inputType, arg), false)
     }
   }
 
@@ -131,7 +132,7 @@ class EmitStreamSuite {
             eos = true
             0L
           } else
-            ScalaToRegionValue(ctx.stateManager, _eltRegion, elementType, it.next())
+            ScalaToRegionValue(_eltRegion, elementType, it.next())
         override def close(): Unit = ()
       }
       assert(it != null, "null iterators not supported")
@@ -937,13 +938,15 @@ class EmitStreamSuite {
 
     ctx.r.pool.scopedSmallRegion { r =>
       val input = t.unstagedStoreJavaObject(
-        ctx.stateManager,
         RowSeq(null, IndexedSeq(1d, 2d), IndexedSeq(3d, 4d)),
         r,
       )
 
       assert(
-        SafeRow.read(pt, f(ctx.theHailClassLoader, ctx.fs, ctx.taskContext, r)(r, input)) == RowSeq(
+        SafeRow.read(
+          pt,
+          f(ctx.theHailClassLoader, ctx.fs, ctx.taskContext, r)(r, input),
+        ) == RowSeq(
           null
         )
       )
