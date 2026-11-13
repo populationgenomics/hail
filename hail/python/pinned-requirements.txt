@@ -304,7 +304,7 @@ tabulate==0.10.0
     #   -r hail/python/hailtop/requirements.txt
 tenacity==9.1.4
     # via plotly
-tornado==6.5.7
+tornado==6.6.1
     # via bokeh
 typer==0.24.2
     # via
