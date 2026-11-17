@@ -6,7 +6,7 @@ aiohappyeyeballs==2.7.1
     #   -c gear/../hail/python/hailtop/pinned-requirements.txt
     #   -c gear/../hail/python/pinned-requirements.txt
     #   aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.4
     # via
     #   -c gear/../hail/python/dev/pinned-requirements.txt
     #   -c gear/../hail/python/hailtop/pinned-requirements.txt

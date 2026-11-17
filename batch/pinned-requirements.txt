@@ -9,7 +9,7 @@ aiohappyeyeballs==2.7.1
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.4
     # via
     #   -c batch/../gear/pinned-requirements.txt
     #   -c batch/../hail/python/dev/pinned-requirements.txt
