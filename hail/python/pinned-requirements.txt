@@ -8,7 +8,7 @@ aiohappyeyeballs==2.7.1
     # via
     #   -c hail/python/hailtop/pinned-requirements.txt
     #   aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.4
     # via
     #   -c hail/python/hailtop/pinned-requirements.txt
     #   -r hail/python/hailtop/requirements.txt
